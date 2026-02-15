@@ -9,14 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.0",
+    "@supabase/supabase-js": "^2.95.3",
+    "stripe": "^20.3.1",
     "path": "^0.12.7",
     "vite": "^7.3.1",
-    "@vitejs/plugin-react": "^5.1.4",
-    "@supabase/supabase-js": "^2.95.3",
-    "react": "^19.2.4",
-    "react-router-dom": "^7.13.0",
-    "react-dom": "^19.2.4",
-    "stripe": "^20.3.1"
+    "@vitejs/plugin-react": "^5.1.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
