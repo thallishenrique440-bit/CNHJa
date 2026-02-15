@@ -22,32 +22,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userRole, setUserRole] = useState<'student' | 'instructor' | null>(null);
 
   useEffect(() => {
-    // 1. Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session?.user?.user_metadata?.role) {
-        setUserRole(session.user.user_metadata.role);
+    let mounted = true;
+
+    const initSession = async () => {
+      try {
+        // 1. Check active session safely
+        const { data, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('[Auth] Erro ao obter sessão:', error);
+        }
+
+        if (mounted) {
+          if (data?.session) {
+            setSession(data.session);
+            if (data.session.user?.user_metadata?.role) {
+              setUserRole(data.session.user.user_metadata.role);
+            }
+          }
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('[Auth] Falha crítica na inicialização:', err);
+        if (mounted) setLoading(false); // Ensure loading stops even on crash
       }
-      setLoading(false);
-    });
+    };
+
+    initSession();
 
     // 2. Listen for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session?.user?.user_metadata?.role) {
-        setUserRole(session.user.user_metadata.role);
-      } else {
-        setUserRole(null);
+      if (mounted) {
+        setSession(session);
+        if (session?.user?.user_metadata?.role) {
+          setUserRole(session.user.user_metadata.role);
+        } else {
+          setUserRole(null);
+        }
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
     await supabase.auth.signOut();
     localStorage.clear(); // Clear legacy bridge
+    setUserRole(null);
+    setSession(null);
   };
 
   return (

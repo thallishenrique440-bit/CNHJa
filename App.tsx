@@ -22,19 +22,26 @@ import { ProfileGuard } from './components/ProfileGuard';
 
 // --- GUARDS ---
 
+const LoadingScreen = () => (
+  <div className="min-h-screen flex flex-col items-center justify-center bg-white space-y-4">
+    <img 
+      src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
+      alt="Autoescola do Brasil" 
+      className="h-16 w-auto object-contain animate-pulse" 
+      onError={(e) => {
+        // Fallback if image fails
+        e.currentTarget.style.display = 'none';
+      }}
+    />
+    <p className="text-gray-400 text-sm font-medium animate-pulse">Carregando...</p>
+  </div>
+);
+
 const AuthGuard: React.FC<{ allowedRole: string }> = ({ allowedRole }) => {
   const { session, userRole, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <img 
-          src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
-          alt="Carregando..." 
-          className="h-16 w-auto object-contain animate-pulse" 
-        />
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   // 1. Not authenticated
@@ -54,15 +61,7 @@ const PublicGuard: React.FC = () => {
   const { session, userRole, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <img 
-          src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
-          alt="Carregando..." 
-          className="h-16 w-auto object-contain animate-pulse" 
-        />
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (session && userRole) {
