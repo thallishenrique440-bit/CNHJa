@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Autoescola do Brasil</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Custom tweaks for better mobile feel */
+      body {
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      /* --- GLOBAL: Hide Scrollbars (Keep functionality) --- */
+      
+      /* Firefox */
+      * {
+        scrollbar-width: none;
+      }
+      
+      /* IE and Edge */
+      * {
+        -ms-overflow-style: none;
+      }
+      
+      /* Chrome, Safari and Opera */
+      ::-webkit-scrollbar {
+        display: none;
+        width: 0px;
+        background: transparent;
+      }
+
+      /* --- GLOBAL: Remove Arrows/Spinners from Input Number --- */
+      
+      /* Chrome, Safari, Edge, Opera */
+      input[type=number]::-webkit-outer-spin-button,
+      input[type=number]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+
+      /* Firefox */
+      input[type=number] {
+        -moz-appearance: textfield;
+      }
+
+      /* --- ANIMATIONS --- */
+      @keyframes fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      .animate-fade-in {
+        animation: fade-in 0.2s ease-out forwards;
+      }
+
+      @keyframes scale-up {
+        from { transform: scale(0.95); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+      }
+      .animate-scale-up {
+        animation: scale-up 0.2s ease-out forwards;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react-router-dom": "https://esm.sh/react-router-dom@^7.13.0",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react": "https://esm.sh/react@^19.2.4",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.3",
+    "stripe": "https://esm.sh/stripe@^20.3.1"
+  }
+}
+</script>
+</head>
+  <body class="bg-gray-50 text-gray-900 antialiased">
+    <div id="root"></div>
+  </body>
+</html>
