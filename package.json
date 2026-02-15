@@ -13,7 +13,10 @@
     "react-router-dom": "^7.13.0",
     "react": "^19.2.4",
     "@supabase/supabase-js": "2.39.3",
-    "stripe": "^20.3.1"
+    "stripe": "^20.3.1",
+    "vite": "^7.3.1",
+    "path": "^0.12.7",
+    "@vitejs/plugin-react": "^5.1.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
