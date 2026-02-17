@@ -1,10 +1,13 @@
-import { createClient } from "jsr:@supabase/supabase-js@2";
-import Stripe from "stripe";
+// FIX: Use esm.sh for robust bundling in Edge Runtime
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// FIX: Uso de URL absoluta compatível com Deno/Edge Runtime
+import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check";
 
-// Declare Deno to resolve TypeScript errors
+// Declaração do Deno para evitar erros de lint
 declare const Deno: any;
 
 // Initialize Stripe
+// HttpClient is crucial for Deno Edge environment
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") as string, {
   apiVersion: "2023-10-16" as any,
   httpClient: Stripe.createFetchHttpClient(),
@@ -16,22 +19,20 @@ const supabaseAdmin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
 
-// Crypto provider config for Stripe SDK in Deno
 const cryptoProvider = Stripe.createSubtleCryptoProvider();
 
 Deno.serve(async (req: Request) => {
+  // 1. Signature Verification Security Check
   const signature = req.headers.get("Stripe-Signature");
+  const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
 
-  if (!signature) {
-    return new Response("No signature header", { status: 400 });
+  if (!signature || !webhookSecret) {
+    console.error("❌ Missing Stripe Signature or Webhook Secret.");
+    return new Response("Security Error: Missing Config", { status: 400 });
   }
 
   try {
-    // 1. Read raw body for signature verification
     const body = await req.text();
-    
-    // 2. Verify Event Signature
-    const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
     let event;
 
     try {
@@ -43,138 +44,117 @@ Deno.serve(async (req: Request) => {
         cryptoProvider
       );
     } catch (err: any) {
-      console.error(`⚠️  Webhook signature verification failed.`, err.message);
-      return new Response(`Webhook Error: ${err.message}`, { status: 400 });
+      console.error(`⚠️ Webhook signature verification failed: ${err.message}`);
+      return new Response(`Webhook Signature Error: ${err.message}`, { status: 400 });
     }
 
     console.log(`🔔 Event received: ${event.type} [ID: ${event.id}]`);
 
-    // 3. Handle specific events
     switch (event.type) {
-      // --------------------------------------------------------
-      // EVENTO A: Atualização da Conta do Instrutor (Onboarding)
-      // --------------------------------------------------------
-      case "account.updated": {
-        const account = event.data.object as Stripe.Account;
+      // ======================================================================
+      // Sincronização de Status da Conta (Redundância Segura)
+      // ======================================================================
+      case "account.updated":
+      case "capability.updated": {
+        // Em capability.updated, o objeto vem dentro de event.data.object.account ou direto, 
+        // mas para simplificar, buscamos sempre o ID da conta e consultamos a fonte da verdade.
         
-        const updates = {
-          payouts_enabled: account.payouts_enabled,
-          stripe_onboarding_completed: account.details_submitted,
-        };
+        let accountId = "";
+        if (event.type === "account.updated") {
+            accountId = event.data.object.id;
+        } else if (event.type === "capability.updated") {
+            accountId = event.data.object.account;
+        }
 
-        console.log(`Updating instructor account ${account.id}:`, updates);
+        if (accountId) {
+            // Buscamos a conta fresca do Stripe para garantir o status real
+            const account = await stripe.accounts.retrieve(accountId);
+            
+            const updates = {
+              payouts_enabled: account.payouts_enabled,
+              stripe_onboarding_completed: account.details_submitted,
+            };
 
-        const { error } = await supabaseAdmin
-          .from("instructors")
-          .update(updates)
-          .eq("stripe_account_id", account.id);
+            console.log(`🔄 Syncing Instructor ${accountId}: Payouts=${account.payouts_enabled}`);
 
-        if (error) {
-          console.error("Error updating instructor:", error);
-          throw error;
+            const { error } = await supabaseAdmin
+              .from("instructors")
+              .update(updates)
+              .eq("stripe_account_id", accountId);
+
+            if (error) {
+              console.error(`❌ Failed to update instructor ${accountId}:`, error);
+              throw error;
+            }
+            console.log(`✅ Instructor ${accountId} updated successfully.`);
         }
         break;
       }
 
-      // --------------------------------------------------------
-      // EVENTO B: Checkout Concluído com Sucesso (Pagamento Realizado)
-      // Este é o evento PRINCIPAL para Stripe Checkout
-      // --------------------------------------------------------
+      // ======================================================================
+      // Checkout Logic
+      // ======================================================================
       case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        
-        // Agora usamos purchase_id para agrupar as aulas
+        const session = event.data.object;
         const purchaseId = session.metadata?.purchase_id;
         const paymentIntentId = session.payment_intent as string;
 
         if (purchaseId) {
-          console.log(`✅ Checkout completed for purchase_id: ${purchaseId}`);
+          console.log(`💰 Checkout completed for Purchase ID: ${purchaseId}`);
 
-          // Atualiza TODAS as aulas vinculadas a esta compra
           const { error, count } = await supabaseAdmin
             .from("appointments")
             .update({
               payment_status: "paid",
-              status: "confirmed", // Agenda bloqueada definitivamente
+              status: "confirmed",
               payment_intent_id: paymentIntentId
             })
             .eq("purchase_id", purchaseId);
 
           if (error) {
-            console.error("CRITICAL: Error confirming appointments:", error);
+            console.error("❌ Error confirming appointments:", error);
             throw error;
           }
-          console.log(`Updated ${count} appointments to confirmed.`);
-        } else {
-          console.warn("Checkout completed but missing purchase_id in metadata");
+          console.log(`✅ Confirmed ${count} appointments.`);
         }
         break;
       }
 
-      // --------------------------------------------------------
-      // EVENTO C: Sessão de Checkout Expirada (Usuário desistiu)
-      // Importante para liberar a agenda imediatamente
-      // --------------------------------------------------------
       case "checkout.session.expired": {
-        const session = event.data.object as Stripe.Checkout.Session;
+        const session = event.data.object;
         const purchaseId = session.metadata?.purchase_id;
 
         if (purchaseId) {
-          console.log(`⚠️ Checkout expired for purchase_id: ${purchaseId}. Releasing slots.`);
-
-          // Se estava 'reserved', deletamos ou marcamos como falha.
-          // Como é "expired", o usuário nem chegou a pagar. Melhor deletar para limpar a agenda limpo.
-          // Ou mudar status para 'cancelled' se quiser manter histórico. Vamos deletar para liberar visualmente.
+          console.log(`⚠️ Checkout expired for Purchase ID: ${purchaseId}`);
           const { error } = await supabaseAdmin
             .from("appointments")
             .delete()
             .eq("purchase_id", purchaseId)
-            .eq("status", "reserved"); // Só deleta se ainda estiver reservado (segurança)
+            .eq("status", "reserved");
 
-          if (error) {
-            console.error("Error releasing expired slots:", error);
-          }
+          if (error) console.error("❌ Error deleting expired slots:", error);
         }
         break;
       }
 
-      // --------------------------------------------------------
-      // EVENTO D: Falha no Pagamento (Cartão recusado, etc)
-      // Normalmente capturado via payment_intent
-      // --------------------------------------------------------
       case "payment_intent.payment_failed": {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        const paymentIntent = event.data.object;
         const purchaseId = paymentIntent.metadata?.purchase_id;
 
         if (purchaseId) {
-          console.log(`❌ Payment failed for purchase_id: ${purchaseId}`);
-
+          console.log(`❌ Payment failed for Purchase ID: ${purchaseId}`);
           const { error } = await supabaseAdmin
             .from("appointments")
-            .update({
-              payment_status: "failed",
-              // Mantemos como 'reserved' até expirar pelo garbage collector? 
-              // Ou falhamos imediatamente? Falhar imediatamente é melhor UX para liberar pro aluno tentar outro cartão.
-              status: "failed" 
-            })
+            .update({ payment_status: "failed", status: "failed" })
             .eq("purchase_id", purchaseId);
 
-          if (error) {
-            console.error("Error updating appointment failed status:", error);
-          }
+          if (error) console.error("❌ Error updating failed status:", error);
         }
         break;
       }
 
-      // Fallback para payment_intent.succeeded caso usemos fora do Checkout no futuro
-      // Mas para Checkout, o evento 'checkout.session.completed' já resolve.
-      case "payment_intent.succeeded": {
-         console.log("Payment intent succeeded (Handled via checkout.session.completed usually)");
-         break;
-      }
-
       default:
-        console.log(`Unhandled event type ${event.type}`);
+        console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
 
     return new Response(JSON.stringify({ received: true }), {
@@ -183,13 +163,9 @@ Deno.serve(async (req: Request) => {
     });
 
   } catch (err: any) {
-    console.error("Webhook processing error:", err);
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { 
-        status: 400, 
-        headers: { "Content-Type": "application/json" } 
-      }
-    );
+    console.error(`🚨 Webhook Logic Error:`, err);
+    return new Response(JSON.stringify({ error: err.message }), { 
+        status: 400, headers: { "Content-Type": "application/json" } 
+    });
   }
 });

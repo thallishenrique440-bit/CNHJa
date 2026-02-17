@@ -19,7 +19,7 @@ create table if not exists public.appointments (
   
   -- Status Workflow
   -- Added 'blocked' to the allowed statuses
-  status text not null default 'pending' check (status in ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked')),
+  status text not null default 'pending' check (status in ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked', 'reserved')),
 
   -- Cancellation Audit (New Columns)
   cancelled_reason text,
@@ -131,7 +131,7 @@ DO $$
 BEGIN
     ALTER TABLE public.appointments DROP CONSTRAINT IF EXISTS appointments_status_check;
     ALTER TABLE public.appointments ADD CONSTRAINT appointments_status_check
-        CHECK (status IN ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked', 'reserved'));
+        CHECK (status IN ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked', 'reserved', 'failed'));
 EXCEPTION
     WHEN others THEN NULL;
 END $$;
@@ -190,3 +190,20 @@ ALTER TABLE public.appointments
 DROP COLUMN IF EXISTS transfer_group,
 DROP COLUMN IF EXISTS transfer_id,
 DROP COLUMN IF EXISTS payout_status;
+
+-- ==============================================================================
+-- MIGRATION FINAL: CORREÇÃO DE ÍNDICE DE UNICIDADE (Fix Error 23505)
+-- ==============================================================================
+
+-- 1. Remover índices antigos que causam conflito ou são redundantes
+DROP INDEX IF EXISTS public.uniq_instructor_timeslot;
+DROP INDEX IF EXISTS public.idx_unique_active_slot;
+
+-- 2. Criar o índice parcial definitivo
+-- Regra: Garante unicidade apenas para agendamentos "ativos".
+-- Exceção: Permite reutilização se o status for 'cancelled' ou 'failed'.
+-- Status considerados ativos (Bloqueiam inserção): pending, reserved, scheduled, confirmed, in_progress, completed, blocked.
+
+CREATE UNIQUE INDEX idx_unique_active_slot
+ON public.appointments (instructor_id, date, start_time)
+WHERE status NOT IN ('cancelled', 'failed');

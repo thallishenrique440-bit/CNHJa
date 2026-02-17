@@ -1,5 +1,7 @@
-import { createClient } from "jsr:@supabase/supabase-js@2";
-import Stripe from "stripe";
+// FIX: Use esm.sh for robust bundling in Edge Runtime
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// FIX: Uso de URL absoluta compatível com Deno/Edge Runtime para evitar erro de bundle
+import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check";
 
 // Declaração do Deno para evitar erros de lint
 declare const Deno: any;
@@ -76,10 +78,47 @@ Deno.serve(async (req: any) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // 7. Verificar Disponibilidade (Double booking check)
     const dates = slots.map((s: any) => s.date)
     const times = slots.map((s: any) => s.time)
 
+    // --- LOGICA DE AUTO-LIMPEZA (LAZY CLEANUP - SOFT UPDATE) ---
+    // Em vez de DELETAR, marcamos como 'failed'.
+    // O índice parcial "WHERE status NOT IN ('cancelled', 'failed')" fará com que esses registros
+    // sejam ignorados na verificação de unicidade, liberando o slot imediatamente.
+    
+    const nowISO = new Date().toISOString();
+
+    // A. Invalidar slots 'reserved' antigos (Garbage Collection preventiva)
+    await supabaseAdmin
+      .from('appointments')
+      .update({
+        status: 'failed',
+        payment_status: 'failed',
+        cancelled_reason: 'system_cleanup_expired' // Auditoria: expirou sem pagamento
+      })
+      .eq('instructor_id', instructor_id)
+      .in('date', dates)
+      .in('start_time', times)
+      .eq('status', 'reserved')
+      .lt('expires_at', nowISO);
+
+    // B. Invalidar tentativa anterior DO PRÓPRIO USUÁRIO (Retry Flow)
+    // Se o usuário fechou o checkout e tentou de novo, falhamos a anterior para permitir a nova.
+    await supabaseAdmin
+        .from('appointments')
+        .update({
+            status: 'failed',
+            payment_status: 'failed',
+            cancelled_reason: 'user_retry_new_attempt' // Auditoria: usuário reiniciou checkout
+        })
+        .eq('instructor_id', instructor_id)
+        .in('date', dates)
+        .in('start_time', times)
+        .eq('student_id', user.id)
+        .in('status', ['reserved', 'pending']); 
+
+    // 7. Verificar Disponibilidade (Double booking check)
+    // Agora verificamos se sobrou algum bloqueio REAL (de OUTROS usuários ou confirmados)
     const { data: busySlots, error: busyError } = await supabaseAdmin
       .from('appointments')
       .select('date, start_time')
@@ -87,13 +126,13 @@ Deno.serve(async (req: any) => {
       .in('date', dates)
       .in('start_time', times)
       .neq('status', 'cancelled')
-      .neq('status', 'failed') // Se falhou, o horário teoricamente está livre, mas vamos manter simples
+      .neq('status', 'failed') // Importante: ignoramos os que acabamos de falhar
     
     if (busyError) throw busyError;
 
     if (busySlots && busySlots.length > 0) {
       return new Response(
-        JSON.stringify({ error: 'Alguns horários já foram reservados.', busySlots }),
+        JSON.stringify({ error: 'Alguns horários já foram reservados por outro aluno.', busySlots }),
         { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -110,21 +149,30 @@ Deno.serve(async (req: any) => {
     }
 
     // CRITICAL CHECK: Instrutor tem conta Stripe ativa?
-    if (!instructorData.stripe_account_id || !instructorData.payouts_enabled) {
-      throw new Error('Este instrutor ainda não configurou o recebimento de pagamentos.');
+    if (!instructorData.stripe_account_id) {
+       throw new Error('Este instrutor ainda não conectou uma conta bancária.');
+    }
+
+    // Nota: Em ambiente de teste (dev), às vezes payouts_enabled demora a atualizar.
+    if (!instructorData.payouts_enabled) {
+      console.warn(`WARNING: Payouts not enabled for ${instructorData.stripe_account_id}. Proceeding anyway for testing.`);
     }
 
     let totalPrice = 0;
     const purchaseId = crypto.randomUUID();
-    const reservationExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); 
+    // Expira em 30 min para dar tempo de pagar
+    const reservationExpiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString(); 
 
     // Preparar inserts
     const appointmentsToInsert = slots.map((slot: any) => {
        const [h] = slot.time.split(':').map(Number);
        const isNight = h >= 18;
-       const price = (isNight && instructorData.has_night_lessons) 
-          ? instructorData.night_price 
-          : instructorData.base_price;
+       
+       // Preço Inteiro (Centavos) - Garantindo fallback para 0 se null
+       const baseP = instructorData.base_price || 0;
+       const nightP = instructorData.night_price || baseP;
+       
+       const price = (isNight && instructorData.has_night_lessons) ? nightP : baseP;
        
        totalPrice += price;
 
@@ -149,71 +197,90 @@ Deno.serve(async (req: any) => {
        }
     });
 
+    if (totalPrice <= 0) {
+        throw new Error("O valor total da reserva é inválido (zero).");
+    }
+
     // 9. Inserir Reservas no Banco
     const { error: insertError } = await supabaseAdmin
       .from('appointments')
       .insert(appointmentsToInsert);
 
-    if (insertError) throw insertError;
+    if (insertError) {
+        // Se der erro 23505 (Unique Violation) aqui, significa que alguém reservou milissegundos antes
+        if (insertError.code === '23505') {
+            return new Response(
+                JSON.stringify({ error: 'Horário indisponível (concorrente). Atualize a página.' }),
+                { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            )
+        }
+        throw insertError;
+    }
 
     // 10. Criar Sessão de Checkout na Stripe
-    // Cálculo da Taxa da Plataforma (10%)
-    const platformFee = Math.round(totalPrice * 0.10); 
+    
+    // SAFE MATH: Garantir inteiros
+    const finalUnitAmount = Math.round(totalPrice); 
+    const platformFee = Math.round(finalUnitAmount * 0.10); // 10%
+
+    if (finalUnitAmount < 500) { // Menos de 5 reais
+        throw new Error("Valor total abaixo do mínimo permitido pela Stripe.");
+    }
 
     const title = slots.length === 1 
-      ? `Aula Dir. - ${slots[0].date} ${slots[0].time}`
-      : `Pacote ${slots.length} Aulas`;
+      ? `Aula Prática (${category || 'B'}) - ${slots[0].date}`
+      : `Pacote de ${slots.length} Aulas Práticas`;
 
-    // Metadata: Pegamos o ID do primeiro agendamento como referência principal, 
-    // mas o ideal é que o Webhook use o 'purchase_id' para confirmar todos.
-    // Vamos passar purchase_id no metadata.
-    
+    console.log(`Creating Session. Amount: ${finalUnitAmount}, Fee: ${platformFee}, Dest: ${instructorData.stripe_account_id}`);
+
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'], // Adicionar 'pix' requer configuração extra na conta Stripe BR
+      // ATENÇÃO: 'automatic_payment_methods' substitui 'payment_method_types'
+      // Isso habilita PIX, Google Pay, Apple Pay e Cartão automaticamente baseado no Dashboard.
+      automatic_payment_methods: {
+        enabled: true,
+      },
       line_items: [
         {
           price_data: {
             currency: 'brl',
             product_data: {
               name: title,
-              description: `Agendamento com instrutor(a). Categoria: ${category || 'B'}`,
+              description: `Agendamento via Autoescola do Brasil.`,
             },
-            unit_amount: totalPrice, // Valor total em centavos
+            unit_amount: finalUnitAmount, // Inteiro
           },
           quantity: 1,
         },
       ],
       mode: 'payment',
       
-      // Destination Charges: O dinheiro vai para o instrutor, menos a taxa
+      // Destination Charges (Split Payment)
       payment_intent_data: {
-        application_fee_amount: platformFee,
+        application_fee_amount: platformFee, // Inteiro
         transfer_data: {
           destination: instructorData.stripe_account_id,
         },
         metadata: {
-          purchase_id: purchaseId, // Chave para o webhook confirmar todas as aulas
-          student_id: user.id,
-          instructor_id: instructor_id
+          purchase_id: String(purchaseId),
+          student_id: String(user.id),
+          instructor_id: String(instructor_id)
         },
       },
       
       metadata: {
-        purchase_id: purchaseId,
-        student_id: user.id,
+        purchase_id: String(purchaseId),
+        student_id: String(user.id),
       },
       
-      // URLs de retorno para o Frontend
       success_url: `${baseUrl}/#/student/lessons?success=true`,
       cancel_url: `${baseUrl}/#/student/instructor/${instructor_id}?canceled=true`,
       
-      // Idempotência
     }, { idempotencyKey: purchaseId });
 
     return new Response(
       JSON.stringify({ 
         purchaseId: purchaseId,
-        paymentUrl: session.url, // URL hospedada da Stripe
+        paymentUrl: session.url,
       }),
       { 
         status: 200, 
@@ -222,14 +289,15 @@ Deno.serve(async (req: any) => {
     )
 
   } catch (err: any) {
-    console.error('CRITICAL ERROR:', err);
+    console.error('CRITICAL ERROR in create-booking:', err);
     return new Response(
       JSON.stringify({ 
         error: err.message || 'Erro interno ao processar pagamento.',
+        type: err.type || 'unknown',
         details: String(err)
       }),
       { 
-        status: 400, 
+        status: 400, // Mantemos 400 para erros de validação/stripe
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       }
     )

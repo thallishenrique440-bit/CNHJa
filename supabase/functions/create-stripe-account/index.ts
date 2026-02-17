@@ -1,10 +1,8 @@
-import { createClient } from "jsr:@supabase/supabase-js@2";
-import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check";
 
-// Declare Deno to resolve TypeScript errors
 declare const Deno: any;
 
-// CRITICAL FIX: Use esm.sh import above + createFetchHttpClient here
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") as string, {
   apiVersion: "2023-10-16" as any,
   httpClient: Stripe.createFetchHttpClient(),
@@ -16,17 +14,13 @@ const corsHeaders = {
 };
 
 Deno.serve(async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    // 1. Validar Autenticação Manualmente
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      throw new Error('Missing Authorization header');
-    }
+    if (!authHeader) throw new Error('Missing Authorization header');
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -35,43 +29,23 @@ Deno.serve(async (req: Request) => {
     );
 
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-    if (userError || !user) {
-      throw new Error('Invalid user token');
-    }
+    if (userError || !user) throw new Error('Invalid user token');
 
-    // 2. Determinar URLs de Retorno com precisão
-    // FIX: Priorizamos 'referer' porque em ambientes de preview (Bolt/StackBlitz) ou subpastas,
-    // o 'origin' retorna apenas o domínio raiz, causando 404 no redirecionamento.
-    let baseUrl = req.headers.get('referer') || req.headers.get('origin') || 'http://localhost:3000';
+    // Check request mode (Link Creation vs Manual Sync)
+    let body = {};
+    try {
+        const text = await req.text();
+        if (text) body = JSON.parse(text);
+    } catch(e) { /* ignore empty body */ }
     
-    // Limpeza da URL para evitar duplicatas ou erros
-    if (baseUrl.endsWith('/')) {
-      baseUrl = baseUrl.slice(0, -1);
-    }
-    // Remove arquivo específico se houver (ex: index.html)
-    baseUrl = baseUrl.replace(/\/index\.html$/, '');
+    const mode = (body as any).mode || 'create_link'; // 'create_link' | 'sync'
 
-    // Se o referer já contiver a hash (alguns browsers enviam), removemos para reconstruir corretamente
-    const hashIndex = baseUrl.indexOf('#');
-    if (hashIndex !== -1) {
-      baseUrl = baseUrl.substring(0, hashIndex);
-    }
-
-    // Constrói as URLs finais para o HashRouter
-    // Ex: https://url-do-preview.com/caminho-do-app/#/instructor/finance
-    const returnUrl = `${baseUrl}/#/instructor/finance`;
-    const refreshUrl = `${baseUrl}/#/instructor/finance`;
-    
-    console.log(`Base URL detectada: ${baseUrl}`);
-    console.log(`Return URL gerada: ${returnUrl}`);
-
-    // 3. Inicializar Admin Client
+    // Admin Client
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // 4. Buscar dados atuais
     const { data: instructor, error: instructorError } = await supabaseAdmin
       .from('instructors')
       .select('stripe_account_id')
@@ -79,12 +53,51 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (instructorError) throw instructorError;
-
     let accountId = instructor.stripe_account_id;
 
-    // 5. Criar conta Stripe se não existir
+    // --- MODE: SYNC (Manual Refresh) ---
+    if (mode === 'sync') {
+        if (!accountId) {
+            return new Response(JSON.stringify({ status: 'no_account' }), { 
+                status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            });
+        }
+
+        console.log(`[Sync] Fetching Stripe data for ${accountId}`);
+        const account = await stripe.accounts.retrieve(accountId);
+        
+        await supabaseAdmin
+            .from('instructors')
+            .update({ 
+                payouts_enabled: account.payouts_enabled,
+                stripe_onboarding_completed: account.details_submitted
+            })
+            .eq('id', user.id);
+
+        return new Response(
+            JSON.stringify({ 
+                status: 'synced', 
+                payouts_enabled: account.payouts_enabled,
+                details_submitted: account.details_submitted
+            }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+    }
+
+    // --- MODE: CREATE LINK (Default) ---
+    
+    // Configura URL base para retorno
+    let baseUrl = req.headers.get('referer') || req.headers.get('origin') || 'http://localhost:3000';
+    if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+    baseUrl = baseUrl.replace(/\/index\.html$/, '');
+    const hashIndex = baseUrl.indexOf('#');
+    if (hashIndex !== -1) baseUrl = baseUrl.substring(0, hashIndex);
+
+    const returnUrl = `${baseUrl}/#/instructor/finance`;
+    const refreshUrl = `${baseUrl}/#/instructor/finance`;
+
     if (!accountId) {
-      console.log(`Criando nova conta Stripe Express para ${user.email}`);
+      console.log(`Creating new Stripe Express account for ${user.email}`);
       const account = await stripe.accounts.create({
         type: 'express',
         country: 'BR',
@@ -94,18 +107,14 @@ Deno.serve(async (req: Request) => {
           transfers: { requested: true },
         },
       });
-
       accountId = account.id;
-
-      const { error: updateError } = await supabaseAdmin
+      
+      await supabaseAdmin
         .from('instructors')
         .update({ stripe_account_id: accountId })
         .eq('id', user.id);
-
-      if (updateError) throw updateError;
     }
 
-    // 6. Gerar Link de Onboarding
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
       refresh_url: refreshUrl,
@@ -122,7 +131,7 @@ Deno.serve(async (req: Request) => {
     );
 
   } catch (error: any) {
-    console.error('Erro na function:', error);
+    console.error('Error in create-stripe-account:', error);
     return new Response(
       JSON.stringify({ error: error.message }),
       { 
