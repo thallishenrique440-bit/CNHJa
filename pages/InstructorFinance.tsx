@@ -18,14 +18,15 @@ interface Transaction {
   };
 }
 
-type StripeStatus = 'none' | 'pending' | 'active';
+// Updated Status Types for better UX
+type StripeStatus = 'none' | 'pending' | 'processing' | 'active';
 
 export const InstructorFinance: React.FC = () => {
   const { session } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
-  const [syncing, setSyncing] = useState(false); // New State
+  const [syncing, setSyncing] = useState(false);
   
   // Data State
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -69,12 +70,18 @@ export const InstructorFinance: React.FC = () => {
 
         if (instructorError) throw instructorError;
 
+        // --- FIXED LOGIC ---
         if (!instructorData.stripe_account_id) {
             setStripeStatus('none');
-        } else if (!instructorData.payouts_enabled) {
-            setStripeStatus('pending');
-        } else {
+        } else if (instructorData.payouts_enabled === true) {
+            // Priority 1: Check explicitly for boolean true
             setStripeStatus('active');
+        } else if (instructorData.stripe_onboarding_completed === true) {
+            // Priority 2: Onboarding done, but payouts not yet enabled (Bank verification)
+            setStripeStatus('processing');
+        } else {
+            // Priority 3: Account exists but onboarding incomplete
+            setStripeStatus('pending');
         }
 
         // 2. Fetch Transactions
@@ -163,12 +170,21 @@ export const InstructorFinance: React.FC = () => {
         if (error) throw error;
 
         if (data?.status === 'synced') {
-            await loadData(); // Reload UI
-            if (data.payouts_enabled) {
-                addToast("Status atualizado: Conta Ativa!", 'success');
+            // OPTIMISTIC UPDATE: Use response directly instead of waiting for DB read
+            // This prevents race conditions where the read happens before the write propagates
+            if (data.payouts_enabled === true) {
+                setStripeStatus('active');
+                addToast("Tudo certo! Sua conta está ativa.", 'success');
+            } else if (data.details_submitted === true) {
+                setStripeStatus('processing');
+                addToast("Dados enviados! Aguardando verificação do banco.", 'info');
             } else {
-                addToast("Status atualizado: Ainda pendente no banco.", 'info');
+                setStripeStatus('pending');
+                addToast("Cadastro incompleto no Stripe.", 'warning');
             }
+            
+            // Reload background data just to be sure
+            loadData(); 
         }
 
     } catch (err: any) {
@@ -194,13 +210,16 @@ export const InstructorFinance: React.FC = () => {
                 <div className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border flex items-center gap-1
                     ${stripeStatus === 'active' 
                         ? 'bg-green-50 text-green-700 border-green-100' 
-                        : stripeStatus === 'pending'
-                            ? 'bg-yellow-50 text-yellow-700 border-yellow-100'
-                            : 'bg-gray-100 text-gray-500 border-gray-200'
+                        : stripeStatus === 'processing'
+                            ? 'bg-blue-50 text-blue-700 border-blue-100'
+                            : stripeStatus === 'pending'
+                                ? 'bg-yellow-50 text-yellow-700 border-yellow-100'
+                                : 'bg-gray-100 text-gray-500 border-gray-200'
                     }`}
                 >
                     {stripeStatus === 'active' && <span>✅ Conta Ativa</span>}
-                    {stripeStatus === 'pending' && <span>⚠️ Verificação Pendente</span>}
+                    {stripeStatus === 'processing' && <span>⏳ Em Análise</span>}
+                    {stripeStatus === 'pending' && <span>⚠️ Ação Necessária</span>}
                     {stripeStatus === 'none' && <span>❌ Não Configurado</span>}
                 </div>
             )}
@@ -233,15 +252,32 @@ export const InstructorFinance: React.FC = () => {
         </div>
 
         {/* Stripe Callout Area */}
-        <div className="bg-indigo-50 rounded-2xl p-5 border border-indigo-100 relative overflow-hidden">
+        <div className={`rounded-2xl p-5 border relative overflow-hidden transition-colors
+            ${stripeStatus === 'active' ? 'bg-indigo-50 border-indigo-100' : 
+              stripeStatus === 'processing' ? 'bg-blue-50 border-blue-100' :
+              'bg-yellow-50 border-yellow-100'
+            }`}>
+            
             <div className="relative z-10">
-                <h3 className="text-indigo-900 font-bold text-sm mb-1">
-                    {stripeStatus === 'active' ? 'Painel Financeiro Stripe' : 'Recebimento Automático'}
+                <h3 className={`font-bold text-sm mb-1
+                    ${stripeStatus === 'active' ? 'text-indigo-900' : 
+                      stripeStatus === 'processing' ? 'text-blue-900' :
+                      'text-yellow-900'
+                    }`}>
+                    {stripeStatus === 'active' ? 'Painel Financeiro Stripe' : 
+                     stripeStatus === 'processing' ? 'Verificando Dados' :
+                     'Recebimento Automático'}
                 </h3>
-                <p className="text-indigo-700/80 text-xs leading-relaxed mb-4 max-w-[85%]">
+                <p className={`text-xs leading-relaxed mb-4 max-w-[85%]
+                    ${stripeStatus === 'active' ? 'text-indigo-700/80' : 
+                      stripeStatus === 'processing' ? 'text-blue-700/80' :
+                      'text-yellow-800/80'
+                    }`}>
                     {stripeStatus === 'active' 
                         ? 'Acesse seu painel para ver saldo disponível, agendar saques e ver extratos bancários.' 
-                        : 'Configure sua conta para receber pagamentos via Pix e Cartão com repasse automático.'}
+                        : stripeStatus === 'processing'
+                            ? 'O Stripe está verificando seus documentos. Isso pode levar alguns minutos ou horas. Clique em atualizar para checar.'
+                            : 'Configure sua conta para receber pagamentos via Pix e Cartão com repasse automático.'}
                 </p>
                 
                 <div className="flex flex-col space-y-2">
@@ -252,29 +288,38 @@ export const InstructorFinance: React.FC = () => {
                         className={`text-xs py-2.5 px-4 h-auto shadow-none w-full
                             ${stripeStatus === 'active' 
                                 ? 'bg-white border-white text-indigo-600 hover:bg-indigo-50' 
-                                : 'bg-indigo-600 hover:bg-indigo-700 text-white border-transparent'}`}
+                                : stripeStatus === 'processing'
+                                    ? 'bg-blue-600 hover:bg-blue-700 text-white border-transparent'
+                                    : 'bg-yellow-600 hover:bg-yellow-700 text-white border-transparent'}`}
                     >
                         {connecting ? 'Processando...' : 
                             stripeStatus === 'active' ? 'Acessar Painel Stripe ↗' : 
+                            stripeStatus === 'processing' ? 'Verificar Status no Stripe ↗' : 
                             stripeStatus === 'pending' ? 'Concluir Cadastro ⚠️' : 
                             'Ativar Recebimentos'
                         }
                     </Button>
 
                     {/* Botão de Sincronização Manual */}
-                    {stripeStatus === 'pending' && (
+                    {(stripeStatus === 'pending' || stripeStatus === 'processing') && (
                         <button 
                             onClick={handleManualSync}
                             disabled={syncing}
-                            className="text-[10px] font-bold text-indigo-400 hover:text-indigo-600 underline text-center"
+                            className={`text-[10px] font-bold underline text-center
+                                ${stripeStatus === 'processing' ? 'text-blue-600 hover:text-blue-800' : 'text-yellow-700 hover:text-yellow-900'}
+                            `}
                         >
-                            {syncing ? 'Verificando...' : 'Já completei, atualizar status ⟳'}
+                            {syncing ? 'Verificando com o banco...' : 'Já completei, atualizar agora ⟳'}
                         </button>
                     )}
                 </div>
             </div>
             
-            <div className="absolute -right-6 -bottom-8 w-24 h-24 bg-indigo-200 rounded-full opacity-50 mix-blend-multiply filter blur-xl"></div>
+            <div className={`absolute -right-6 -bottom-8 w-24 h-24 rounded-full opacity-50 mix-blend-multiply filter blur-xl
+                ${stripeStatus === 'active' ? 'bg-indigo-200' : 
+                  stripeStatus === 'processing' ? 'bg-blue-200' :
+                  'bg-yellow-200'
+                }`}></div>
         </div>
 
         <div className="space-y-2 text-xs text-gray-500 px-1">
