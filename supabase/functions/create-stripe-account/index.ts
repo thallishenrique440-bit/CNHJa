@@ -96,6 +96,7 @@ Deno.serve(async (req: Request) => {
     const returnUrl = `${baseUrl}/#/instructor/finance`;
     const refreshUrl = `${baseUrl}/#/instructor/finance`;
 
+    // 1. Se não existir conta, cria uma nova
     if (!accountId) {
       console.log(`Creating new Stripe Express account for ${user.email}`);
       const account = await stripe.accounts.create({
@@ -115,20 +116,49 @@ Deno.serve(async (req: Request) => {
         .eq('id', user.id);
     }
 
-    const accountLink = await stripe.accountLinks.create({
-      account: accountId,
-      refresh_url: refreshUrl,
-      return_url: returnUrl,
-      type: 'account_onboarding',
-    });
+    // 2. Verifica o status atual no Stripe para decidir qual link gerar
+    const account = await stripe.accounts.retrieve(accountId);
 
-    return new Response(
-      JSON.stringify({ url: accountLink.url }),
-      { 
-        status: 200, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-      }
-    );
+    // Autocorreção: Se o status no DB estiver desatualizado, atualiza agora
+    if (account.details_submitted !== instructor.stripe_onboarding_completed) {
+       await supabaseAdmin
+        .from('instructors')
+        .update({ stripe_onboarding_completed: account.details_submitted })
+        .eq('id', user.id);
+    }
+
+    if (account.details_submitted) {
+        // --- CASO A: CONTA ATIVA OU EM ANÁLISE ---
+        // Gera link de LOGIN para o Dashboard Express
+        console.log(`Generating Login Link for active account: ${accountId}`);
+        const loginLink = await stripe.accounts.createLoginLink(accountId);
+        
+        return new Response(
+            JSON.stringify({ url: loginLink.url }),
+            { 
+              status: 200, 
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
+    } else {
+        // --- CASO B: CADASTRO INCOMPLETO ---
+        // Gera link de ONBOARDING para preencher dados
+        console.log(`Generating Onboarding Link for pending account: ${accountId}`);
+        const accountLink = await stripe.accountLinks.create({
+            account: accountId,
+            refresh_url: refreshUrl,
+            return_url: returnUrl,
+            type: 'account_onboarding',
+        });
+
+        return new Response(
+            JSON.stringify({ url: accountLink.url }),
+            { 
+              status: 200, 
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
+    }
 
   } catch (error: any) {
     console.error('Error in create-stripe-account:', error);
