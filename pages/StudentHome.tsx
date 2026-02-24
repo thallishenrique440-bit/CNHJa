@@ -16,6 +16,11 @@ interface Review {
   rating: number;
 }
 
+interface CategoryPrice {
+  category: string;
+  day_price: number;
+}
+
 interface Instructor {
   id: string;
   public_id: string | null;
@@ -30,7 +35,8 @@ interface Instructor {
     avatar_url?: string;
   };
   instructor_vehicles: Vehicle[];
-  reviews: Review[]; // Added reviews relation
+  reviews: Review[];
+  instructor_categories: CategoryPrice[]; // New relation
 }
 
 export const StudentHome: React.FC = () => {
@@ -76,6 +82,10 @@ export const StudentHome: React.FC = () => {
           ),
           reviews (
             rating
+          ),
+          instructor_categories (
+            category,
+            day_price
           )
         `)
         .gt('base_price', 0)     // Only instructors who set a price
@@ -146,6 +156,19 @@ export const StudentHome: React.FC = () => {
     // Sort to ensure consistent order (A/B) and join with slash
     const sortedCats = [...cats].sort(); 
     return `Categoria ${sortedCats.join('/')}`;
+  };
+
+  // Helper to get Lowest Price (Starting Price)
+  const getLowestPrice = (inst: Instructor) => {
+    // 1. Try to find lowest price from new table
+    if (inst.instructor_categories && inst.instructor_categories.length > 0) {
+      const prices = inst.instructor_categories.map(c => c.day_price).filter(p => p > 0);
+      if (prices.length > 0) {
+        return Math.min(...prices);
+      }
+    }
+    // 2. Fallback to legacy base_price
+    return inst.base_price;
   };
 
   return (
@@ -223,6 +246,8 @@ export const StudentHome: React.FC = () => {
             const reviewsCount = reviews.length;
             const totalRating = reviews.reduce((acc, r) => acc + r.rating, 0);
             const avgRating = reviewsCount > 0 ? (totalRating / reviewsCount) : 0;
+
+            const lowestPrice = getLowestPrice(inst);
 
             return (
               <div key={inst.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col space-y-3 relative overflow-hidden transition-all hover:shadow-md active:scale-[0.99]">
@@ -329,7 +354,7 @@ export const StudentHome: React.FC = () => {
                   <div className="flex flex-col items-end">
                      <div className="flex items-baseline mb-1">
                         <span className="text-[10px] uppercase font-bold text-gray-400 mr-1">Aula a partir de</span>
-                        <span className="text-lg font-bold text-blue-600">{formatCurrency(inst.base_price)}</span>
+                        <span className="text-lg font-bold text-blue-600">{formatCurrency(lowestPrice)}</span>
                      </div>
                      <Button 
                         variant="primary" 

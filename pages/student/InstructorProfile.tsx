@@ -19,6 +19,12 @@ interface Package {
   is_highlight: boolean;
 }
 
+interface CategoryPrice {
+  category: string;
+  day_price: number;
+  night_price: number;
+}
+
 interface InstructorProfileData {
   id: string;
   publicId: string | null;
@@ -31,12 +37,13 @@ interface InstructorProfileData {
   reviewsCount: number;
   photoUrl: string | null;
   lessonsTaught: number;
-  priceDay: number;
-  priceNight: number;
+  priceDay: number; // Legacy Fallback
+  priceNight: number; // Legacy Fallback
   hasNightLessons: boolean;
   category: 'A' | 'B' | 'AB';
   packages: Package[]; 
-  reviews: any[]; 
+  reviews: any[];
+  categoryPrices: CategoryPrice[]; // New Pricing Structure
 }
 
 export const StudentInstructorProfile: React.FC = () => {
@@ -134,6 +141,11 @@ export const StudentInstructorProfile: React.FC = () => {
               full_name,
               city,
               avatar_url
+            ),
+            instructor_categories (
+              category,
+              day_price,
+              night_price
             )
           `)
           .eq('id', id)
@@ -207,6 +219,13 @@ export const StudentInstructorProfile: React.FC = () => {
           // Supabase types often infer arrays for joined relations
           const profileData = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
 
+          // Map Category Prices
+          const catPrices: CategoryPrice[] = (data.instructor_categories || []).map((c: any) => ({
+            category: c.category,
+            day_price: c.day_price,
+            night_price: c.night_price
+          }));
+
           setInstructor({
             id: data.id,
             publicId: data.public_id || null,
@@ -224,7 +243,8 @@ export const StudentInstructorProfile: React.FC = () => {
             hasNightLessons: !!data.has_night_lessons,
             category: cat,
             packages: packagesData || [], // Using REAL packages from DB
-            reviews: formattedReviews
+            reviews: formattedReviews,
+            categoryPrices: catPrices
           });
         }
       } catch (err) {
@@ -288,6 +308,22 @@ export const StudentInstructorProfile: React.FC = () => {
         setSelectedLessonCategory(availableCategories[0]);
     }
   }, [availableCategories]);
+
+  // --- DYNAMIC PRICE DISPLAY ---
+  const currentDisplayPrices = useMemo(() => {
+    if (!instructor) return { day: 0, night: 0 };
+    
+    // If category selected, try to find specific price
+    if (selectedLessonCategory) {
+      const catPrice = instructor.categoryPrices.find(c => c.category === selectedLessonCategory);
+      if (catPrice) {
+        return { day: catPrice.day_price, night: catPrice.night_price };
+      }
+    }
+
+    // Fallback to legacy
+    return { day: instructor.priceDay, night: instructor.priceNight };
+  }, [instructor, selectedLessonCategory]);
 
   const activePackage = useMemo(() => {
     if (!instructor) return null;
@@ -399,10 +435,26 @@ export const StudentInstructorProfile: React.FC = () => {
     return selectedSlots.reduce((acc, slotKey) => {
       const time = slotKey.split('|')[1];
       const isNight = parseInt(time.split(':')[0]) >= 18;
-      const price = (isNight && instructor.priceNight) ? instructor.priceNight : instructor.priceDay;
+      
+      // Determine price for this slot
+      let price = 0;
+      
+      if (selectedLessonCategory) {
+        const catPrice = instructor.categoryPrices.find(c => c.category === selectedLessonCategory);
+        if (catPrice) {
+          price = (isNight && instructor.hasNightLessons) ? catPrice.night_price : catPrice.day_price;
+        } else {
+          // Fallback if category price not found (shouldn't happen if data integrity is good)
+          price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
+        }
+      } else {
+         // Fallback if no category selected (though UI prevents slot selection)
+         price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
+      }
+
       return acc + price;
     }, 0);
-  }, [selectedSlots, activePackage, instructor]);
+  }, [selectedSlots, activePackage, instructor, selectedLessonCategory]);
 
   const handlePackageSelect = (pkgId: string) => {
     if (selectedPackageId === pkgId) {
@@ -628,7 +680,7 @@ export const StudentInstructorProfile: React.FC = () => {
               <div className="bg-green-50 py-2 px-2 rounded-xl flex flex-col items-center justify-center border border-green-100">
                  <div className="flex items-center mb-0.5 space-x-1">
                     <span className="text-sm">💰</span>
-                    <span className="font-bold text-gray-900 text-base">{formatCurrency(instructor.priceDay)}</span>
+                    <span className="font-bold text-gray-900 text-base">{formatCurrency(currentDisplayPrices.day)}</span>
                  </div>
                  <span className="text-[10px] text-green-700/80 text-center leading-none">/ aula</span>
               </div>
@@ -637,7 +689,7 @@ export const StudentInstructorProfile: React.FC = () => {
                 <div className="bg-indigo-50 py-2 px-2 rounded-xl flex flex-col items-center justify-center border border-indigo-100">
                    <div className="flex items-center mb-0.5 space-x-1">
                       <span className="text-sm">🌙</span>
-                      <span className="font-bold text-gray-900 text-base">{formatCurrency(instructor.priceNight)}</span>
+                      <span className="font-bold text-gray-900 text-base">{formatCurrency(currentDisplayPrices.night)}</span>
                    </div>
                    <span className="text-[10px] text-indigo-600/80 text-center leading-none">/ noite</span>
                 </div>
@@ -676,7 +728,7 @@ export const StudentInstructorProfile: React.FC = () => {
              
              {availableCategories.length > 1 && !selectedLessonCategory && (
                 <p className="text-xs text-gray-500 mt-2">
-                   Selecione a categoria acima para liberar os horários.
+                   Selecione a categoria acima para ver os preços e liberar os horários.
                 </p>
              )}
           </div>

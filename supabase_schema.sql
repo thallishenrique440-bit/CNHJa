@@ -207,3 +207,38 @@ DROP INDEX IF EXISTS public.idx_unique_active_slot;
 CREATE UNIQUE INDEX idx_unique_active_slot
 ON public.appointments (instructor_id, date, start_time)
 WHERE status NOT IN ('cancelled', 'failed');
+
+-- ==============================================================================
+-- MIGRATION: PRICING BY CATEGORY (PHASE 1)
+-- ==============================================================================
+
+create table if not exists public.instructor_categories (
+  id uuid not null default gen_random_uuid() primary key,
+  created_at timestamptz not null default now(),
+  
+  instructor_id uuid not null references public.instructors(id) on delete cascade,
+  category text not null check (category in ('A', 'B')),
+  
+  price_day integer not null default 0, -- in cents
+  price_night integer not null default 0, -- in cents
+  
+  -- Constraint: One entry per category per instructor
+  unique(instructor_id, category)
+);
+
+-- Enable RLS
+alter table public.instructor_categories enable row level security;
+
+-- Policies
+create policy "Public can view instructor categories"
+on public.instructor_categories for select
+using (true);
+
+create policy "Instructors can manage their own categories"
+on public.instructor_categories for all
+using (auth.uid() = instructor_id)
+with check (auth.uid() = instructor_id);
+
+-- Grant permissions
+grant all on public.instructor_categories to authenticated;
+grant all on public.instructor_categories to service_role;

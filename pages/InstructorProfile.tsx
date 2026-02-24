@@ -42,12 +42,12 @@ export const InstructorProfile: React.FC = () => {
   const [whatsapp, setWhatsapp] = useState('');
   const [publicId, setPublicId] = useState(''); 
 
-  // 2. Pricing
-  const [standardPrice, setStandardPrice] = useState('0'); 
+  // 2. Pricing (New Structure)
+  const [pricesA, setPricesA] = useState({ day: '0', night: '0' });
+  const [pricesB, setPricesB] = useState({ day: '0', night: '0' });
   
   // 3. Night Lessons
   const [nightLessonsEnabled, setNightLessonsEnabled] = useState(false);
-  const [nightPrice, setNightPrice] = useState('0');
 
   // 4. Categories
   const [category, setCategory] = useState('B'); 
@@ -105,8 +105,6 @@ export const InstructorProfile: React.FC = () => {
           setPublicId(instructor.public_id || '');
           setCredential(instructor.credential_number || '');
           setWhatsapp(instructor.whatsapp || '');
-          setStandardPrice(String(instructor.base_price || 0));
-          setNightPrice(String(instructor.night_price || 0));
           setNightLessonsEnabled(instructor.has_night_lessons || false);
           setDefaultLocation(instructor.location_text || '');
           
@@ -116,6 +114,38 @@ export const InstructorProfile: React.FC = () => {
             else if (cats.includes('A')) setCategory('A');
             else setCategory('B');
           }
+
+          // 2.1 Fetch Category Prices
+          const { data: catPrices } = await supabase
+            .from('instructor_categories')
+            .select('*')
+            .eq('instructor_id', userId);
+
+          if (catPrices && catPrices.length > 0) {
+            const catA = catPrices.find(c => c.category === 'A');
+            const catB = catPrices.find(c => c.category === 'B');
+
+            if (catA) {
+              setPricesA({
+                day: String(catA.day_price || 0),
+                night: String(catA.night_price || 0)
+              });
+            }
+            if (catB) {
+              setPricesB({
+                day: String(catB.day_price || 0),
+                night: String(catB.night_price || 0)
+              });
+            }
+          } else {
+            // Fallback: Populate from legacy base_price if new table is empty
+            const legacyBase = String(instructor.base_price || 0);
+            const legacyNight = String(instructor.night_price || 0);
+            
+            setPricesA({ day: legacyBase, night: legacyNight });
+            setPricesB({ day: legacyBase, night: legacyNight });
+          }
+
         } else {
           // Fallback metadata
           const meta = session.user.user_metadata;
@@ -241,12 +271,22 @@ export const InstructorProfile: React.FC = () => {
       else if (category === 'A') catArray = ['A'];
       else catArray = ['B'];
 
+      // Derive Legacy Prices (Prefer B, then A)
+      // This ensures older app versions still see a valid price
+      const legacyBasePrice = catArray.includes('B') 
+        ? parseInt(pricesB.day.replace(/\D/g, '') || '0') 
+        : parseInt(pricesA.day.replace(/\D/g, '') || '0');
+        
+      const legacyNightPrice = catArray.includes('B')
+        ? parseInt(pricesB.night.replace(/\D/g, '') || '0')
+        : parseInt(pricesA.night.replace(/\D/g, '') || '0');
+
       const instructorData = {
         id: userId,
         credential_number: credential,
         whatsapp: whatsapp.replace(/\D/g, ''),
-        base_price: parseInt(standardPrice.replace(/\D/g, '') || '0'),
-        night_price: parseInt(nightPrice.replace(/\D/g, '') || '0'),
+        base_price: legacyBasePrice,
+        night_price: legacyNightPrice,
         has_night_lessons: nightLessonsEnabled,
         location_text: defaultLocation,
         categories: catArray
@@ -257,6 +297,35 @@ export const InstructorProfile: React.FC = () => {
         .upsert(instructorData);
 
       if (instructorError) throw instructorError;
+
+      // --- UPSERT CATEGORY PRICES ---
+      const categoriesToUpsert = [];
+
+      if (catArray.includes('A')) {
+        categoriesToUpsert.push({
+          instructor_id: userId,
+          category: 'A',
+          day_price: parseInt(pricesA.day.replace(/\D/g, '') || '0'),
+          night_price: parseInt(pricesA.night.replace(/\D/g, '') || '0')
+        });
+      }
+
+      if (catArray.includes('B')) {
+        categoriesToUpsert.push({
+          instructor_id: userId,
+          category: 'B',
+          day_price: parseInt(pricesB.day.replace(/\D/g, '') || '0'),
+          night_price: parseInt(pricesB.night.replace(/\D/g, '') || '0')
+        });
+      }
+
+      if (categoriesToUpsert.length > 0) {
+        const { error: catError } = await supabase
+          .from('instructor_categories')
+          .upsert(categoriesToUpsert, { onConflict: 'instructor_id,category' });
+          
+        if (catError) throw catError;
+      }
       
       // Vehicles logic (simplified for brevity)
       if (hasCar) {
@@ -291,7 +360,8 @@ export const InstructorProfile: React.FC = () => {
 
       localStorage.setItem('ab_instructor_preferences', JSON.stringify({
         nightLessonsEnabled,
-        nightPrice: nightLessonsEnabled ? nightPrice : null
+        // Store legacy night price for local preference if needed
+        nightPrice: legacyNightPrice 
       }));
 
     } catch (error: any) {
@@ -393,50 +463,6 @@ export const InstructorProfile: React.FC = () => {
 
         <hr className="border-gray-100" />
 
-        <section className="space-y-5">
-          <div className="flex items-center justify-between">
-             <label className="text-base font-semibold text-gray-900">Aulas noturnas</label>
-             <ToggleSwitch checked={nightLessonsEnabled} onChange={() => setNightLessonsEnabled(!nightLessonsEnabled)} />
-          </div>
-
-          {nightLessonsEnabled && (
-            <div className="animate-fade-in-down">
-               <Input 
-                  label="Valor da aula noturna (R$)"
-                  placeholder="R$ 0,00"
-                  value={formatCurrency(nightPrice)}
-                  onChange={(e) => setNightPrice(e.target.value.replace(/\D/g, ''))}
-                  type="text"
-                  inputMode="numeric"
-               />
-               <p className="text-xs text-gray-500 mt-2 leading-tight">
-                 Se não informado, será utilizado automaticamente o valor da aula diurna.
-               </p>
-            </div>
-          )}
-        </section>
-
-        <hr className="border-gray-100" />
-
-        <section className="space-y-5">
-           <h2 className="text-lg font-bold text-gray-900">Valores</h2>
-           <div>
-             <Input 
-                label="Valor da aula (R$)" 
-                placeholder="R$ 0,00"
-                value={formatCurrency(standardPrice)}
-                onChange={(e) => setStandardPrice(e.target.value.replace(/\D/g, ''))}
-                type="text"
-                inputMode="numeric"
-             />
-             <p className="text-xs text-gray-500 mt-2 leading-tight">
-               Este é o valor base para a aula avulsa de 50 minutos.
-             </p>
-           </div>
-        </section>
-
-        <hr className="border-gray-100" />
-
         <section className="space-y-6">
            <div>
              <h2 className="text-lg font-bold text-gray-900 mb-4">Veículos e Categorias</h2>
@@ -458,6 +484,68 @@ export const InstructorProfile: React.FC = () => {
                  </button>
                ))}
              </div>
+           </div>
+
+           {/* --- PRICING SECTION (NEW) --- */}
+           <div className="space-y-6 animate-fade-in">
+              <div className="flex items-center justify-between">
+                 <label className="text-base font-semibold text-gray-900">Aulas noturnas</label>
+                 <ToggleSwitch checked={nightLessonsEnabled} onChange={() => setNightLessonsEnabled(!nightLessonsEnabled)} />
+              </div>
+
+              {/* Category A Pricing */}
+              {(category === 'A' || category === 'AB') && (
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-3">
+                   <h3 className="font-bold text-gray-800 flex items-center">
+                     <span className="text-xl mr-2">🏍️</span> Valores Moto (Cat. A)
+                   </h3>
+                   <div className="grid grid-cols-1 gap-3">
+                      <Input 
+                        label="Preço Aula Diurna (R$)" 
+                        placeholder="R$ 0,00"
+                        value={formatCurrency(pricesA.day)}
+                        onChange={(e) => setPricesA(prev => ({ ...prev, day: e.target.value.replace(/\D/g, '') }))}
+                        inputMode="numeric"
+                      />
+                      {nightLessonsEnabled && (
+                        <Input 
+                          label="Preço Aula Noturna (R$)" 
+                          placeholder="R$ 0,00"
+                          value={formatCurrency(pricesA.night)}
+                          onChange={(e) => setPricesA(prev => ({ ...prev, night: e.target.value.replace(/\D/g, '') }))}
+                          inputMode="numeric"
+                        />
+                      )}
+                   </div>
+                </div>
+              )}
+
+              {/* Category B Pricing */}
+              {(category === 'B' || category === 'AB') && (
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-3">
+                   <h3 className="font-bold text-gray-800 flex items-center">
+                     <span className="text-xl mr-2">🚘</span> Valores Carro (Cat. B)
+                   </h3>
+                   <div className="grid grid-cols-1 gap-3">
+                      <Input 
+                        label="Preço Aula Diurna (R$)" 
+                        placeholder="R$ 0,00"
+                        value={formatCurrency(pricesB.day)}
+                        onChange={(e) => setPricesB(prev => ({ ...prev, day: e.target.value.replace(/\D/g, '') }))}
+                        inputMode="numeric"
+                      />
+                      {nightLessonsEnabled && (
+                        <Input 
+                          label="Preço Aula Noturna (R$)" 
+                          placeholder="R$ 0,00"
+                          value={formatCurrency(pricesB.night)}
+                          onChange={(e) => setPricesB(prev => ({ ...prev, night: e.target.value.replace(/\D/g, '') }))}
+                          inputMode="numeric"
+                        />
+                      )}
+                   </div>
+                </div>
+              )}
            </div>
 
            {showCarOptions && (

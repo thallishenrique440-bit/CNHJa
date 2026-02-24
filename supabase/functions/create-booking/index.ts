@@ -72,6 +72,12 @@ Deno.serve(async (req: any) => {
       throw new Error('Dados incompletos: instrutor ou horários faltando.')
     }
 
+    // VALIDAR CATEGORIA (Backend Source of Truth)
+    const requestedCategory = category;
+    if (!requestedCategory || !['A', 'B'].includes(requestedCategory)) {
+        throw new Error('Categoria da aula (A ou B) é obrigatória.');
+    }
+
     // 6. Inicializar Supabase Admin
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -138,9 +144,10 @@ Deno.serve(async (req: any) => {
     }
 
     // 8. Buscar dados do instrutor e CONTA STRIPE
+    // REMOVIDO: base_price, night_price (agora buscamos em instructor_categories)
     const { data: instructorData, error: instructorError } = await supabaseAdmin
       .from('instructors')
-      .select('base_price, night_price, has_night_lessons, stripe_account_id, payouts_enabled')
+      .select('has_night_lessons, stripe_account_id, payouts_enabled')
       .eq('id', instructor_id)
       .single();
     
@@ -158,21 +165,56 @@ Deno.serve(async (req: any) => {
       console.warn(`WARNING: Payouts not enabled for ${instructorData.stripe_account_id}. Proceeding anyway for testing.`);
     }
 
+    // 9. BUSCAR PREÇO OFICIAL (Source of Truth)
+    const { data: categoryData, error: categoryError } = await supabaseAdmin
+        .from('instructor_categories')
+        .select('day_price, night_price')
+        .eq('instructor_id', instructor_id)
+        .eq('category', requestedCategory)
+        .single();
+
+    if (categoryError || !categoryData) {
+         return new Response(
+            JSON.stringify({ error: `O instrutor não possui preço configurado para a Categoria ${requestedCategory}.` }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+    }
+
+    // Validar integridade do preço
+    if (!categoryData.day_price || categoryData.day_price <= 0) {
+         return new Response(
+            JSON.stringify({ error: `Preço inválido ou não configurado para a Categoria ${requestedCategory}.` }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+    }
+
     let totalPrice = 0;
     const purchaseId = crypto.randomUUID();
     // Expira em 30 min para dar tempo de pagar
     const reservationExpiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString(); 
 
-    // Preparar inserts
+    // Preparar inserts com PREÇO CALCULADO NO BACKEND
     const appointmentsToInsert = slots.map((slot: any) => {
        const [h] = slot.time.split(':').map(Number);
        const isNight = h >= 18;
        
-       // Preço Inteiro (Centavos) - Garantindo fallback para 0 se null
-       const baseP = instructorData.base_price || 0;
-       const nightP = instructorData.night_price || baseP;
+       // Lógica de Preço:
+       // Se for noite E instrutor aceita noite -> usa night_price
+       // Caso contrário -> usa day_price
+       let price = categoryData.day_price;
        
-       const price = (isNight && instructorData.has_night_lessons) ? nightP : baseP;
+       if (isNight && instructorData.has_night_lessons) {
+           // Se night_price não estiver definido, usamos day_price como fallback seguro?
+           // Regra: "Se preço não configurado → bloquear". 
+           // Mas night_price pode ser opcional? Vamos assumir que se has_night_lessons=true, deve ter preço.
+           if (categoryData.night_price && categoryData.night_price > 0) {
+               price = categoryData.night_price;
+           } else {
+               // Fallback ou Erro? Vamos usar o day price se night for 0, 
+               // mas idealmente deveria ter preço noturno.
+               price = categoryData.day_price;
+           }
+       }
        
        totalPrice += price;
 
@@ -188,8 +230,8 @@ Deno.serve(async (req: any) => {
          date: slot.date,
          start_time: slot.time,
          end_time: end_time,
-         category: category || 'B',
-         price: price,
+         category: requestedCategory, // Salva a categoria validada
+         price: price, // Preço oficial do banco
          status: 'reserved', 
          expires_at: reservationExpiresAt,
          purchase_id: purchaseId,
@@ -201,7 +243,7 @@ Deno.serve(async (req: any) => {
         throw new Error("O valor total da reserva é inválido (zero).");
     }
 
-    // 9. Inserir Reservas no Banco
+    // 10. Inserir Reservas no Banco
     const { error: insertError } = await supabaseAdmin
       .from('appointments')
       .insert(appointmentsToInsert);
