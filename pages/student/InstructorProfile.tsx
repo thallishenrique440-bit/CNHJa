@@ -523,8 +523,13 @@ export const StudentInstructorProfile: React.FC = () => {
       }
 
       // 5. Sucesso
-      if (data && data.paymentUrl) {
-         window.location.href = data.paymentUrl;
+      if (data && data.clientSecret && data.purchaseId) {
+         navigate('/student/payment', { 
+            state: { 
+               clientSecret: data.clientSecret, 
+               purchaseId: data.purchaseId 
+            } 
+         });
       } else if (data && data.error) {
          throw new Error(data.error);
       } else {

@@ -17,6 +17,7 @@ import { StudentLessons } from './pages/student/Lessons';
 import { StudentInstructorProfile } from './pages/student/InstructorProfile';
 import { StudentFinance } from './pages/student/Finance';
 import { StudentProfile } from './pages/student/Profile';
+import { PaymentPage } from './pages/student/PaymentPage';
 import { supabase } from './lib/supabase';
 import { ProfileGuard } from './components/ProfileGuard';
 
@@ -129,6 +130,7 @@ const AppRoutes: React.FC = () => {
               <Route path="/student/finance" element={<StudentFinance />} /> 
               <Route path="/student/profile" element={<StudentProfile />} />
               <Route path="/student/instructor/:id" element={<StudentInstructorProfile />} />
+              <Route path="/student/payment" element={<PaymentPage />} />
            </Route>
         </Route>
         

@@ -92,63 +92,202 @@ Deno.serve(async (req: Request) => {
       }
 
       // ======================================================================
-      // Checkout Logic
+      // Redundancy: Amount Capturable Updated (True Auth Confirmation)
       // ======================================================================
-      case "checkout.session.completed": {
-        const session = event.data.object;
-        const purchaseId = session.metadata?.purchase_id;
-        const paymentIntentId = session.payment_intent as string;
+      case "payment_intent.amount_capturable_updated": {
+        const paymentIntent = event.data.object;
+        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const paymentIntentId = paymentIntent.id;
+        const instructorId = paymentIntent.metadata?.instructor_id;
+        const studentId = paymentIntent.metadata?.student_id;
+        const amountTotal = paymentIntent.amount;
 
         if (purchaseId) {
-          console.log(`💰 Checkout completed for Purchase ID: ${purchaseId}`);
+           console.log(`🔒 Amount Capturable Updated (Auth) for Purchase ID: ${purchaseId}`);
+           
+           // 1. Update Appointments -> pending_approval / authorized
+           const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+           
+           const { error: aptError } = await supabaseAdmin
+             .from("appointments")
+             .update({
+               status: "pending_approval",
+               payment_status: "authorized",
+               payment_intent_id: paymentIntentId,
+               expires_at: expiresAt
+             })
+             .eq("purchase_id", purchaseId);
 
-          const { error, count } = await supabaseAdmin
+           if (aptError) {
+             console.error("❌ Error updating appointments:", aptError);
+             throw aptError;
+           }
+
+           // 2. Create Initial Transaction (Authorized) if not exists
+           const { data: existingTx } = await supabaseAdmin
+             .from("transactions")
+             .select("id")
+             .eq("stripe_payment_intent_id", paymentIntentId)
+             .maybeSingle();
+
+           if (!existingTx) {
+             const { error: txError } = await supabaseAdmin
+               .from("transactions")
+               .insert({
+                 student_id: studentId,
+                 instructor_id: instructorId,
+                 type: "lesson_payment",
+                 amount: amountTotal,
+                 status: "pending", // Pending capture
+                 stripe_payment_intent_id: paymentIntentId,
+                 description: `Reserva ${purchaseId} (Aguardando Aceite)`,
+                 metadata: paymentIntent.metadata
+               });
+
+             if (txError) console.error("❌ Error creating transaction:", txError);
+           }
+
+           // 3. Notify Instructor
+           if (instructorId) {
+             await supabaseAdmin.from("notifications").insert({
+               user_id: instructorId,
+               title: "Nova Solicitação de Aula",
+               message: "Você tem uma nova solicitação de agendamento. Aceite em até 20 minutos.",
+               type: "booking_request",
+               metadata: { purchase_id: purchaseId }
+             });
+           }
+        }
+        break;
+      }
+
+      // ======================================================================
+      // Capture Success (Instructor Accepted)
+      // ======================================================================
+      case "payment_intent.succeeded": {
+        const paymentIntent = event.data.object;
+        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const paymentIntentId = paymentIntent.id;
+
+        if (purchaseId) {
+          console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
+
+          // 1. Update Appointments -> confirmed / paid
+          await supabaseAdmin
             .from("appointments")
             .update({
-              payment_status: "paid",
               status: "confirmed",
-              payment_intent_id: paymentIntentId
+              payment_status: "paid"
             })
             .eq("purchase_id", purchaseId);
 
-          if (error) {
-            console.error("❌ Error confirming appointments:", error);
-            throw error;
+          // 2. Update Transaction -> completed
+          await supabaseAdmin
+            .from("transactions")
+            .update({
+              status: "completed",
+              description: `Pagamento Confirmado (Capturado)`
+            })
+            .eq("stripe_payment_intent_id", paymentIntentId);
+
+          // 3. Notify Student
+          const studentId = paymentIntent.metadata?.student_id;
+          if (studentId) {
+             await supabaseAdmin.from("notifications").insert({
+              user_id: studentId,
+              title: "Aula Confirmada!",
+              message: "O instrutor aceitou sua solicitação. Bom treino!",
+              type: "booking_accepted",
+              metadata: { purchase_id: purchaseId }
+            });
           }
-          console.log(`✅ Confirmed ${count} appointments.`);
         }
         break;
       }
 
-      case "checkout.session.expired": {
-        const session = event.data.object;
-        const purchaseId = session.metadata?.purchase_id;
+      // ======================================================================
+      // Auth Released (Rejected or Expired)
+      // ======================================================================
+      case "payment_intent.canceled": {
+        const paymentIntent = event.data.object;
+        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const paymentIntentId = paymentIntent.id;
 
         if (purchaseId) {
-          console.log(`⚠️ Checkout expired for Purchase ID: ${purchaseId}`);
-          const { error } = await supabaseAdmin
-            .from("appointments")
-            .delete()
-            .eq("purchase_id", purchaseId)
-            .eq("status", "reserved");
+          console.log(`🚫 Payment Canceled (Released) for Purchase ID: ${purchaseId}`);
 
-          if (error) console.error("❌ Error deleting expired slots:", error);
+          // 1. Check current status to decide next state
+          const { data: appointment } = await supabaseAdmin
+             .from("appointments")
+             .select("status")
+             .eq("purchase_id", purchaseId)
+             .maybeSingle();
+
+          if (appointment) {
+             const updatePayload: any = { payment_status: "released" };
+             
+             // Only change status to rejected if it's currently pending_approval
+             // If it's 'expired', we leave it as 'expired'.
+             if (appointment.status === 'pending_approval') {
+                updatePayload.status = 'rejected';
+             }
+             
+             await supabaseAdmin
+                .from("appointments")
+                .update(updatePayload)
+                .eq("purchase_id", purchaseId);
+          }
+
+          // 2. Update Transaction -> failed (Voided)
+          await supabaseAdmin
+            .from("transactions")
+            .update({
+              status: "failed",
+              description: `Autorização Cancelada (Liberada)`
+            })
+            .eq("stripe_payment_intent_id", paymentIntentId);
+            
+          // 3. Notify Student
+          const studentId = paymentIntent.metadata?.student_id;
+          if (studentId) {
+             await supabaseAdmin.from("notifications").insert({
+              user_id: studentId,
+              title: "Solicitação Cancelada",
+              message: "O valor reservado foi liberado no seu cartão.",
+              type: "payment_released",
+              metadata: { purchase_id: purchaseId }
+            });
+          }
         }
         break;
       }
 
+      // ======================================================================
+      // Fallback / Redundancy
+      // ======================================================================
       case "payment_intent.payment_failed": {
         const paymentIntent = event.data.object;
         const purchaseId = paymentIntent.metadata?.purchase_id;
+        const paymentIntentId = paymentIntent.id;
 
         if (purchaseId) {
-          console.log(`❌ Payment failed for Purchase ID: ${purchaseId}`);
-          const { error } = await supabaseAdmin
+          console.log(`❌ Payment Failed for Purchase ID: ${purchaseId}`);
+          
+          await supabaseAdmin
             .from("appointments")
-            .update({ payment_status: "failed", status: "failed" })
+            .update({ 
+                status: "failed", 
+                payment_status: "failed" 
+            })
             .eq("purchase_id", purchaseId);
 
-          if (error) console.error("❌ Error updating failed status:", error);
+          await supabaseAdmin
+            .from("transactions")
+            .update({
+              status: "failed",
+              description: `Falha no Pagamento`
+            })
+            .eq("stripe_payment_intent_id", paymentIntentId);
         }
         break;
       }

@@ -259,9 +259,11 @@ Deno.serve(async (req: any) => {
         throw insertError;
     }
 
-    // 10. Criar Sessão de Checkout na Stripe
+    // 11. Criar PaymentIntent no Stripe (Auth & Capture Manual)
     
     // SAFE MATH: Garantir inteiros
+    // O preço no banco (instructor_categories) já deve estar em CENTAVOS.
+    // totalPrice é a soma desses valores.
     const finalUnitAmount = Math.round(totalPrice); 
     const platformFee = Math.round(finalUnitAmount * 0.10); // 10%
 
@@ -273,56 +275,60 @@ Deno.serve(async (req: any) => {
       ? `Aula Prática (${category || 'B'}) - ${slots[0].date}`
       : `Pacote de ${slots.length} Aulas Práticas`;
 
-    console.log(`Creating Session. Amount: ${finalUnitAmount}, Fee: ${platformFee}, Dest: ${instructorData.stripe_account_id}`);
+    console.log(`Creating PaymentIntent. Amount: ${finalUnitAmount}, Fee: ${platformFee}, Dest: ${instructorData.stripe_account_id}`);
 
-    const session = await stripe.checkout.sessions.create({
-      // ATENÇÃO: 'automatic_payment_methods' substitui 'payment_method_types'
-      // Isso habilita PIX, Google Pay, Apple Pay e Cartão automaticamente baseado no Dashboard.
-      automatic_payment_methods: {
-        enabled: true,
-      },
-      line_items: [
-        {
-          price_data: {
-            currency: 'brl',
-            product_data: {
-              name: title,
-              description: `Agendamento via Autoescola do Brasil.`,
-            },
-            unit_amount: finalUnitAmount, // Inteiro
+    let paymentIntent;
+    try {
+        paymentIntent = await stripe.paymentIntents.create({
+          amount: finalUnitAmount,
+          currency: 'brl',
+          capture_method: 'manual', // AUTH ONLY: O valor é reservado, mas não cobrado
+          automatic_payment_methods: {
+            enabled: true,
           },
-          quantity: 1,
-        },
-      ],
-      mode: 'payment',
-      
-      // Destination Charges (Split Payment)
-      payment_intent_data: {
-        application_fee_amount: platformFee, // Inteiro
-        transfer_data: {
-          destination: instructorData.stripe_account_id,
-        },
-        metadata: {
-          purchase_id: String(purchaseId),
-          student_id: String(user.id),
-          instructor_id: String(instructor_id)
-        },
-      },
-      
-      metadata: {
-        purchase_id: String(purchaseId),
-        student_id: String(user.id),
-      },
-      
-      success_url: `${baseUrl}/#/student/lessons?success=true`,
-      cancel_url: `${baseUrl}/#/student/instructor/${instructor_id}?canceled=true`,
-      
-    }, { idempotencyKey: purchaseId });
+          description: title,
+          
+          // Destination Charges (Split Payment)
+          application_fee_amount: platformFee, // Inteiro
+          transfer_data: {
+            destination: instructorData.stripe_account_id,
+          },
+          
+          metadata: {
+            purchase_id: String(purchaseId),
+            student_id: String(user.id),
+            instructor_id: String(instructor_id)
+          },
+          
+        }, { idempotencyKey: purchaseId });
+
+        // SUCESSO: Atualizar appointments com o ID do PaymentIntent
+        // Isso é crucial para o webhook e funções de gestão
+        await supabaseAdmin
+            .from('appointments')
+            .update({ payment_intent_id: paymentIntent.id })
+            .eq('purchase_id', purchaseId);
+
+    } catch (stripeError: any) {
+        console.error("❌ Erro ao criar PaymentIntent:", stripeError);
+
+        // ROLLBACK: Marcar appointments como falhos para liberar o horário
+        await supabaseAdmin
+            .from('appointments')
+            .update({
+                status: 'failed',
+                payment_status: 'failed',
+                cancelled_reason: 'stripe_creation_failed'
+            })
+            .eq('purchase_id', purchaseId);
+
+        throw new Error(`Erro no processamento do pagamento: ${stripeError.message}`);
+    }
 
     return new Response(
       JSON.stringify({ 
         purchaseId: purchaseId,
-        paymentUrl: session.url,
+        clientSecret: paymentIntent.client_secret,
       }),
       { 
         status: 200, 

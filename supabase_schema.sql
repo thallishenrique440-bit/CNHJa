@@ -192,25 +192,91 @@ DROP COLUMN IF EXISTS transfer_id,
 DROP COLUMN IF EXISTS payout_status;
 
 -- ==============================================================================
--- MIGRATION FINAL: CORREÇÃO DE ÍNDICE DE UNICIDADE (Fix Error 23505)
+-- MIGRATION: MARKETPLACE EVOLUTION (PHASE 2) - MANUAL APPROVAL & FINANCE
 -- ==============================================================================
 
--- 1. Remover índices antigos que causam conflito ou são redundantes
-DROP INDEX IF EXISTS public.uniq_instructor_timeslot;
-DROP INDEX IF EXISTS public.idx_unique_active_slot;
+-- 1. Atualizar Status de Agendamento (Adicionar pending_approval, expired, rejected)
+DO $$
+BEGIN
+    ALTER TABLE public.appointments DROP CONSTRAINT IF EXISTS appointments_status_check;
+    ALTER TABLE public.appointments ADD CONSTRAINT appointments_status_check
+        CHECK (status IN ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked', 'reserved', 'failed', 'pending_approval', 'expired', 'rejected'));
+EXCEPTION
+    WHEN others THEN NULL;
+END $$;
 
--- 2. Criar o índice parcial definitivo
--- Regra: Garante unicidade apenas para agendamentos "ativos".
--- Exceção: Permite reutilização se o status for 'cancelled' ou 'failed'.
--- Status considerados ativos (Bloqueiam inserção): pending, reserved, scheduled, confirmed, in_progress, completed, blocked.
+-- 2. Atualizar Status de Pagamento (Adicionar authorized, released)
+DO $$
+BEGIN
+    ALTER TABLE public.appointments DROP CONSTRAINT IF EXISTS appointments_payment_status_check;
+    ALTER TABLE public.appointments ADD CONSTRAINT appointments_payment_status_check
+        CHECK (payment_status IN ('pending', 'paid', 'failed', 'refunded', 'authorized', 'released'));
+EXCEPTION
+    WHEN others THEN NULL;
+END $$;
+
+-- 3. Melhorar Tabela de Transações (Financeiro Robusto)
+-- Adicionar colunas para rastreabilidade total com Stripe
+ALTER TABLE public.transactions
+ADD COLUMN IF NOT EXISTS stripe_payment_intent_id text,
+ADD COLUMN IF NOT EXISTS stripe_transfer_id text,
+ADD COLUMN IF NOT EXISTS stripe_payout_id text,
+ADD COLUMN IF NOT EXISTS description text,
+ADD COLUMN IF NOT EXISTS metadata jsonb;
+
+-- Atualizar constraint de tipos de transação para incluir repasses e ajustes
+DO $$
+BEGIN
+    ALTER TABLE public.transactions DROP CONSTRAINT IF EXISTS transactions_type_check;
+    ALTER TABLE public.transactions ADD CONSTRAINT transactions_type_check
+        CHECK (type IN ('lesson_payment', 'tip', 'refund', 'platform_fee', 'transfer_in', 'payout', 'adjustment'));
+EXCEPTION
+    WHEN others THEN NULL;
+END $$;
+
+-- 4. Criar Tabela de Notificações
+create table if not exists public.notifications (
+  id uuid not null default gen_random_uuid() primary key,
+  created_at timestamptz not null default now(),
+  
+  user_id uuid not null references public.profiles(id),
+  title text not null,
+  message text not null,
+  type text not null check (type in ('booking_request', 'booking_accepted', 'booking_rejected', 'booking_cancelled', 'booking_expired', 'payment_released', 'reminder', 'system')),
+  read boolean not null default false,
+  metadata jsonb -- Para linkar com appointment_id, etc.
+);
+
+-- RLS para Notificações
+alter table public.notifications enable row level security;
+
+create policy "Users can view their own notifications"
+on public.notifications for select
+using (auth.uid() = user_id);
+
+create policy "System can insert notifications"
+on public.notifications for insert
+with check (true); -- Service Role bypasses, but needed for edge functions if using anon key (usually service role is used)
+
+create policy "Users can update their own notifications (mark as read)"
+on public.notifications for update
+using (auth.uid() = user_id);
+
+-- Grants
+grant all on public.notifications to authenticated;
+grant all on public.notifications to service_role;
+
+-- 5. Atualizar Índice de Unicidade (Garantir que pending_approval bloqueie horário)
+-- O índice anterior "WHERE status NOT IN ('cancelled', 'failed')" JÁ COBRE os novos status.
+-- pending_approval, confirmed, reserved -> Todos bloqueiam.
+-- expired, rejected -> Devem liberar.
+
+DROP INDEX IF EXISTS idx_unique_active_slot;
 
 CREATE UNIQUE INDEX idx_unique_active_slot
 ON public.appointments (instructor_id, date, start_time)
-WHERE status NOT IN ('cancelled', 'failed');
-
--- ==============================================================================
--- MIGRATION: PRICING BY CATEGORY (PHASE 1)
--- ==============================================================================
+WHERE status NOT IN ('cancelled', 'failed', 'rejected', 'expired'); 
+-- Adicionamos rejected e expired na lista de EXCLUSÃO, pois esses status liberam a agenda.
 
 create table if not exists public.instructor_categories (
   id uuid not null default gen_random_uuid() primary key,

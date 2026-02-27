@@ -431,12 +431,21 @@ export const InstructorAgenda: React.FC = () => {
     setIsActionLoading(true);
 
     try {
-        const { error } = await supabase
-            .from('appointments')
-            .update({ status: 'scheduled' }) 
-            .eq('id', selectedLesson.id);
+        // Call Edge Function to capture payment
+        const { data, error } = await supabase.functions.invoke('approve-booking', {
+            body: { appointment_id: selectedLesson.id }
+        });
 
         if (error) throw error;
+        
+        // Handle application-level errors from the function
+        if (data?.error) {
+            // Check for specific error codes if available, or message content
+            if (data.code === 'AUTH_EXPIRED' || data.error.includes('expired')) {
+                throw new Error('AUTH_EXPIRED');
+            }
+            throw new Error(data.error);
+        }
 
         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
         if (keyToUpdate) {
@@ -447,10 +456,26 @@ export const InstructorAgenda: React.FC = () => {
         }
         
         closeLessonModal();
-        addToast("Aula confirmada com sucesso!", 'success');
+        addToast("Aula confirmada e pagamento capturado!", 'success');
 
     } catch (err: any) {
-        addToast("Erro ao confirmar: " + err.message, 'error');
+        console.error("Error approving:", err);
+        
+        if (err.message === 'AUTH_EXPIRED') {
+             addToast("Autorização do pagamento expirou. Solicite novo pagamento ao aluno.", 'error');
+             // Remove from view as it is now cancelled
+             const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
+             if (keyToUpdate) {
+                setAppointments(prev => {
+                    const updated = { ...prev };
+                    delete updated[keyToUpdate]; 
+                    return updated;
+                });
+             }
+             closeLessonModal();
+        } else {
+             addToast("Erro ao confirmar: " + err.message, 'error');
+        }
     } finally {
         setIsActionLoading(false);
     }
@@ -458,21 +483,17 @@ export const InstructorAgenda: React.FC = () => {
 
   const handleRejectLesson = async () => {
     if (!selectedLesson) return;
-    if (!confirm("Tem certeza que deseja recusar esta solicitação?")) return;
+    if (!confirm("Tem certeza que deseja recusar esta solicitação? O valor será estornado ao aluno.")) return;
 
     setIsActionLoading(true);
 
     try {
-        const { error } = await supabase
-            .from('appointments')
-            .update({ 
-                status: 'cancelled',
-                cancelled_by: 'instructor',
-                cancelled_reason: 'Recusado pelo instrutor'
-            })
-            .eq('id', selectedLesson.id);
+        const { data, error } = await supabase.functions.invoke('reject-booking', {
+            body: { appointment_id: selectedLesson.id }
+        });
 
         if (error) throw error;
+        if (data?.error) throw new Error(data.error);
 
         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
         if (keyToUpdate) {
@@ -484,9 +505,10 @@ export const InstructorAgenda: React.FC = () => {
         }
         
         closeLessonModal();
-        addToast("Solicitação recusada.", 'info');
+        addToast("Solicitação recusada e valor estornado.", 'info');
 
     } catch (err: any) {
+        console.error("Error rejecting:", err);
         addToast("Erro ao recusar: " + err.message, 'error');
     } finally {
         setIsActionLoading(false);
@@ -665,12 +687,12 @@ export const InstructorAgenda: React.FC = () => {
             case 'pending':
                cardClasses = "bg-yellow-50 border-yellow-200 border-l-4 border-l-yellow-400 shadow-sm cursor-pointer animate-fade-in";
                textClasses = "text-[10px] font-bold text-yellow-700 uppercase tracking-wider mb-0.5";
-               statusLabel = "Solicitação pendente";
+               statusLabel = "Pagamento autorizado";
                statusIcon = <span className="text-2xl animate-pulse">🔔</span>;
                subText = (
                   <div className="flex flex-col">
                      <span className="text-base font-bold text-gray-900 leading-tight">{lesson.studentName}</span>
-                     <span className="text-[10px] text-yellow-800 font-medium mt-1">Toque para aceitar ou recusar</span>
+                     <span className="text-[10px] text-yellow-800 font-medium mt-1">Aguardando sua ação (Toque aqui)</span>
                   </div>
                );
                break;
