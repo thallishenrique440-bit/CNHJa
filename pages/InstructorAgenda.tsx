@@ -195,50 +195,65 @@ export const InstructorAgenda: React.FC = () => {
   // --- REAL DATA STATE ---
   const [appointments, setAppointments] = useState<Record<string, Lesson>>({});
 
-  useEffect(() => {
+  const fetchAppointments = React.useCallback(async () => {
     if (!session?.user) return;
 
-    const fetchAppointments = async () => {
-        setLoading(true);
-        const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+    setLoading(true);
+    const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
 
-        try {
-            const { data, error } = await supabase
-                .from('appointments')
-                .select(`
-                    id,
-                    date,
-                    start_time,
-                    status,
-                    category,
-                    price,
-                    profiles:student_id (
-                        full_name,
-                        avatar_url,
-                        phone,  
-                        experience_level,
-                        cnh_process_type,
-                        email
-                    )
-                `)
-                .eq('instructor_id', session.user.id)
-                .eq('date', dateStr)
-                .neq('status', 'cancelled');
+    try {
+        const { data, error } = await supabase
+            .from('appointments')
+            .select(`
+                id,
+                date,
+                start_time,
+                status,
+                category,
+                price,
+                profiles:student_id (
+                    full_name,
+                    avatar_url,
+                    phone,  
+                    experience_level,
+                    cnh_process_type,
+                    email
+                )
+            `)
+            .eq('instructor_id', session.user.id)
+            .eq('date', dateStr)
+            .neq('status', 'cancelled');
 
-            if (error) throw error;
+        if (error) throw error;
 
-            const newAppointments: Record<string, Lesson> = {};
+        const newAppointments: Record<string, Lesson> = {};
 
-            if (data) {
-                data.forEach((apt: any) => {
-                    const timeKey = apt.start_time.substring(0, 5); 
-                    const key = `${dateStr}-${timeKey}`;
-                    
-                    let uiStatus: LessonStatus = 'confirmed';
-                    if (apt.status === 'pending') uiStatus = 'pending';
-                    else if (apt.status === 'blocked') uiStatus = 'blocked';
-                    else if (apt.status === 'confirmed' || apt.status === 'scheduled') uiStatus = 'confirmed';
+        if (data) {
+            data.forEach((apt: any) => {
+                const timeKey = apt.start_time.substring(0, 5); 
+                const key = `${dateStr}-${timeKey}`;
+                
+                let uiStatus: LessonStatus | null = null;
 
+                // STRICT STATUS MAPPING
+                if (apt.status === 'pending_approval' || apt.status === 'pending') {
+                    uiStatus = 'pending';
+                } else if (apt.status === 'blocked') {
+                    uiStatus = 'blocked';
+                } else if (apt.status === 'confirmed' || apt.status === 'scheduled') {
+                    uiStatus = 'confirmed';
+                } else if (apt.status === 'reserved') {
+                    // Reserved slots are not yet authorized, so we treat them as free/hidden
+                    // to avoid showing them as confirmed or actionable.
+                    uiStatus = null;
+                } else {
+                    // Fallback for unknown statuses (e.g. expired, rejected)
+                    // If we want to show them, we need to map them. 
+                    // For now, treat as free/hidden unless explicitly handled.
+                    uiStatus = null;
+                }
+
+                if (uiStatus) {
                     newAppointments[key] = {
                         id: apt.id,
                         status: uiStatus,
@@ -252,20 +267,48 @@ export const InstructorAgenda: React.FC = () => {
                         dateStr: apt.date,
                         timeStr: timeKey
                     };
-                });
-            }
-            
-            setAppointments(newAppointments);
-
-        } catch (err) {
-            console.error('Error fetching appointments:', err);
-        } finally {
-            setLoading(false);
+                }
+            });
         }
-    };
+        
+        setAppointments(newAppointments);
 
-    fetchAppointments();
+    } catch (err) {
+        console.error('Error fetching appointments:', err);
+    } finally {
+        setLoading(false);
+    }
   }, [selectedDate, session]);
+
+  // Initial Fetch & Realtime Subscription
+  useEffect(() => {
+    fetchAppointments();
+
+    if (!session?.user) return;
+
+    const channel = supabase
+      .channel('instructor-agenda-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'appointments',
+          filter: `instructor_id=eq.${session.user.id}`
+        },
+        (payload) => {
+           // Refresh data when any appointment changes for this instructor
+           // We could optimize to check if the date matches, but simple refetch is safer
+           console.log('Realtime update:', payload);
+           fetchAppointments();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchAppointments, session]);
 
   const weekStart = getStartOfWeek(viewDate);
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
