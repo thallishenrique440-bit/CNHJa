@@ -102,13 +102,16 @@ Deno.serve(async (req: Request) => {
         const studentId = paymentIntent.metadata?.student_id;
         const amountTotal = paymentIntent.amount;
 
+        console.log(`🔍 Processing amount_capturable_updated for PI: ${paymentIntentId}`);
+        console.log(`   Metadata:`, JSON.stringify(paymentIntent.metadata));
+
         if (purchaseId) {
            console.log(`🔒 Amount Capturable Updated (Auth) for Purchase ID: ${purchaseId}`);
            
            // 1. Update Appointments -> pending_approval / authorized
            const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
            
-           const { error: aptError } = await supabaseAdmin
+           const { data: updatedData, error: aptError } = await supabaseAdmin
              .from("appointments")
              .update({
                status: "pending_approval",
@@ -116,11 +119,18 @@ Deno.serve(async (req: Request) => {
                payment_intent_id: paymentIntentId,
                expires_at: expiresAt
              })
-             .eq("purchase_id", purchaseId);
+             .eq("purchase_id", purchaseId)
+             .select(); // Select to verify update
 
            if (aptError) {
              console.error("❌ Error updating appointments:", aptError);
              throw aptError;
+           }
+
+           if (!updatedData || updatedData.length === 0) {
+              console.warn(`⚠️ No appointments found/updated for purchase_id: ${purchaseId}`);
+           } else {
+              console.log(`✅ Updated ${updatedData.length} appointments to pending_approval.`);
            }
 
            // 2. Create Initial Transaction (Authorized) if not exists
@@ -145,6 +155,9 @@ Deno.serve(async (req: Request) => {
                });
 
              if (txError) console.error("❌ Error creating transaction:", txError);
+             else console.log(`✅ Transaction created for PI ${paymentIntentId}`);
+           } else {
+             console.log(`ℹ️ Transaction already exists for PI ${paymentIntentId}`);
            }
 
            // 3. Notify Instructor
@@ -156,7 +169,10 @@ Deno.serve(async (req: Request) => {
                type: "booking_request",
                metadata: { purchase_id: purchaseId }
              });
+             console.log(`🔔 Notification sent to instructor ${instructorId}`);
            }
+        } else {
+            console.error(`❌ Missing purchase_id in metadata for PI ${paymentIntentId}`);
         }
         break;
       }

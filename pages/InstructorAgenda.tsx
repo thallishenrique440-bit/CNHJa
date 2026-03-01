@@ -26,6 +26,7 @@ interface Lesson {
   // Metadata for cancellation message
   dateStr?: string;
   timeStr?: string;
+  isReserved?: boolean; // NEW FIELD
 }
 
 interface LunchConfig {
@@ -234,6 +235,7 @@ export const InstructorAgenda: React.FC = () => {
                 const key = `${dateStr}-${timeKey}`;
                 
                 let uiStatus: LessonStatus | null = null;
+                let isReserved = false;
 
                 // STRICT STATUS MAPPING
                 if (apt.status === 'pending_approval' || apt.status === 'pending') {
@@ -243,9 +245,11 @@ export const InstructorAgenda: React.FC = () => {
                 } else if (apt.status === 'confirmed' || apt.status === 'scheduled') {
                     uiStatus = 'confirmed';
                 } else if (apt.status === 'reserved') {
-                    // Reserved slots are not yet authorized, so we treat them as free/hidden
-                    // to avoid showing them as confirmed or actionable.
-                    uiStatus = null;
+                    // Reserved slots are currently being booked by a student.
+                    // We must show them as occupied to prevent the instructor from trying to block them
+                    // and causing a unique constraint violation.
+                    uiStatus = 'blocked'; 
+                    isReserved = true;
                 } else {
                     // Fallback for unknown statuses (e.g. expired, rejected)
                     // If we want to show them, we need to map them. 
@@ -265,7 +269,8 @@ export const InstructorAgenda: React.FC = () => {
                         processType: apt.profiles?.cnh_process_type,
                         price: apt.price,
                         dateStr: apt.date,
-                        timeStr: timeKey
+                        timeStr: timeKey,
+                        isReserved: isReserved
                     };
                 }
             });
@@ -389,7 +394,13 @@ export const InstructorAgenda: React.FC = () => {
 
     switch (status) {
       case 'free': toggleBlock(slot.start, 'block'); break;
-      case 'blocked': toggleBlock(slot.start, 'unblock', lesson.id); break; 
+      case 'blocked': 
+        if (lesson.isReserved) {
+            addToast("Este horário está reservado por um aluno em processo de pagamento.", "warning");
+            return;
+        }
+        toggleBlock(slot.start, 'unblock', lesson.id); 
+        break; 
       case 'confirmed':
       case 'in_progress':
       case 'finished':
@@ -774,11 +785,19 @@ export const InstructorAgenda: React.FC = () => {
               }
               break;
             case 'blocked':
-              cardClasses = "bg-gray-100 border-gray-200 cursor-pointer";
-              textClasses = "text-sm font-semibold text-gray-500";
-              statusLabel = "Bloqueado";
-              statusIcon = <span className="text-gray-400 text-lg">🔒</span>;
-              subText = <span className="text-[10px] text-gray-400 font-medium">Toque para liberar</span>;
+              if (lesson.isReserved) {
+                  cardClasses = "bg-yellow-50 border-yellow-200 cursor-not-allowed opacity-80";
+                  textClasses = "text-[10px] font-bold text-yellow-700 uppercase tracking-wider mb-0.5";
+                  statusLabel = "Reservando...";
+                  statusIcon = <span className="text-yellow-600 text-lg animate-pulse">⏳</span>;
+                  subText = <span className="text-[10px] text-yellow-600 font-medium">Aluno em checkout</span>;
+              } else {
+                  cardClasses = "bg-gray-100 border-gray-200 cursor-pointer";
+                  textClasses = "text-sm font-semibold text-gray-500";
+                  statusLabel = "Bloqueado";
+                  statusIcon = <span className="text-gray-400 text-lg">🔒</span>;
+                  subText = <span className="text-[10px] text-gray-400 font-medium">Toque para liberar</span>;
+              }
               break;
             case 'confirmed':
               cardClasses = "bg-blue-50 border-blue-200 border-l-4 border-l-blue-500 cursor-pointer active:scale-[0.99] transition-transform";
