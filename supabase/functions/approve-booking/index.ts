@@ -62,7 +62,7 @@ serve(async (req) => {
     }
 
     // Idempotency: If already approved, return success
-    if (appointment.status === 'scheduled' && appointment.payment_status === 'captured') {
+    if (appointment.status === 'confirmed' && appointment.payment_status === 'captured') {
       return new Response(
         JSON.stringify({ message: 'Appointment already approved', appointment }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -125,7 +125,7 @@ serve(async (req) => {
     const { data: updatedAppointment, error: updateError } = await adminClient
       .from('appointments')
       .update({
-        status: 'scheduled',
+        status: 'confirmed',
         payment_status: 'captured',
         updated_at: new Date().toISOString()
       })
@@ -142,7 +142,7 @@ serve(async (req) => {
         .eq('id', appointment.id)
         .single()
       
-      if (check?.status === 'scheduled' && check?.payment_status === 'captured') {
+      if (check?.status === 'confirmed' && check?.payment_status === 'captured') {
         return new Response(
           JSON.stringify({ message: 'Booking approved successfully (synced)', appointment: check }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

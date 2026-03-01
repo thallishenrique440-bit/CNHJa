@@ -172,7 +172,35 @@ Deno.serve(async (req: Request) => {
              console.log(`🔔 Notification sent to instructor ${instructorId}`);
            }
         } else {
-            console.error(`❌ Missing purchase_id in metadata for PI ${paymentIntentId}`);
+            console.warn(`⚠️ Missing purchase_id in metadata. Trying to find by payment_intent_id: ${paymentIntentId}`);
+            
+            const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+            
+            // Fallback: Update by PaymentIntent ID
+            const { data: updatedData, error: aptError } = await supabaseAdmin
+                .from("appointments")
+                .update({
+                    status: "pending_approval",
+                    payment_status: "authorized",
+                    expires_at: expiresAt
+                })
+                .eq("payment_intent_id", paymentIntentId)
+                .select();
+
+            if (aptError) {
+                console.error("❌ Error updating appointments by PI ID:", aptError);
+                throw aptError;
+            }
+
+            if (!updatedData || updatedData.length === 0) {
+                 console.error(`❌ CRITICAL: Could not find appointment for PI ${paymentIntentId}`);
+            } else {
+                 console.log(`✅ Recovered & Updated ${updatedData.length} appointments using PI ID.`);
+                 
+                 // Try to recover metadata from the updated row for subsequent logic
+                 // We can't easily create the transaction without student/instructor ID if metadata is missing
+                 // But at least the booking is not stuck in reserved.
+            }
         }
         break;
       }
@@ -188,14 +216,17 @@ Deno.serve(async (req: Request) => {
         if (purchaseId) {
           console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
 
-          // 1. Update Appointments -> confirmed / paid
+          // 1. Update Appointments -> confirmed / captured
+          // Prevent overwriting 'completed' status (late webhook) or redundant updates
           await supabaseAdmin
             .from("appointments")
             .update({
               status: "confirmed",
-              payment_status: "paid"
+              payment_status: "captured"
             })
-            .eq("purchase_id", purchaseId);
+            .eq("purchase_id", purchaseId)
+            .neq("status", "completed")
+            .neq("status", "confirmed");
 
           // 2. Update Transaction -> completed
           await supabaseAdmin
@@ -309,7 +340,13 @@ Deno.serve(async (req: Request) => {
       }
 
       default:
-        console.log(`ℹ️ Unhandled event type: ${event.type}`);
+        if (event.type.startsWith('payment_intent.')) {
+            console.log(`ℹ️ Unhandled PaymentIntent event: ${event.type} [ID: ${event.id}]`);
+            const pi = event.data.object;
+            console.log(`   Status: ${pi.status}, Capture Method: ${pi.capture_method}`);
+        } else {
+            console.log(`ℹ️ Unhandled event type: ${event.type}`);
+        }
     }
 
     return new Response(JSON.stringify({ received: true }), {

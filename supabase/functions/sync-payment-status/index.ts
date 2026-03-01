@@ -16,12 +16,12 @@ serve(async (req) => {
   try {
     console.log("🔄 Starting sync-payment-status job...")
 
-    // 1. Find 'reserved' appointments that have a PaymentIntent ID
-    // These are the ones that might be stuck if the webhook failed.
+    // 1. Find 'reserved' or 'pending_approval' appointments that have a PaymentIntent ID
+    // These are the ones that might be stuck if the webhook failed or if status is desynced.
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, purchase_id, status')
-      .eq('status', 'reserved')
+      .in('status', ['reserved', 'pending_approval'])
       .not('payment_intent_id', 'is', null)
 
     if (fetchError) {
@@ -37,7 +37,7 @@ serve(async (req) => {
     }
 
     const results = await Promise.allSettled(stuckAppointments.map(async (apt) => {
-        const { id, payment_intent_id, purchase_id } = apt;
+        const { id, payment_intent_id, purchase_id, status } = apt;
 
         // Check Stripe Status
         const pi = await stripe.paymentIntents.retrieve(payment_intent_id);
@@ -46,8 +46,13 @@ serve(async (req) => {
         let action = 'none';
 
         if (pi.status === 'requires_capture') {
-            // SUCCESS: Auth happened, but webhook missed it.
-            console.log(`✅ Repairing ${id}: Stripe is authorized.`)
+            if (status === 'pending_approval') {
+                // Already correct. Skip.
+                return { id, status: 'skipped_valid_state', stripe_status: pi.status };
+            }
+
+            // SUCCESS: Auth happened, but webhook missed it (status is reserved).
+            console.log(`✅ Repairing ${id}: Stripe is authorized (was reserved).`)
             updates = {
                 status: 'pending_approval',
                 payment_status: 'authorized',
@@ -75,15 +80,25 @@ serve(async (req) => {
                  });
             }
 
-            // Notify Instructor
+            // Notify Instructor (Idempotent Check)
             if (pi.metadata.instructor_id) {
-                await supabaseAdmin.from("notifications").insert({
-                    user_id: pi.metadata.instructor_id,
-                    title: "Nova Solicitação de Aula (Sincronizada)",
-                    message: "Uma solicitação pendente foi sincronizada. Aceite em até 20 minutos.",
-                    type: "booking_request",
-                    metadata: { purchase_id: purchase_id }
-                });
+                const { data: existingNotif } = await supabaseAdmin
+                    .from("notifications")
+                    .select("id")
+                    .eq("user_id", pi.metadata.instructor_id)
+                    .eq("type", "booking_request")
+                    .contains("metadata", { purchase_id: purchase_id })
+                    .maybeSingle();
+
+                if (!existingNotif) {
+                    await supabaseAdmin.from("notifications").insert({
+                        user_id: pi.metadata.instructor_id,
+                        title: "Nova Solicitação de Aula (Sincronizada)",
+                        message: "Uma solicitação pendente foi sincronizada. Aceite em até 20 minutos.",
+                        type: "booking_request",
+                        metadata: { purchase_id: purchase_id }
+                    });
+                }
             }
 
         } else if (pi.status === 'succeeded') {
@@ -91,7 +106,7 @@ serve(async (req) => {
             console.log(`✅ Repairing ${id}: Stripe is succeeded.`)
             updates = {
                 status: 'confirmed', // or scheduled
-                payment_status: 'paid'
+                payment_status: 'captured'
             };
             action = 'repaired_succeeded';
         } else if (pi.status === 'canceled') {
