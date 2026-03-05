@@ -88,6 +88,14 @@ export default async function handler(req: any, res: any) {
       .select();
 
     if (dbError) {
+      // Check for unique constraint violation (Postgres code 23505)
+      if (dbError.code === '23505') {
+        return res.status(409).json({ 
+          error: 'Este horário acabou de ser reservado por outro aluno.',
+          code: 'SLOT_TAKEN'
+        });
+      }
+
       console.error('Error creating appointments:', dbError);
       return res.status(500).json({ error: 'Failed to create appointments' });
     }
