@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
 import Stripe from 'stripe';
-import { calculateDiscount, getInstructorDiscounts } from '../lib/discount-utils';
+import { calculateDiscount, getInstructorDiscounts } from '../lib/discount-utils.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -9,7 +9,7 @@ const supabase = createClient(
 );
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2023-10-16', // Use a stable version or the one from package.json if specified
+  apiVersion: '2026-02-25.clover' as any, // Use a stable version or the one from package.json if specified
 });
 
 export default async function handler(req: any, res: any) {

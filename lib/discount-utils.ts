@@ -1,4 +1,4 @@
-import { supabase as defaultSupabase } from './supabase';
+import { supabase as defaultSupabase } from './supabase.js';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export interface DiscountRule {
