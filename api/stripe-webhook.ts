@@ -72,8 +72,24 @@ export default async function handler(req: any, res: any) {
       case 'payment_intent.succeeded': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id;
 
-        if (purchaseId) {
+        if (groupId) {
+          console.log(`✅ Payment Captured for Group ID: ${groupId}`);
+
+          const { error } = await supabaseAdmin
+            .from('appointments')
+            .update({
+              status: 'confirmed',
+              payment_status: 'captured',
+            })
+            .eq('group_id', groupId)
+            .neq('status', 'completed')
+            .neq('status', 'confirmed');
+
+          if (error) throw error;
+
+        } else if (purchaseId) {
           console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
 
           // Atualizar status para confirmed / captured

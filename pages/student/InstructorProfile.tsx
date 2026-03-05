@@ -8,15 +8,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 
 // Define Interface for the State matches DB structure
-interface Package {
+interface DiscountRule {
   id: string;
-  title: string;
-  lesson_count: number;
-  price: number; // in cents
-  description: string | null;
-  includes_night: boolean;
-  includes_exam: boolean;
-  is_highlight: boolean;
+  min_lessons: number;
+  discount_percentage: number;
 }
 
 interface CategoryPrice {
@@ -41,7 +36,7 @@ interface InstructorProfileData {
   priceNight: number; // Legacy Fallback
   hasNightLessons: boolean;
   category: 'A' | 'B' | 'AB';
-  packages: Package[]; 
+  discounts: DiscountRule[]; 
   reviews: any[];
   categoryPrices: CategoryPrice[]; // New Pricing Structure
 }
@@ -114,9 +109,6 @@ export const StudentInstructorProfile: React.FC = () => {
   // Selected Slots now stores composite keys: "YYYY-MM-DD|HH:MM"
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
   
-  // Package State
-  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
-
   // FETCH INSTRUCTOR DATA
   useEffect(() => {
     const fetchInstructor = async () => {
@@ -153,14 +145,14 @@ export const StudentInstructorProfile: React.FC = () => {
 
         if (error) throw error;
 
-        // 2. Fetch Real Packages
-        const { data: packagesData, error: packagesError } = await supabase
-          .from('instructor_packages')
+        // 2. Fetch Discounts
+        const { data: discountsData, error: discountsError } = await supabase
+          .from('instructor_discounts')
           .select('*')
           .eq('instructor_id', id)
-          .order('price', { ascending: true }); // Show cheaper first
+          .order('min_lessons', { ascending: true });
 
-        if (packagesError) console.error("Error fetching packages:", packagesError);
+        if (discountsError) console.error("Error fetching discounts:", discountsError);
 
         // 3. Fetch Reviews
         const { data: reviewsData, error: reviewsError } = await supabase
@@ -242,7 +234,7 @@ export const StudentInstructorProfile: React.FC = () => {
             priceNight: data.night_price || basePrice,
             hasNightLessons: !!data.has_night_lessons,
             category: cat,
-            packages: packagesData || [], // Using REAL packages from DB
+            discounts: discountsData || [], // Using REAL discounts from DB
             reviews: formattedReviews,
             categoryPrices: catPrices
           });
@@ -325,25 +317,8 @@ export const StudentInstructorProfile: React.FC = () => {
     return { day: instructor.priceDay, night: instructor.priceNight };
   }, [instructor, selectedLessonCategory]);
 
-  const activePackage = useMemo(() => {
-    if (!instructor) return null;
-    return instructor.packages.find(p => p.id === selectedPackageId) || null;
-  }, [selectedPackageId, instructor]);
-
-  const sortedPackages = useMemo(() => {
-    if (!instructor) return [];
-    return [...instructor.packages].sort((a, b) => {
-      // Prioritize highlights
-      if (a.is_highlight === b.is_highlight) return 0;
-      return a.is_highlight ? -1 : 1;
-    });
-  }, [instructor]);
-
   const handleDayClick = (date: Date) => {
     setSelectedDate(date);
-    if (!activePackage) {
-      setSelectedSlots([]); 
-    }
   };
 
   const timeSlots = useMemo(() => {
@@ -376,12 +351,15 @@ export const StudentInstructorProfile: React.FC = () => {
 
     const newSlots = [...selectedSlots, slotKey];
 
-    if (activePackage && newSlots.length > activePackage.lesson_count) {
+    // Global Limit Check (20 lessons max)
+    if (newSlots.length > 20) {
+      addToast("Você pode selecionar no máximo 20 aulas por vez.", 'warning');
       return; 
     }
 
     const dailySlots = newSlots.filter(s => s.startsWith(dateKey));
     if (dailySlots.length > 3) {
+      addToast("Máximo de 3 aulas por dia.", 'warning');
       return; 
     }
 
@@ -403,6 +381,7 @@ export const StudentInstructorProfile: React.FC = () => {
     }
 
     if (hasTriplet) {
+      addToast("Não é permitido agendar 3 aulas consecutivas sem intervalo.", 'warning');
       return; 
     }
 
@@ -420,23 +399,20 @@ export const StudentInstructorProfile: React.FC = () => {
     const dateKey = getDateKey(selectedDate);
     const dailySlots = selectedSlots.filter(s => s.startsWith(dateKey));
     
-    const isGlobalLimitReached = activePackage ? selectedSlots.length >= activePackage.lesson_count : selectedSlots.length >= 3;
+    const isGlobalLimitReached = selectedSlots.length >= 20;
     const isDailyLimitReached = dailySlots.length >= 3;
 
     return { isGlobalLimitReached, isDailyLimitReached };
-  }, [selectedSlots, activePackage, selectedDate]);
+  }, [selectedSlots, selectedDate]);
 
   const totalPrice = useMemo(() => {
     if (!instructor) return 0;
-    if (activePackage) {
-      return activePackage.price;
-    }
 
-    return selectedSlots.reduce((acc, slotKey) => {
+    // 1. Calculate Base Price
+    const basePrice = selectedSlots.reduce((acc, slotKey) => {
       const time = slotKey.split('|')[1];
       const isNight = parseInt(time.split(':')[0]) >= 18;
       
-      // Determine price for this slot
       let price = 0;
       
       if (selectedLessonCategory) {
@@ -444,26 +420,38 @@ export const StudentInstructorProfile: React.FC = () => {
         if (catPrice) {
           price = (isNight && instructor.hasNightLessons) ? catPrice.night_price : catPrice.day_price;
         } else {
-          // Fallback if category price not found (shouldn't happen if data integrity is good)
           price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
         }
       } else {
-         // Fallback if no category selected (though UI prevents slot selection)
          price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
       }
 
       return acc + price;
     }, 0);
-  }, [selectedSlots, activePackage, instructor, selectedLessonCategory]);
 
-  const handlePackageSelect = (pkgId: string) => {
-    if (selectedPackageId === pkgId) {
-      setSelectedPackageId(null);
-    } else {
-      setSelectedPackageId(pkgId);
+    // 2. Apply Progressive Discount
+    const lessonCount = selectedSlots.length;
+    let discountPercentage = 0;
+
+    if (instructor.discounts && instructor.discounts.length > 0) {
+        // Find the best applicable discount
+        // Sort by min_lessons desc to find the highest threshold met
+        const sortedDiscounts = [...instructor.discounts].sort((a, b) => b.min_lessons - a.min_lessons);
+        
+        const applicableRule = sortedDiscounts.find(d => lessonCount >= d.min_lessons);
+        if (applicableRule) {
+            discountPercentage = applicableRule.discount_percentage;
+        }
     }
-    setSelectedSlots([]);
-  };
+
+    if (discountPercentage > 0) {
+        const discountAmount = Math.round(basePrice * (discountPercentage / 100));
+        return basePrice - discountAmount;
+    }
+
+    return basePrice;
+  }, [selectedSlots, instructor, selectedLessonCategory]);
+
 
   const handleBook = async () => {
     // 1. Validação básica de estado local
@@ -483,55 +471,82 @@ export const StudentInstructorProfile: React.FC = () => {
 
     try {
       // 2. Validação de Sessão Forte e Obtenção de Token
-      // Obtemos a sessão diretamente do cliente para garantir que temos um token novo/válido
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
 
       if (sessionError || !sessionData.session) {
-         // Se não houver sessão válida, força logout e redireciona
          addToast("Sua sessão expirou. Faça login novamente.", 'error');
          navigate('/login');
          return; 
       }
 
       const token = sessionData.session.access_token;
+      const studentId = sessionData.session.user.id;
 
       // 3. Montar Payload
-      const payload = {
-        instructor_id: instructor.id,
-        category: selectedLessonCategory,
-        slots: selectedSlots.map(slotKey => {
-           const [dateStr, timeStr] = slotKey.split('|');
-           return {
-             date: dateStr,
-             time: timeStr
-           };
-        })
-      };
+      // Calculate price per slot for the payload (backend will recalculate but needs base info)
+      // Actually backend needs lessons array with date, startTime, endTime, price
+      
+      const lessons = selectedSlots.map(slotKey => {
+         const [dateStr, timeStr] = slotKey.split('|');
+         const isNight = parseInt(timeStr.split(':')[0]) >= 18;
+         
+         let price = 0;
+         if (selectedLessonCategory) {
+            const catPrice = instructor.categoryPrices.find(c => c.category === selectedLessonCategory);
+            if (catPrice) {
+              price = (isNight && instructor.hasNightLessons) ? catPrice.night_price : catPrice.day_price;
+            } else {
+              price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
+            }
+         } else {
+             price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
+         }
 
-      // 4. Invocar Edge Function com Token Explícito
-      // A injeção manual do header Authorization garante que o token correto seja enviado,
-      // contornando possíveis falhas de sincronização do cliente global.
-      const { data, error } = await supabase.functions.invoke('create-booking', {
-        body: payload,
-        headers: {
-            Authorization: `Bearer ${token}`
-        }
+         // Calculate end time (50 mins later)
+         const [h, m] = timeStr.split(':').map(Number);
+         const endDate = new Date();
+         endDate.setHours(h, m + 50, 0, 0);
+         const endTimeStr = `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`;
+
+         return {
+           date: dateStr,
+           startTime: timeStr,
+           endTime: endTimeStr,
+           price: price
+         };
       });
 
-      if (error) {
-        throw error; 
+      const payload = {
+        instructorId: instructor.id,
+        studentId: studentId,
+        category: selectedLessonCategory,
+        lessons: lessons
+      };
+
+      // 4. Call API Route
+      const response = await fetch('/api/create-booking-intent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Falha ao criar reserva');
       }
 
       // 5. Sucesso
-      if (data && data.clientSecret && data.purchaseId) {
+      if (data && data.clientSecret && data.groupId) {
          navigate('/student/payment', { 
             state: { 
                clientSecret: data.clientSecret, 
-               purchaseId: data.purchaseId 
+               purchaseId: data.groupId // Using groupId as purchaseId for compatibility
             } 
          });
-      } else if (data && data.error) {
-         throw new Error(data.error);
       } else {
          throw new Error("Resposta inválida do servidor de pagamento.");
       }
@@ -743,10 +758,7 @@ export const StudentInstructorProfile: React.FC = () => {
            <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-1">Horários disponíveis</h2>
            <div className="mb-4">
              <p className="text-xs text-gray-500">
-               {activePackage 
-                 ? `Selecionando para: ${activePackage.title}. Selecione até ${activePackage.lesson_count} aulas. (Máx 3 por dia)`
-                 : "Selecione horários individuais ou escolha um pacote abaixo."
-               }
+               Selecione os horários desejados. Descontos progressivos são aplicados automaticamente.
              </p>
              <p className="text-xs text-gray-400 mt-1">
                Em caso de dúvidas, você pode falar diretamente com o instrutor pelo WhatsApp.
@@ -788,40 +800,28 @@ export const StudentInstructorProfile: React.FC = () => {
                 const slotKey = `${dateKey}|${time}`;
                 const isSelected = selectedSlots.includes(slotKey);
                 
-                const isNight = parseInt(time.split(':')[0]) >= 18;
-                const [hours, minutes] = time.split(':').map(Number);
-                const slotDateTime = new Date(selectedDate);
-                slotDateTime.setHours(hours, minutes, 0, 0);
-
-                const now = new Date();
-                const isPast = slotDateTime.getTime() <= now.getTime();
-                
-                const isDisabled = !isAvailable || 
-                                   isPast || 
-                                   (!isSelected && (limits.isGlobalLimitReached || limits.isDailyLimitReached));
+                // Determine if it's night
+                const hour = parseInt(time.split(':')[0]);
+                const isNight = hour >= 18;
 
                 return (
                   <button
                     key={time}
-                    disabled={isDisabled}
                     onClick={() => toggleSlot(time)}
+                    disabled={!isAvailable}
                     className={`
-                      relative py-2.5 rounded-lg text-xs font-bold transition-all duration-200 border
-                      ${!isAvailable 
-                        ? 'bg-gray-50 text-gray-300 border-transparent cursor-not-allowed opacity-60' // Dimmed for busy
-                        : isPast 
-                            ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
-                        : isSelected 
-                              ? 'bg-gray-900 text-white border-gray-900 shadow-md ring-2 ring-offset-1 ring-gray-900' 
-                              : isDisabled 
-                                ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed' 
-                                : 'bg-gray-50 text-gray-900 border-gray-100 hover:border-gray-300 active:scale-95'
+                      py-2 rounded-lg text-sm font-medium transition-all duration-200 relative
+                      ${isSelected 
+                        ? 'bg-blue-600 text-white shadow-md transform scale-105 z-10' 
+                        : isAvailable 
+                          ? 'bg-white text-gray-700 border border-gray-200 hover:border-blue-300 hover:bg-blue-50' 
+                          : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-transparent'
                       }
                     `}
                   >
                     {time}
-                    {isNight && isAvailable && !isSelected && !isDisabled && !isPast && (
-                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-indigo-500 rounded-full"></span>
+                    {isNight && isAvailable && !isSelected && (
+                       <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-indigo-400 rounded-full"></span>
                     )}
                   </button>
                 );
@@ -840,68 +840,37 @@ export const StudentInstructorProfile: React.FC = () => {
         <div className="h-2 bg-gray-50"></div>
 
         <div className="px-6 py-6 space-y-4 pb-12">
-          <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Pacotes disponíveis</h2>
+          <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Promoções deste instrutor</h2>
           
-          {sortedPackages.length === 0 ? (
+          {instructor.discounts.length === 0 ? (
              <div className="text-center py-6 bg-gray-50 rounded-xl border border-gray-100 border-dashed">
-                <p className="text-gray-400 text-sm">Este instrutor ainda não cadastrou pacotes.</p>
+                <p className="text-gray-400 text-sm">Nenhuma promoção ativa no momento.</p>
              </div>
           ) : (
-            sortedPackages.map((pkg) => {
-              const isPkgSelected = selectedPackageId === pkg.id;
-              
-              return (
-                <div 
-                  key={pkg.id} 
-                  onClick={() => handlePackageSelect(pkg.id)}
-                  className={`border rounded-2xl p-4 relative overflow-hidden shadow-sm transition-all duration-200 cursor-pointer
-                    ${isPkgSelected ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600' : 'border-gray-200 bg-white hover:border-blue-300'}
-                  `}
-                >
-                  {pkg.is_highlight && (
-                    <div className="absolute top-0 right-0 bg-yellow-100 text-yellow-800 text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wide">
-                      ⭐ Melhor pacote
-                    </div>
-                  )}
-                  
-                  {isPkgSelected && (
-                     <div className="absolute top-3 right-3 text-blue-600">
-                        <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        </svg>
-                     </div>
-                  )}
-
-                  <div className="pr-10">
-                    <h3 className={`font-bold text-lg ${isPkgSelected ? 'text-blue-900' : 'text-gray-900'}`}>{pkg.title}</h3>
-                    {pkg.description && (
-                      <p className={`text-xs mt-1 mb-2 line-clamp-2 leading-relaxed ${isPkgSelected ? 'text-blue-800/70' : 'text-gray-500'}`}>
-                        {pkg.description}
-                      </p>
-                    )}
-                    <p className={`text-sm mb-3 ${isPkgSelected ? 'text-blue-700' : 'text-gray-500'}`}>{pkg.lesson_count} {pkg.lesson_count === 1 ? 'aula' : 'aulas'}</p>
-                  </div>
-                  
-                  <div className="flex justify-between items-end">
-                    <div className="space-y-1">
-                      {pkg.includes_night && (
-                        <div className="flex items-center text-xs text-green-700">
-                          <span className="mr-1">✓</span> Inclui aulas noturnas
-                        </div>
-                      )}
-                      {pkg.includes_exam && (
-                        <div className="flex items-center text-xs text-green-700">
-                          <span className="mr-1">✓</span> Inclui dia do exame
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <span className="block text-xl font-bold text-blue-600">{formatCurrency(pkg.price)}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
+             <div className="space-y-3">
+                {instructor.discounts.map((rule) => (
+                   <div key={rule.id} className="bg-green-50 border border-green-100 rounded-xl p-4 flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                         <div className="bg-green-100 p-2 rounded-lg text-green-700">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                            </svg>
+                         </div>
+                         <div>
+                            <p className="text-green-900 font-bold text-sm">
+                               {rule.discount_percentage}% de Desconto
+                            </p>
+                            <p className="text-green-700 text-xs">
+                               Na compra de {rule.min_lessons} ou mais aulas
+                            </p>
+                         </div>
+                      </div>
+                      <div className="text-green-600 font-bold text-xs bg-white px-2 py-1 rounded-md border border-green-100 shadow-sm">
+                         Automático
+                      </div>
+                   </div>
+                ))}
+             </div>
           )}
         </div>
 
@@ -911,11 +880,11 @@ export const StudentInstructorProfile: React.FC = () => {
         <Button 
           fullWidth 
           onClick={handleBook} 
-          disabled={(!activePackage && selectedSlots.length === 0) || (activePackage && selectedSlots.length === 0) || !selectedLessonCategory || isProcessingPayment || isSuccess}
+          disabled={selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || isSuccess}
           className={`shadow-lg transition-all duration-300 ${
             isSuccess 
               ? 'bg-green-600 hover:bg-green-700 border-transparent text-white shadow-green-200' 
-              : ((!activePackage && selectedSlots.length === 0) || (activePackage && selectedSlots.length === 0) || !selectedLessonCategory || isProcessingPayment) 
+              : (selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment) 
                 ? 'bg-gray-300 cursor-not-allowed shadow-none' 
                 : 'shadow-blue-200 bg-blue-600'
           }`}
@@ -929,11 +898,9 @@ export const StudentInstructorProfile: React.FC = () => {
              </span>
           ) : isProcessingPayment 
             ? 'Processando pagamento...' 
-            : activePackage 
-              ? `(${selectedSlots.length}) Ir para Pagamento — ${formatCurrency(totalPrice)}`
-              : selectedSlots.length > 0 
+            : selectedSlots.length > 0 
                   ? `Pagar ${selectedSlots.length} ${selectedSlots.length === 1 ? 'aula' : 'aulas'} — ${formatCurrency(totalPrice)}`
-                  : 'Selecione um horário ou pacote'
+                  : 'Selecione um horário'
           }
         </Button>
       </div>

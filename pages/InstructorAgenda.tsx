@@ -7,8 +7,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 // --- Types ---
-type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled';
-type DisplayStatus = LessonStatus | 'in_progress' | 'finished' | 'past_free' | 'expired';
+type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled' | 'completed';
+type DisplayStatus = LessonStatus | 'in_progress' | 'finished' | 'past_free' | 'expired' | 'past_pending' | 'cancelled_view';
 
 interface Lesson {
   id: string;
@@ -222,8 +222,7 @@ export const InstructorAgenda: React.FC = () => {
                 )
             `)
             .eq('instructor_id', session.user.id)
-            .eq('date', dateStr)
-            .neq('status', 'cancelled');
+            .eq('date', dateStr);
 
         if (error) throw error;
 
@@ -244,6 +243,10 @@ export const InstructorAgenda: React.FC = () => {
                     uiStatus = 'blocked';
                 } else if (apt.status === 'confirmed' || apt.status === 'scheduled') {
                     uiStatus = 'confirmed';
+                } else if (apt.status === 'completed') {
+                    uiStatus = 'completed';
+                } else if (apt.status === 'cancelled') {
+                    uiStatus = 'cancelled';
                 } else if (apt.status === 'reserved') {
                     // Reserved slots are currently being booked by a student.
                     // We must show them as occupied to prevent the instructor from trying to block them
@@ -330,6 +333,8 @@ export const InstructorAgenda: React.FC = () => {
 
   const getDerivedStatus = (lesson: Lesson, timeState: 'current' | 'future' | 'past'): DisplayStatus => {
     if (lesson.status === 'lunch') return 'lunch';
+    if (lesson.status === 'completed') return 'finished';
+    if (lesson.status === 'cancelled') return 'cancelled_view';
 
     if (timeState === 'current') {
         if (lesson.status === 'confirmed') return 'in_progress';
@@ -339,7 +344,7 @@ export const InstructorAgenda: React.FC = () => {
     }
 
     if (timeState === 'past') {
-        if (lesson.status === 'confirmed') return 'finished';
+        if (lesson.status === 'confirmed') return 'past_pending';
         if (lesson.status === 'pending') return 'expired';
         return 'past_free'; 
     }
@@ -405,6 +410,8 @@ export const InstructorAgenda: React.FC = () => {
       case 'in_progress':
       case 'finished':
       case 'pending':
+      case 'past_pending':
+      case 'cancelled_view':
         openLessonModal(lesson);
         break;
     }
@@ -586,12 +593,15 @@ export const InstructorAgenda: React.FC = () => {
 
         if (error) throw error;
 
-        // Remove from local state immediately
+        // Update local state immediately to 'cancelled'
         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
         if (keyToUpdate) {
             setAppointments(prev => {
                 const updated = { ...prev };
-                delete updated[keyToUpdate];
+                updated[keyToUpdate] = {
+                    ...updated[keyToUpdate],
+                    status: 'cancelled'
+                };
                 return updated;
             });
         }
@@ -842,6 +852,20 @@ export const InstructorAgenda: React.FC = () => {
                     <span className="text-[10px] text-gray-400 font-medium mt-1">Horário expirou sem confirmação</span>
                  </div>
               );
+              break;
+            case 'past_pending':
+              cardClasses = "bg-yellow-50/50 border-yellow-100 cursor-pointer hover:bg-yellow-50";
+              textClasses = "text-sm font-semibold text-yellow-700";
+              statusLabel = lesson.studentName || "Aula realizada";
+              statusIcon = <span className="text-xl grayscale opacity-70">⚠️</span>;
+              subText = <span className="text-[10px] text-yellow-600 font-medium uppercase tracking-wide">Pendente de finalização</span>;
+              break;
+            case 'cancelled_view':
+              cardClasses = "bg-gray-50 border-gray-100 opacity-60 cursor-pointer grayscale";
+              textClasses = "text-sm font-semibold text-gray-400 line-through decoration-gray-400";
+              statusLabel = lesson.studentName || "Aula cancelada";
+              statusIcon = <span className="text-xl opacity-50">❌</span>;
+              subText = <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide no-underline">Cancelada pelo instrutor</span>;
               break;
             case 'lunch':
               cardClasses = "bg-gray-100 border-transparent opacity-100 cursor-default pointer-events-none";

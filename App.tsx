@@ -10,7 +10,7 @@ import { ForgotPassword } from './pages/ForgotPassword';
 import { UpdatePassword } from './pages/UpdatePassword';
 import { InstructorProfile } from './pages/InstructorProfile';
 import { InstructorAgenda } from './pages/InstructorAgenda';
-import { InstructorPackages } from './pages/InstructorPackages';
+import { InstructorDiscounts } from './pages/InstructorDiscounts';
 import { InstructorFinance } from './pages/InstructorFinance';
 import { StudentHome } from './pages/StudentHome';
 import { StudentLessons } from './pages/student/Lessons';
@@ -117,7 +117,7 @@ const AppRoutes: React.FC = () => {
            <Route element={<ProfileGuard />}>
               <Route path="/instructor/profile" element={<InstructorProfile />} />
               <Route path="/instructor/agenda" element={<InstructorAgenda />} />
-              <Route path="/instructor/packages" element={<InstructorPackages />} />
+              <Route path="/instructor/discounts" element={<InstructorDiscounts />} />
               <Route path="/instructor/finance" element={<InstructorFinance />} />
            </Route>
         </Route>

@@ -308,3 +308,40 @@ with check (auth.uid() = instructor_id);
 -- Grant permissions
 grant all on public.instructor_categories to authenticated;
 grant all on public.instructor_categories to service_role;
+
+-- ==============================================================================
+-- MIGRATION: INSTRUCTOR DISCOUNTS (PROGRESSIVE PRICING)
+-- ==============================================================================
+
+create table if not exists public.instructor_discounts (
+  id uuid not null default gen_random_uuid() primary key,
+  created_at timestamptz not null default now(),
+
+  instructor_id uuid not null references public.instructors(id) on delete cascade,
+  min_lessons integer not null check (min_lessons > 0),
+  discount_percentage integer not null check (discount_percentage > 0 and discount_percentage <= 100),
+
+  -- Constraint: Prevent duplicate rules for same instructor and lesson count
+  unique(instructor_id, min_lessons)
+);
+
+-- Enable RLS
+alter table public.instructor_discounts enable row level security;
+
+-- Policies
+create policy "Public can view instructor discounts"
+on public.instructor_discounts for select
+using (true);
+
+create policy "Instructors can manage their own discounts"
+on public.instructor_discounts for all
+using (auth.uid() = instructor_id)
+with check (auth.uid() = instructor_id);
+
+-- Index for fast lookup
+create index if not exists idx_instructor_discounts_instructor_id
+on public.instructor_discounts(instructor_id);
+
+-- Grant permissions
+grant all on public.instructor_discounts to authenticated;
+grant all on public.instructor_discounts to service_role;
