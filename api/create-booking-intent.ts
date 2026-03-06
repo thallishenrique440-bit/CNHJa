@@ -97,7 +97,12 @@ export default async function handler(req: any, res: any) {
       }
 
       console.error('Error creating appointments:', dbError);
-      return res.status(500).json({ error: 'Failed to create appointments' });
+      return res.status(500).json({ 
+        error: dbError.message,
+        code: dbError.code,
+        details: dbError.details,
+        hint: dbError.hint
+      });
     }
 
     // 5. Create Stripe PaymentIntent
