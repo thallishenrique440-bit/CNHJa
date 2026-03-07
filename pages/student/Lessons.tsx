@@ -264,15 +264,7 @@ export const StudentLessons: React.FC = () => {
     const mainReferenceId = lessonIds[lessonIds.length - 1]; 
 
     try {
-       // 1. Update Appointment Status to 'completed'
-       const { error: updateError } = await supabase
-         .from('appointments')
-         .update({ status: 'completed' })
-         .in('id', lessonIds);
-       
-       if (updateError) throw updateError;
-
-       // 2. Create Review
+       // 1. Create Review
        const { error: reviewError } = await supabase
          .from('reviews')
          .insert({
@@ -285,27 +277,7 @@ export const StudentLessons: React.FC = () => {
        
        if (reviewError) throw reviewError;
 
-       // 3. Create Transactions
-       
-       // 3.1 Lesson Payments
-       const lessonPaymentPayloads = lessons
-          .filter(l => lessonIds.includes(l.id))
-          .map(l => ({
-              appointment_id: l.id,
-              student_id: session.user.id,
-              instructor_id: l.instructorId,
-              type: 'lesson_payment',
-              amount: l.price,
-              status: 'completed'
-          }));
-
-       const { error: transError } = await supabase
-          .from('transactions')
-          .insert(lessonPaymentPayloads);
-
-       if (transError) throw transError;
-
-       // 3.2 Tip Payment
+       // 2. Create Tip Transaction (if applicable)
        if (tipAmount > 0) {
           const tipInCents = tipAmount * 100;
           
@@ -323,10 +295,10 @@ export const StudentLessons: React.FC = () => {
           if (tipError) throw tipError;
        }
 
-       // 4. Update Local State (Optimistic UI)
+       // 3. Update Local State (Optimistic UI)
        setLessons(prev => prev.map(l => 
           lessonIds.includes(l.id)
-             ? { ...l, status: 'completed', isReviewed: true } 
+             ? { ...l, isReviewed: true } 
              : l
        ));
 

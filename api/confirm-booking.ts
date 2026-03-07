@@ -34,8 +34,23 @@ export default async function handler(req: any, res: any) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { appointment_id } = req.body;
+    // Robust Body Parsing
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        console.error('Failed to parse request body:', e);
+        return res.status(400).json({ error: 'Invalid JSON body' });
+      }
+    }
+
+    const { appointment_id } = body || {};
+
+    console.log(`[ConfirmBooking] Received request for appointment_id: ${appointment_id}`);
+
     if (!appointment_id) {
+      console.error('[ConfirmBooking] Missing appointment_id in body:', body);
       return res.status(400).json({ error: 'Missing appointment_id' });
     }
 
@@ -47,8 +62,11 @@ export default async function handler(req: any, res: any) {
       .single();
 
     if (fetchError || !appointment) {
+      console.error(`[ConfirmBooking] Appointment not found: ${appointment_id}`, fetchError);
       return res.status(404).json({ error: 'Appointment not found' });
     }
+
+    console.log(`[ConfirmBooking] Found appointment: ${appointment.id}, Status: ${appointment.status}, Group: ${appointment.group_id}`);
 
     if (!appointment.group_id) {
       console.error(`Critical: Appointment ${appointment_id} has no group_id`);
@@ -65,6 +83,7 @@ export default async function handler(req: any, res: any) {
     }
 
     if (appointment.status !== 'pending_approval') {
+      console.error(`[ConfirmBooking] Invalid status transition from ${appointment.status}`);
       return res.status(400).json({ error: `Invalid status: ${appointment.status}` });
     }
 
