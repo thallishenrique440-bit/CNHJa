@@ -125,7 +125,7 @@ export default async function handler(req: any, res: any) {
       .from('appointments')
       .update({
         status: 'rejected',
-        payment_status: 'cancelled',
+        payment_status: 'failed',
         updated_at: new Date().toISOString()
       })
       .eq('group_id', appointment.group_id);

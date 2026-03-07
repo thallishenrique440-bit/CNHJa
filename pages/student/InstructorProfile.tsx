@@ -831,23 +831,41 @@ export const StudentInstructorProfile: React.FC = () => {
                 const hour = parseInt(time.split(':')[0]);
                 const isNight = hour >= 18;
 
+                // NEW: Check if time has passed for today
+                let isPastTime = false;
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                
+                if (selectedDate.getTime() === today.getTime()) {
+                    const [h, m] = time.split(':').map(Number);
+                    const now = new Date();
+                    const slotDate = new Date();
+                    slotDate.setHours(h, m, 0, 0);
+                    
+                    if (slotDate < now) {
+                        isPastTime = true;
+                    }
+                }
+
+                const isDisabled = !isAvailable || isPastTime;
+
                 return (
                   <button
                     key={time}
                     onClick={() => toggleSlot(time)}
-                    disabled={!isAvailable}
+                    disabled={isDisabled}
                     className={`
                       py-2 rounded-lg text-sm font-medium transition-all duration-200 relative
                       ${isSelected 
                         ? 'bg-blue-600 text-white shadow-md transform scale-105 z-10' 
-                        : isAvailable 
+                        : !isDisabled 
                           ? 'bg-white text-gray-700 border border-gray-200 hover:border-blue-300 hover:bg-blue-50' 
                           : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-transparent'
                       }
                     `}
                   >
                     {time}
-                    {isNight && isAvailable && !isSelected && (
+                    {isNight && !isDisabled && !isSelected && (
                        <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-indigo-400 rounded-full"></span>
                     )}
                   </button>

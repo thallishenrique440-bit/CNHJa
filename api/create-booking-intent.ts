@@ -77,9 +77,21 @@ export default async function handler(req: any, res: any) {
     for (const lesson of lessons) {
       const lessonDate = new Date(lesson.date + 'T00:00:00');
       
-      // NEW: Past date check
+      // NEW: Past date check (Date only)
       if (lessonDate < today) {
          return res.status(400).json({ error: 'Não é possível agendar aulas no passado.' });
+      }
+
+      // NEW: Specific Time Check (Date + Time)
+      // Prevent booking if the lesson time has already passed or is within 2 minutes
+      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00`);
+      const nowBuffer = new Date();
+      nowBuffer.setMinutes(nowBuffer.getMinutes() + 2); // 2 minutes buffer for latency/processing
+
+      if (lessonDateTime <= nowBuffer) {
+        return res.status(400).json({ 
+          error: 'Um ou mais horários selecionados já passaram ou estão muito próximos para reserva.' 
+        });
       }
 
       if (lessonDate > maxDate) {
