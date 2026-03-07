@@ -344,4 +344,9 @@ on public.instructor_discounts(instructor_id);
 
 -- Grant permissions
 grant all on public.instructor_discounts to authenticated;
-grant all on public.instructor_discounts to service_role;
+-- ==============================================================================
+-- MIGRATION: INSTRUCTOR AGENDA CONFIGURATION
+-- ==============================================================================
+
+ALTER TABLE public.instructors
+ADD COLUMN IF NOT EXISTS work_saturday_afternoon boolean DEFAULT false;

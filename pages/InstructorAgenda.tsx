@@ -8,7 +8,7 @@ import { useToast } from '../contexts/ToastContext';
 
 // --- Types ---
 type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled' | 'completed';
-type DisplayStatus = LessonStatus | 'in_progress' | 'finished' | 'past_free' | 'expired' | 'past_pending' | 'cancelled_view';
+type DisplayStatus = LessonStatus | 'in_progress' | 'finished' | 'past_free' | 'expired' | 'past_pending' | 'cancelled_view' | 'unavailable';
 
 interface Lesson {
   id: string;
@@ -111,14 +111,18 @@ export const InstructorAgenda: React.FC = () => {
   const [nightLessonsEnabled, setNightLessonsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  // Lunch Break State
+  // Agenda Config State
   const [lunchConfig, setLunchConfig] = useState<LunchConfig>({
     start: '12:00',
     end: '13:50',
     isActive: true
   });
-  const [showLunchModal, setShowLunchModal] = useState(false);
+  const [workSaturdayAfternoon, setWorkSaturdayAfternoon] = useState(false);
+  const [showAgendaModal, setShowAgendaModal] = useState(false);
+  
+  // Temp states for modal
   const [tempLunchConfig, setTempLunchConfig] = useState<LunchConfig>(lunchConfig);
+  const [tempWorkSaturdayAfternoon, setTempWorkSaturdayAfternoon] = useState(false);
 
   // Modal State
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
@@ -135,12 +139,14 @@ export const InstructorAgenda: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('instructors')
-          .select('has_night_lessons')
+          .select('has_night_lessons, work_saturday_afternoon')
           .eq('id', session.user.id)
           .single();
         
         if (data) {
           setNightLessonsEnabled(!!data.has_night_lessons);
+          setWorkSaturdayAfternoon(!!data.work_saturday_afternoon);
+          setTempWorkSaturdayAfternoon(!!data.work_saturday_afternoon);
         }
       } catch (err) {
         console.error("Error fetching settings:", err);
@@ -157,7 +163,25 @@ export const InstructorAgenda: React.FC = () => {
     const slots: TimeSlot[] = [];
     let currentMins = timeToMinutes('07:00');
     
-    const endOfDayMins = nightLessonsEnabled ? timeToMinutes('22:10') : timeToMinutes('17:10');
+    // Determine end of day based on day of week and settings
+    const dayOfWeek = selectedDate.getDay(); // 0=Sun, 6=Sat
+    let endOfDayMins = nightLessonsEnabled ? timeToMinutes('22:10') : timeToMinutes('17:10');
+
+    if (dayOfWeek === 0) {
+        // Sunday: Show slots but they will be visually blocked/disabled in UI logic if needed
+        // For now, let's keep showing them so instructor sees the grid, 
+        // OR we could return empty array if we want to hide completely.
+        // Requirement says: "appear visually but blocked". 
+        // So we generate standard slots.
+    } else if (dayOfWeek === 6) {
+        // Saturday
+        if (workSaturdayAfternoon) {
+            endOfDayMins = timeToMinutes('17:10'); // Ends at 18:00
+        } else {
+            endOfDayMins = timeToMinutes('11:10'); // Ends at 12:00
+        }
+    }
+
     const lessonDuration = 50;
 
     const lunchStartMins = lunchConfig.isActive ? timeToMinutes(lunchConfig.start) : -1;
@@ -191,7 +215,7 @@ export const InstructorAgenda: React.FC = () => {
       currentMins = endMins;
     }
     return slots;
-  }, [lunchConfig, nightLessonsEnabled]);
+  }, [lunchConfig, nightLessonsEnabled, selectedDate, workSaturdayAfternoon]);
 
   // --- REAL DATA STATE ---
   const [appointments, setAppointments] = useState<Record<string, Lesson>>({});
@@ -332,6 +356,7 @@ export const InstructorAgenda: React.FC = () => {
   };
 
   const getDerivedStatus = (lesson: Lesson, timeState: 'current' | 'future' | 'past'): DisplayStatus => {
+    if (selectedDate.getDay() === 0) return 'unavailable';
     if (lesson.status === 'lunch') return 'lunch';
     if (lesson.status === 'completed') return 'finished';
     if (lesson.status === 'cancelled') return 'cancelled_view';
@@ -395,7 +420,7 @@ export const InstructorAgenda: React.FC = () => {
   }, [selectedDate, appointments, lunchConfig, dynamicSlots]);
 
   const handleSlotClick = (slot: TimeSlot, lesson: Lesson, status: DisplayStatus) => {
-    if (status === 'lunch' || status === 'past_free' || status === 'expired') return;
+    if (status === 'lunch' || status === 'past_free' || status === 'expired' || status === 'unavailable') return;
 
     switch (status) {
       case 'free': toggleBlock(slot.start, 'block'); break;
@@ -651,21 +676,43 @@ export const InstructorAgenda: React.FC = () => {
   };
 
 
-  const handleOpenLunchModal = () => {
-    setTempLunchConfig({ ...lunchConfig, isActive: true });
-    setShowLunchModal(true);
+  const handleOpenAgendaModal = () => {
+    setTempLunchConfig({ ...lunchConfig });
+    setTempWorkSaturdayAfternoon(workSaturdayAfternoon);
+    setShowAgendaModal(true);
   };
 
-  const handleSaveLunch = () => {
+  const handleSaveAgenda = async () => {
     const s = timeToMinutes(tempLunchConfig.start);
     const e = timeToMinutes(tempLunchConfig.end);
-    if(s >= e) {
-      addToast("O horário de início deve ser anterior ao fim.", 'warning');
+    
+    if(tempLunchConfig.isActive && s >= e) {
+      addToast("O horário de início do almoço deve ser anterior ao fim.", 'warning');
       return;
     }
-    setLunchConfig({ ...tempLunchConfig, isActive: true });
-    setShowLunchModal(false);
-    addToast("Horário de almoço atualizado.", 'success');
+
+    setLoading(true);
+    try {
+        // Save to DB
+        const { error } = await supabase
+            .from('instructors')
+            .update({ work_saturday_afternoon: tempWorkSaturdayAfternoon })
+            .eq('id', session?.user?.id);
+
+        if (error) throw error;
+
+        // Update Local State
+        setLunchConfig({ ...tempLunchConfig });
+        setWorkSaturdayAfternoon(tempWorkSaturdayAfternoon);
+        setShowAgendaModal(false);
+        addToast("Configurações da agenda atualizadas.", 'success');
+
+    } catch (err: any) {
+        console.error("Error saving agenda settings:", err);
+        addToast("Erro ao salvar configurações.", 'error');
+    } finally {
+        setLoading(false);
+    }
   };
 
   const formatDateTitle = (date: Date) => {
@@ -689,13 +736,14 @@ export const InstructorAgenda: React.FC = () => {
           </div>
           
           <button 
-            onClick={handleOpenLunchModal}
+            onClick={handleOpenAgendaModal}
             className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-50 active:bg-blue-100 transition-all"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            <span>Horário de almoço</span>
+            <span>Configurar agenda</span>
           </button>
         </div>
 
@@ -873,6 +921,13 @@ export const InstructorAgenda: React.FC = () => {
               statusLabel = "Almoço";
               statusIcon = <span className="text-xl grayscale opacity-50">🍽️</span>;
               subText = <span className="text-[10px] text-gray-400 font-medium">Intervalo</span>;
+              break;
+            case 'unavailable':
+              cardClasses = "bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed";
+              textClasses = "text-sm font-semibold text-gray-400";
+              statusLabel = "Indisponível";
+              statusIcon = <span className="text-xl grayscale opacity-50">🚫</span>;
+              subText = <span className="text-[10px] text-gray-400 font-medium">Domingo (Folga)</span>;
               break;
           }
 
@@ -1065,29 +1120,89 @@ export const InstructorAgenda: React.FC = () => {
       </Modal>
 
       <Modal
-        isOpen={showLunchModal}
-        onClose={() => setShowLunchModal(false)}
-        title="Definir horário de almoço"
+        isOpen={showAgendaModal}
+        onClose={() => setShowAgendaModal(false)}
+        title="Configurar Agenda"
         footer={
-           <div className="flex space-x-3">
-              <Button variant="outline" fullWidth onClick={() => setShowLunchModal(false)}>Cancelar</Button>
-              <Button fullWidth onClick={handleSaveLunch}>Salvar</Button>
-            </div>
+          <div className="flex space-x-3 w-full">
+            <Button variant="outline" onClick={() => setShowAgendaModal(false)} fullWidth>Cancelar</Button>
+            <Button onClick={handleSaveAgenda} loading={loading} fullWidth>Salvar</Button>
+          </div>
         }
       >
-        <div className="text-center mb-6">
-            <p className="text-xs text-gray-500">Configure seu intervalo diário de descanso</p>
-        </div>
-        <div className="flex items-center space-x-3 mb-4">
-            <div className="flex-1">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1 block">Início</label>
-                <input type="time" value={tempLunchConfig.start} onChange={(e) => setTempLunchConfig({...tempLunchConfig, start: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-center font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"/>
-            </div>
-            <span className="text-gray-300 pt-4">-</span>
-            <div className="flex-1">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1 block">Fim</label>
-                <input type="time" value={tempLunchConfig.end} onChange={(e) => setTempLunchConfig({...tempLunchConfig, end: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-center font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"/>
-            </div>
+        <div className="space-y-6">
+           {/* Section 1: Lunch */}
+           <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+              <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Horário de Almoço</h3>
+                  <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                      <input 
+                        type="checkbox" 
+                        name="lunch-toggle" 
+                        id="lunch-toggle" 
+                        className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-transform duration-200 ease-in-out checked:translate-x-full checked:border-blue-600"
+                        checked={tempLunchConfig.isActive}
+                        onChange={(e) => setTempLunchConfig({...tempLunchConfig, isActive: e.target.checked})}
+                      />
+                      <label htmlFor="lunch-toggle" className={`toggle-label block overflow-hidden h-5 rounded-full cursor-pointer ${tempLunchConfig.isActive ? 'bg-blue-600' : 'bg-gray-300'}`}></label>
+                  </div>
+              </div>
+              
+              {tempLunchConfig.isActive && (
+                <div className="grid grid-cols-2 gap-4 animate-fade-in">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Início</label>
+                        <input 
+                            type="time" 
+                            className="w-full p-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            value={tempLunchConfig.start}
+                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, start: e.target.value})}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Fim</label>
+                        <input 
+                            type="time" 
+                            className="w-full p-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            value={tempLunchConfig.end}
+                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, end: e.target.value})}
+                        />
+                    </div>
+                </div>
+              )}
+           </div>
+
+           {/* Section 2: Saturday */}
+           <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+              <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Sábado à Tarde</h3>
+                  <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                      <input 
+                        type="checkbox" 
+                        name="sat-toggle" 
+                        id="sat-toggle" 
+                        className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-transform duration-200 ease-in-out checked:translate-x-full checked:border-blue-600"
+                        checked={tempWorkSaturdayAfternoon}
+                        onChange={(e) => setTempWorkSaturdayAfternoon(e.target.checked)}
+                      />
+                      <label htmlFor="sat-toggle" className={`toggle-label block overflow-hidden h-5 rounded-full cursor-pointer ${tempWorkSaturdayAfternoon ? 'bg-blue-600' : 'bg-gray-300'}`}></label>
+                  </div>
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                 {tempWorkSaturdayAfternoon 
+                    ? "Sua agenda ficará aberta até as 18:00 aos sábados." 
+                    : "Sua agenda encerrará às 12:00 aos sábados (padrão)."
+                 }
+              </p>
+           </div>
+
+           {/* Section 3: Info */}
+           <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-start space-x-3">
+              <span className="text-xl">ℹ️</span>
+              <p className="text-xs text-blue-800 leading-relaxed">
+                 <strong>Domingos:</strong> Por padrão, domingos são dias de folga e não permitem agendamentos.
+              </p>
+           </div>
         </div>
       </Modal>
       <InstructorBottomNav />

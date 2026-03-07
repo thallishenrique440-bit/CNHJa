@@ -58,7 +58,7 @@ export default async function handler(req: any, res: any) {
     // 1. Fetch instructor details (Stripe Account ID)
     const { data: instructor, error: instructorError } = await supabase
       .from('instructors')
-      .select('stripe_account_id')
+      .select('stripe_account_id, work_saturday_afternoon')
       .eq('id', instructorId)
       .single();
 
@@ -76,6 +76,30 @@ export default async function handler(req: any, res: any) {
 
     for (const lesson of lessons) {
       const lessonDate = new Date(lesson.date + 'T00:00:00');
+      const dayOfWeek = lessonDate.getDay(); // 0 = Sunday, 6 = Saturday
+
+      // NEW: Sunday Check
+      if (dayOfWeek === 0) {
+         return res.status(400).json({ error: 'Não é possível agendar aulas aos domingos.' });
+      }
+
+      // NEW: Saturday Check
+      if (dayOfWeek === 6) {
+          const [h, m] = lesson.startTime.split(':').map(Number);
+          const minutes = h * 60 + m;
+          
+          // If instructor works saturday afternoon, allow until 17:10 (1030 mins)
+          // Else allow until 11:10 (670 mins)
+          const limit = instructor.work_saturday_afternoon ? (17 * 60 + 10) : (11 * 60 + 10);
+          
+          if (minutes > limit) {
+             return res.status(400).json({ 
+                 error: instructor.work_saturday_afternoon 
+                    ? 'Aos sábados, o horário limite é 17:10.' 
+                    : 'Aos sábados, o horário limite é 11:10.' 
+             });
+          }
+      }
       
       // NEW: Past date check (Date only)
       if (lessonDate < today) {

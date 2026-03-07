@@ -35,6 +35,7 @@ interface InstructorProfileData {
   priceDay: number; // Legacy Fallback
   priceNight: number; // Legacy Fallback
   hasNightLessons: boolean;
+  workSaturdayAfternoon: boolean; // New Field
   category: 'A' | 'B' | 'AB';
   discounts: DiscountRule[]; 
   reviews: any[];
@@ -133,6 +134,7 @@ export const StudentInstructorProfile: React.FC = () => {
             base_price,
             night_price,
             has_night_lessons,
+            work_saturday_afternoon,
             whatsapp,
             credential_number,
             location_text,
@@ -241,6 +243,7 @@ export const StudentInstructorProfile: React.FC = () => {
             priceDay: basePrice,
             priceNight: data.night_price || basePrice,
             hasNightLessons: !!data.has_night_lessons,
+            workSaturdayAfternoon: !!data.work_saturday_afternoon,
             category: cat,
             discounts: discountsData || [], // Using REAL discounts from DB
             reviews: formattedReviews,
@@ -354,6 +357,29 @@ export const StudentInstructorProfile: React.FC = () => {
     return slots;
   }, [instructor?.hasNightLessons]);
 
+  // --- CHECK REAL AVAILABILITY ---
+  const isSlotAvailable = (time: string) => {
+      // 1. Check if DB says it's busy
+      if (busySlots.includes(time)) return false;
+
+      // 2. Check Sunday Rule (Always OFF)
+      if (selectedDate.getDay() === 0) return false;
+
+      // 3. Check Saturday Rule
+      if (selectedDate.getDay() === 6) {
+          const [h, m] = time.split(':').map(Number);
+          const minutes = h * 60 + m;
+          
+          // If instructor works saturday afternoon, allow until 17:10 (end 18:00)
+          // Else allow until 11:10 (end 12:00)
+          const limit = instructor?.workSaturdayAfternoon ? (17 * 60 + 10) : (11 * 60 + 10);
+          
+          if (minutes > limit) return false;
+      }
+
+      return true;
+  };
+
   const toggleSlot = (time: string) => {
     // 1. CRITICAL VALIDATION: Ensure category is selected
     if (availableCategories.length > 1 && !selectedLessonCategory) {
@@ -406,13 +432,6 @@ export const StudentInstructorProfile: React.FC = () => {
     }
 
     setSelectedSlots(newSlots);
-  };
-
-  // CHECK REAL AVAILABILITY
-  const isSlotAvailable = (time: string) => {
-      // 1. Check if DB says it's busy
-      if (busySlots.includes(time)) return false;
-      return true;
   };
 
   const limits = useMemo(() => {
@@ -834,9 +853,13 @@ export const StudentInstructorProfile: React.FC = () => {
                 // NEW: Check if time has passed for today
                 let isPastTime = false;
                 const today = new Date();
-                today.setHours(0,0,0,0);
                 
-                if (selectedDate.getTime() === today.getTime()) {
+                // Robust comparison: Check if selectedDate is the same day as today
+                const isToday = selectedDate.getDate() === today.getDate() &&
+                                selectedDate.getMonth() === today.getMonth() &&
+                                selectedDate.getFullYear() === today.getFullYear();
+                
+                if (isToday) {
                     const [h, m] = time.split(':').map(Number);
                     const now = new Date();
                     const slotDate = new Date();
