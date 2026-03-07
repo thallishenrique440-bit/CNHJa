@@ -6,9 +6,16 @@ const supabaseAdmin = createClient(
 );
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+  // 1. Validate Method (GET for Cron, POST for manual trigger)
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  // 2. Validate Authorization (CRON_SECRET)
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
