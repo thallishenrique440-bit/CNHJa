@@ -48,10 +48,10 @@ export default async function handler(req: any, res: any) {
     switch (event.type) {
       case 'payment_intent.amount_capturable_updated': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id;
 
-        if (purchaseId) {
-          console.log(`🔒 Amount Capturable Updated (Auth) for Purchase ID: ${purchaseId}`);
+        if (groupId) {
+          console.log(`🔒 Amount Capturable Updated (Auth) for Group ID: ${groupId}`);
 
           // Atualizar status para pending_approval / authorized
           const { error } = await supabaseAdmin
@@ -62,7 +62,7 @@ export default async function handler(req: any, res: any) {
               payment_intent_id: paymentIntent.id,
               expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
             })
-            .eq('purchase_id', purchaseId);
+            .eq('group_id', groupId);
 
           if (error) throw error;
         }
