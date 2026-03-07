@@ -60,8 +60,8 @@ export default async function handler(req: any, res: any) {
     }
 
     // Idempotency check
-    if (appointment.status === 'confirmed') {
-      return res.status(200).json({ message: 'Booking already confirmed' });
+    if (appointment.status === 'rejected') {
+      return res.status(200).json({ message: 'Booking already rejected' });
     }
 
     if (appointment.status !== 'pending_approval') {
@@ -72,36 +72,27 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: 'Missing payment_intent_id' });
     }
 
-    // 3. Capture Payment (Stripe)
+    // 3. Cancel Payment (Stripe)
     try {
-      await stripe.paymentIntents.capture(appointment.payment_intent_id, {
-        idempotencyKey: `capture_${appointment.group_id}`,
+      await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
+        cancellation_reason: 'abandoned',
       });
     } catch (stripeError: any) {
-      console.error('Stripe Capture Error:', stripeError);
+      console.error('Stripe Cancel Error:', stripeError);
 
-      // Handle expired authorization
+      // Handle already canceled
       if (stripeError.code === 'payment_intent_unexpected_state') {
         const pi = await stripe.paymentIntents.retrieve(appointment.payment_intent_id);
         
         if (pi.status === 'canceled') {
-          // Auth expired -> Cancel appointments
-          await supabaseAdmin
-            .from('appointments')
-            .update({ 
-              status: 'cancelled', 
-              payment_status: 'failed', 
-              cancelled_reason: 'auth_expired' 
-            })
-            .eq('group_id', appointment.group_id);
-
-          return res.status(409).json({ 
-            error: 'Payment authorization expired. Booking cancelled.',
-            code: 'AUTH_EXPIRED'
-          });
+          // Already canceled, proceed to update DB
+          console.log('PaymentIntent already canceled. Proceeding to DB update.');
         } else if (pi.status === 'succeeded') {
-          // Already captured, proceed to update DB
-          console.log('PaymentIntent already succeeded. Proceeding to DB update.');
+          // Cannot cancel captured payment
+          return res.status(409).json({ 
+            error: 'Payment already captured. Cannot reject.',
+            code: 'ALREADY_CAPTURED'
+          });
         } else {
           throw stripeError;
         }
@@ -114,8 +105,8 @@ export default async function handler(req: any, res: any) {
     const { error: updateError } = await supabaseAdmin
       .from('appointments')
       .update({
-        status: 'confirmed',
-        payment_status: 'captured',
+        status: 'rejected',
+        payment_status: 'cancelled',
         updated_at: new Date().toISOString()
       })
       .eq('group_id', appointment.group_id);
@@ -124,10 +115,10 @@ export default async function handler(req: any, res: any) {
       throw updateError;
     }
 
-    return res.status(200).json({ message: 'Booking confirmed successfully' });
+    return res.status(200).json({ message: 'Booking rejected successfully' });
 
   } catch (error: any) {
-    console.error('Error confirming booking:', error);
+    console.error('Error rejecting booking:', error);
     return res.status(500).json({ error: error.message });
   }
 }

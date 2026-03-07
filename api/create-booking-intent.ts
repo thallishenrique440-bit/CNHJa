@@ -39,6 +39,21 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Invalid or missing category' });
   }
 
+  // NEW: Validation for limits
+  if (lessons.length > 20) {
+    return res.status(400).json({ error: 'Limite máximo de 20 aulas por agendamento excedido.' });
+  }
+
+  // NEW: Validation for daily limits
+  const lessonsByDate: Record<string, number> = {};
+  for (const lesson of lessons) {
+    const date = lesson.date;
+    lessonsByDate[date] = (lessonsByDate[date] || 0) + 1;
+    if (lessonsByDate[date] > 3) {
+      return res.status(400).json({ error: `Limite diário de 3 aulas excedido para a data ${date}.` });
+    }
+  }
+
   try {
     // 1. Fetch instructor details (Stripe Account ID)
     const { data: instructor, error: instructorError } = await supabase
@@ -51,7 +66,30 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Instructor not ready for payments' });
     }
 
-    // 2. Calculate discount
+    // 2. Validate dates (max 7 days in advance)
+    const MAX_DAYS_IN_ADVANCE = 7;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const maxDate = new Date(today);
+    maxDate.setDate(maxDate.getDate() + MAX_DAYS_IN_ADVANCE);
+
+    for (const lesson of lessons) {
+      const lessonDate = new Date(lesson.date + 'T00:00:00');
+      
+      // NEW: Past date check
+      if (lessonDate < today) {
+         return res.status(400).json({ error: 'Não é possível agendar aulas no passado.' });
+      }
+
+      if (lessonDate > maxDate) {
+        return res.status(400).json({ 
+          error: `Agendamentos permitidos apenas para os próximos ${MAX_DAYS_IN_ADVANCE} dias due a regras de pagamento.` 
+        });
+      }
+    }
+
+    // 3. Calculate discount
     const discounts = await getInstructorDiscounts(instructorId, supabase);
     
     // Calculate total base price by summing individual lesson prices
@@ -105,30 +143,45 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // 5. Create Stripe PaymentIntent
+    // 5. Create Stripe PaymentIntent with Rollback
     const applicationFeeAmount = Math.round(finalPrice * 0.10); // 10% commission
+    let paymentIntent;
 
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: finalPrice,
-      currency: 'brl',
-      automatic_payment_methods: { enabled: true },
-      transfer_data: {
-        destination: instructor.stripe_account_id,
-      },
-      application_fee_amount: applicationFeeAmount,
-      metadata: {
-        group_id: groupId,
-        student_id: studentId,
-        instructor_id: instructorId,
-        lesson_count: lessons.length,
-      },
-    });
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: finalPrice,
+        currency: 'brl',
+        capture_method: 'manual', // Capture only when instructor accepts
+        automatic_payment_methods: { enabled: true },
+        transfer_data: {
+          destination: instructor.stripe_account_id,
+        },
+        application_fee_amount: applicationFeeAmount,
+        metadata: {
+          group_id: groupId,
+          student_id: studentId,
+          instructor_id: instructorId,
+          lesson_count: lessons.length,
+        },
+      });
 
-    // 6. Update appointments with payment_intent_id
-    await supabase
-      .from('appointments')
-      .update({ payment_intent_id: paymentIntent.id })
-      .eq('group_id', groupId);
+      // 6. Update appointments with payment_intent_id
+      await supabase
+        .from('appointments')
+        .update({ payment_intent_id: paymentIntent.id })
+        .eq('group_id', groupId);
+
+    } catch (stripeError: any) {
+      console.error('Stripe Error, rolling back appointments:', stripeError);
+      
+      // ROLLBACK: Delete appointments if Stripe fails
+      await supabase.from('appointments').delete().eq('group_id', groupId);
+      
+      return res.status(500).json({ 
+        error: 'Erro ao processar pagamento. Tente novamente.',
+        details: stripeError.message 
+      });
+    }
 
     // 7. Return clientSecret
     return res.status(200).json({

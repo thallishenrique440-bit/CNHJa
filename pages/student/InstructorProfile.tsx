@@ -83,6 +83,14 @@ export const StudentInstructorProfile: React.FC = () => {
     return result;
   };
 
+  // Max Booking Date (7 days from today)
+  const maxBookingDate = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + 7);
+    return d;
+  }, []);
+
   const getDayLabel = (date: Date) => {
     const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
     return days[date.getDay()];
@@ -281,8 +289,20 @@ export const StudentInstructorProfile: React.FC = () => {
 
 
   // Navigation handlers
-  const handlePrevRange = () => setViewDate(current => addDays(current, -7));
-  const handleNextRange = () => setViewDate(current => addDays(current, 7));
+  const handlePrevRange = () => {
+    const prevDate = addDays(viewDate, -7);
+    // Optional: Prevent going too far back (e.g., before current week)
+    // const currentWeekStart = getStartOfWeek(new Date());
+    // if (prevDate < currentWeekStart) return;
+    setViewDate(prevDate);
+  };
+
+  const handleNextRange = () => {
+    const nextDate = addDays(viewDate, 7);
+    // Prevent navigating if the start of the next week is beyond the max booking date
+    if (nextDate > maxBookingDate) return;
+    setViewDate(nextDate);
+  };
   
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(viewDate, i));
 
@@ -772,17 +792,24 @@ export const StudentInstructorProfile: React.FC = () => {
               <div className="flex-1 flex justify-between items-center space-x-1">
                   {weekDays.map((date, index) => {
                       const isSelected = date.toDateString() === selectedDate.toDateString();
-                      const isToday = new Date().toDateString() === date.toDateString();
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      const isToday = today.toDateString() === date.toDateString();
+                      
+                      // Disable if date is past maxBookingDate OR if date is in the past (before today)
+                      const isDisabled = date > maxBookingDate || date < today;
+
                       return (
                       <button
                           key={index}
-                          onClick={() => handleDayClick(date)}
+                          onClick={() => !isDisabled && handleDayClick(date)}
+                          disabled={isDisabled}
                           className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl flex-1 transition-all duration-200 
-                          ${isSelected ? 'bg-blue-600 text-white shadow-md transform scale-105' : 'bg-transparent text-gray-500 hover:bg-gray-50'}
+                          ${isSelected ? 'bg-blue-600 text-white shadow-md transform scale-105' : isDisabled ? 'bg-gray-50 opacity-40 cursor-not-allowed' : 'bg-transparent text-gray-500 hover:bg-gray-50'}
                           `}
                       >
-                          <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>{getDayLabel(date)}</span>
-                          <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : 'text-gray-700'}`}>{date.getDate()}</span>
+                          <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : isDisabled ? 'text-gray-300' : 'text-gray-400'}`}>{getDayLabel(date)}</span>
+                          <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : isDisabled ? 'text-gray-300' : 'text-gray-700'}`}>{date.getDate()}</span>
                           {isToday && (<div className={`w-1 h-1 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-blue-600'}`}></div>)}
                       </button>
                       );
