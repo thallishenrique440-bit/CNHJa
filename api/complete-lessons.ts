@@ -22,36 +22,39 @@ export default async function handler(req: any, res: any) {
     console.log('⏰ Starting complete-lessons job...');
 
     // 1. Find confirmed bookings
-    // Optimization: Filter by date <= today to reduce data volume
-    const today = new Date().toISOString().split('T')[0];
+    // Optimization: Filter by date <= today AND end_time <= now to reduce data volume
+    const now = new Date();
     
+    // Adjust for Brazil Time (UTC-3) since DB stores local time
+    const options = { timeZone: 'America/Sao_Paulo' };
+    
+    // Get Date: YYYY-MM-DD (en-CA gives YYYY-MM-DD)
+    const dateStr = new Intl.DateTimeFormat('en-CA', { ...options, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    
+    // Get Time: HH:MM:SS (en-GB gives HH:MM:SS)
+    const timeStr = new Intl.DateTimeFormat('en-GB', { ...options, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(now);
+
+    console.log(`Checking for lessons before ${dateStr} ${timeStr} (BRT)`);
+
+    // Query: status=confirmed AND (date < today OR (date = today AND end_time <= now))
+    // This ensures we only fetch lessons that have actually finished
     const { data: confirmedBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, date, start_time, student_id, instructor_id, price, group_id')
+      .select('id, date, start_time, end_time, student_id, instructor_id, price, group_id')
       .eq('status', 'confirmed')
-      .lte('date', today);
+      .or(`date.lt.${dateStr},and(date.eq.${dateStr},end_time.lte.${timeStr})`);
 
     if (fetchError) {
       console.error("❌ Error fetching confirmed bookings:", fetchError);
       throw fetchError;
     }
 
-    const now = new Date();
     const bookingsToComplete = [];
     const transactionPayloads = [];
     const appointmentIds: string[] = [];
 
+    // Process the filtered list
     for (const booking of confirmedBookings || []) {
-      const [year, month, day] = booking.date.split('-').map(Number);
-      const [hour, minute] = booking.start_time.split(':').map(Number);
-      
-      // Lesson end time = start time + 50 minutes
-      const lessonEnd = new Date(year, month - 1, day, hour, minute + 50);
-
-      // Add a small buffer (e.g., 5 minutes) to ensure lesson is definitely over
-      // lessonEnd.setMinutes(lessonEnd.getMinutes() + 5);
-
-      if (now > lessonEnd) {
         bookingsToComplete.push(booking);
         appointmentIds.push(booking.id);
         
@@ -64,7 +67,6 @@ export default async function handler(req: any, res: any) {
             status: 'completed',
             created_at: new Date().toISOString()
         });
-      }
     }
 
     console.log(`Found ${bookingsToComplete.length} lessons to complete.`);
@@ -74,22 +76,38 @@ export default async function handler(req: any, res: any) {
     }
 
     // 2. Update Appointments -> completed
-    const { error: updateError } = await supabaseAdmin
+    // ATOMICITY CHECK: Only update if status is still 'confirmed'
+    // This prevents race conditions if two jobs run simultaneously
+    const { data: updatedAppointments, error: updateError } = await supabaseAdmin
       .from('appointments')
       .update({ status: 'completed' })
-      .in('id', appointmentIds);
+      .in('id', appointmentIds)
+      .eq('status', 'confirmed') // Critical: Ensure it wasn't already processed
+      .select('id');
 
     if (updateError) {
         console.error("❌ Error updating appointments:", updateError);
         throw updateError;
     }
 
+    const updatedIds = new Set(updatedAppointments?.map(a => a.id));
+    const actualProcessedCount = updatedIds.size;
+
+    console.log(`Successfully updated ${actualProcessedCount} lessons.`);
+
+    if (actualProcessedCount === 0) {
+        return res.status(200).json({ message: 'No lessons updated (possibly processed by another job).' });
+    }
+
+    // Filter transactions to only include those that were actually updated
+    const validTransactions = transactionPayloads.filter(t => updatedIds.has(t.appointment_id));
+
     // 3. Create Transactions
     // Use ignoreDuplicates: true to handle race conditions or re-runs gracefully
     // This relies on the UNIQUE constraint (appointment_id, type)
     const { error: transError } = await supabaseAdmin
       .from('transactions')
-      .insert(transactionPayloads)
+      .insert(validTransactions)
       .select() // Needed for ignoreDuplicates to work in some versions, but good practice
       // @ts-ignore - Supabase types might not be fully up to date in this env
       .options({ ignoreDuplicates: true }); 
@@ -104,7 +122,7 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).json({ 
         message: 'Job completed', 
-        processed: bookingsToComplete.length 
+        processed: actualProcessedCount 
     });
 
   } catch (error: any) {
