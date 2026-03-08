@@ -8,6 +8,7 @@ import { RegisterInstructor } from './pages/RegisterInstructor';
 import { Login } from './pages/Login';
 import { ForgotPassword } from './pages/ForgotPassword';
 import { UpdatePassword } from './pages/UpdatePassword';
+import { InstructorShortLink } from './pages/InstructorShortLink';
 import { InstructorProfile } from './pages/InstructorProfile';
 import { InstructorAgenda } from './pages/InstructorAgenda';
 import { InstructorDiscounts } from './pages/InstructorDiscounts';
@@ -98,6 +99,9 @@ const AppRoutes: React.FC = () => {
       <AuthListener />
       <Routes>
         
+        {/* Short Link Resolver - Public Access */}
+        <Route path="/i/:publicId" element={<InstructorShortLink />} />
+
         {/* PUBLIC ROUTES */}
         <Route element={<PublicGuard />}>
           <Route path="/welcome" element={<Welcome />} />

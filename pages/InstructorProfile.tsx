@@ -194,6 +194,16 @@ export const InstructorProfile: React.FC = () => {
     loadData();
   }, [session]);
 
+  const handleCopyProfileLink = () => {
+    if (!publicId) return;
+    const link = `${window.location.origin}/#/i/${publicId}`;
+    navigator.clipboard.writeText(link).then(() => {
+      addToast("Link do seu perfil copiado! Você pode compartilhar com seus alunos.", 'success');
+    }).catch(() => {
+      addToast("Erro ao copiar link.", 'error');
+    });
+  };
+
   const handleImageClick = () => {
     fileInputRef.current?.click();
   };
@@ -422,10 +432,27 @@ export const InstructorProfile: React.FC = () => {
               </div>
            </div>
            
-           {/* Public ID Badge */}
+           {/* Public ID Badge & Share */}
            {publicId && (
-              <div className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold border border-gray-200">
-                Meu ID: {publicId}
+              <div className="flex flex-col items-center space-y-3 mt-1 w-full">
+                  <div className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold border border-gray-200">
+                    Meu ID: {publicId}
+                  </div>
+                  
+                  <div className="text-center max-w-[260px]">
+                     <p className="text-xs text-gray-400 mb-2 leading-relaxed">
+                       Compartilhe seu perfil com alunos para que eles encontrem você facilmente.
+                     </p>
+                     <button 
+                        onClick={handleCopyProfileLink}
+                        className="inline-flex items-center space-x-1.5 text-xs font-semibold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
+                     >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        <span>Copiar link do perfil</span>
+                     </button>
+                  </div>
               </div>
            )}
 

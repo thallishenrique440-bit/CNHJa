@@ -276,35 +276,55 @@ export const InstructorDiscounts: React.FC = () => {
             
             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                <p className="text-sm text-blue-800 leading-relaxed">
-                 Configure descontos automáticos para incentivar seus alunos a comprarem mais aulas de uma vez.
+                 Configure até 3 descontos automáticos para incentivar seus alunos a comprarem mais aulas de uma vez.
                </p>
             </div>
 
             <div className="space-y-4">
-               <div>
-                 <Input 
-                  label="Mínimo de aulas para aplicar"
-                  type="number"
-                  placeholder="Ex: 5"
-                  value={formData.minLessons}
-                  onChange={(e) => setFormData({...formData, minLessons: e.target.value})}
-                />
-                <p className="text-xs text-gray-400 mt-1 ml-1">
-                  O aluno precisa selecionar pelo menos essa quantidade.
-                </p>
+               <div className="relative">
+                 <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Mínimo de aulas para aplicar
+                 </label>
+                 <div className="relative">
+                    <input
+                      type="number"
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-900 placeholder-gray-400"
+                      placeholder="Ex: 5 aulas"
+                      value={formData.minLessons}
+                      onChange={(e) => setFormData({...formData, minLessons: e.target.value})}
+                    />
+                    {formData.minLessons && (
+                        <span className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-medium pointer-events-none">
+                            aulas
+                        </span>
+                    )}
+                 </div>
+                 <p className="text-xs text-gray-400 mt-1 ml-1">
+                   O aluno precisa selecionar pelo menos essa quantidade.
+                 </p>
                </div>
 
-               <div>
-                 <Input 
-                  label="Porcentagem de Desconto (%)"
-                  type="number"
-                  placeholder="Ex: 10"
-                  value={formData.discountPercentage}
-                  onChange={(e) => setFormData({...formData, discountPercentage: e.target.value})}
-                />
-                <p className="text-xs text-gray-400 mt-1 ml-1">
-                  Desconto aplicado sobre o valor total.
-                </p>
+               <div className="relative">
+                 <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Porcentagem de Desconto (%)
+                 </label>
+                 <div className="relative">
+                    <input
+                      type="number"
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-900 placeholder-gray-400"
+                      placeholder="Ex: 10%"
+                      value={formData.discountPercentage}
+                      onChange={(e) => setFormData({...formData, discountPercentage: e.target.value})}
+                    />
+                    {formData.discountPercentage && (
+                        <span className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-medium pointer-events-none">
+                            %
+                        </span>
+                    )}
+                 </div>
+                 <p className="text-xs text-gray-400 mt-1 ml-1">
+                   Desconto aplicado sobre o valor total.
+                 </p>
                </div>
             </div>
 

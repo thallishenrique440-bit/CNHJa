@@ -30,8 +30,12 @@ export const InstructorFinance: React.FC = () => {
   
   // Data State
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [internalBalance, setInternalBalance] = useState(0); 
-  const [tipsBalance, setTipsBalance] = useState(0);
+  
+  // Financial Metrics
+  const [totalRevenue, setTotalRevenue] = useState(0);
+  const [monthlyRevenue, setMonthlyRevenue] = useState(0);
+  const [totalTips, setTotalTips] = useState(0);
+  const [monthlyTips, setMonthlyTips] = useState(0);
   
   // Stripe State
   const [stripeStatus, setStripeStatus] = useState<StripeStatus>('none');
@@ -104,23 +108,42 @@ export const InstructorFinance: React.FC = () => {
             const typedData = transData as any[];
             setTransactions(typedData);
 
-            let total = 0;
-            let tips = 0;
+            let totalRev = 0;
+            let monthRev = 0;
+            let totalTip = 0;
+            let monthTip = 0;
+
             const now = new Date();
             const currentMonth = now.getMonth();
+            const currentYear = now.getFullYear();
 
             typedData.forEach(t => {
                 if (t.status === 'completed') {
-                    total += t.amount;
                     const tDate = new Date(t.created_at);
-                    if (t.type === 'tip' && tDate.getMonth() === currentMonth) {
-                        tips += t.amount;
+                    const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
+                    
+                    // Only count revenue types (lesson_payment, tip)
+                    if (t.type === 'lesson_payment' || t.type === 'tip') {
+                        totalRev += t.amount;
+                        if (isCurrentMonth) {
+                            monthRev += t.amount;
+                        }
+                    }
+
+                    // Count tips separately
+                    if (t.type === 'tip') {
+                        totalTip += t.amount;
+                        if (isCurrentMonth) {
+                            monthTip += t.amount;
+                        }
                     }
                 }
             });
 
-            setInternalBalance(total);
-            setTipsBalance(tips);
+            setTotalRevenue(totalRev);
+            setMonthlyRevenue(monthRev);
+            setTotalTips(totalTip);
+            setMonthlyTips(monthTip);
         }
 
     } catch (err) {
@@ -201,7 +224,7 @@ export const InstructorFinance: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50 pb-24 sm:max-w-md sm:mx-auto relative flex flex-col">
       
-      <div className="px-6 py-6 bg-white border-b border-gray-100 sticky top-0 z-10">
+      <div className="px-6 py-6 bg-white border-b border-gray-100 sticky top-0 z-20">
         <h1 className="text-xl font-bold text-gray-900">Financeiro</h1>
         <div className="flex items-center justify-between mt-1">
             <p className="text-xs text-gray-500">Gestão de repasses</p>
@@ -230,11 +253,13 @@ export const InstructorFinance: React.FC = () => {
         
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
-            <span className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1 block">Ganhos Totais</span>
+            <span className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1 block">Este Mês</span>
             <span className="text-xl font-bold text-gray-900 truncate block">
-                {loading ? '...' : formatCurrency(internalBalance)}
+                {loading ? '...' : formatCurrency(monthlyRevenue)}
             </span>
-            <span className="text-[10px] text-gray-400 mt-2">Acumulado no app</span>
+            <span className="text-[10px] text-gray-400 mt-2">
+                Total acumulado: <span className="text-gray-600 font-semibold">{formatCurrency(totalRevenue)}</span>
+            </span>
           </div>
 
           <div 
@@ -245,9 +270,11 @@ export const InstructorFinance: React.FC = () => {
                 Caixinha (Mês) <span className="ml-1">🎁</span>
              </span>
              <span className="text-xl font-bold text-green-600 truncate">
-                {loading ? '...' : formatCurrency(tipsBalance)}
+                {loading ? '...' : formatCurrency(monthlyTips)}
              </span>
-             <span className="text-[10px] text-green-600/70 mt-2 font-medium">100% seu</span>
+             <span className="text-[10px] text-green-600/70 mt-2 font-medium">
+                Total acumulado: {formatCurrency(totalTips)}
+             </span>
           </div>
         </div>
 
@@ -274,7 +301,7 @@ export const InstructorFinance: React.FC = () => {
                       'text-yellow-800/80'
                     }`}>
                     {stripeStatus === 'active' 
-                        ? 'Acesse seu painel para ver saldo disponível, agendar saques e ver extratos bancários.' 
+                        ? 'Acesse seu painel Stripe para ver seu saldo disponível, acompanhar os repasses automáticos para sua conta bancária e consultar seus extratos de pagamento.' 
                         : stripeStatus === 'processing'
                             ? 'O Stripe está verificando seus documentos. Isso pode levar alguns minutos ou horas. Clique em atualizar para checar.'
                             : 'Configure sua conta para receber pagamentos via Pix e Cartão com repasse automático.'}
@@ -323,9 +350,11 @@ export const InstructorFinance: React.FC = () => {
         </div>
 
         <div className="space-y-2 text-xs text-gray-500 px-1">
-            <p>• Os pagamentos caem direto na sua conta Stripe Express.</p>
-            <p>• A taxa da plataforma (10%) já é descontada automaticamente.</p>
-            <p>• Saques são geridos diretamente pelo painel da Stripe.</p>
+            <p>• Os pagamentos das aulas caem diretamente na sua conta Stripe Express.</p>
+            <p>• Os repasses para sua conta bancária são realizados automaticamente pelo Stripe, de acordo com as regras da conta Stripe Express.</p>
+            <p>• A plataforma aplica uma taxa fixa de 10% sobre cada aula. Essa taxa é vitalícia e não está sujeita a alterações.</p>
+            <p>• As taxas de processamento da Stripe são pagas pela própria plataforma, garantindo que você receba exatamente 90% do valor de cada aula.</p>
+            <p>• Caso deseje manter um valor líquido específico por aula, você pode ajustar o preço da aula em aproximadamente 10%, considerando a taxa da plataforma.</p>
         </div>
 
         <div className="space-y-4 pt-2">
