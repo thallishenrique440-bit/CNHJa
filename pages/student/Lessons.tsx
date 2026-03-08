@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
@@ -73,9 +74,14 @@ const isNightLesson = (time: string) => {
 };
 
 export const StudentLessons: React.FC = () => {
+  const navigate = useNavigate();
   const { session } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
+  
+  // Security Profile Data
+  const [trustedContact, setTrustedContact] = useState<string | null>(null);
+  const [securityMessage, setSecurityMessage] = useState<string>('Estou em aula agora e compartilho minha localização.');
   
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDayIndex, setSelectedDayIndex] = useState(new Date().getDay() === 0 ? 6 : new Date().getDay() - 1);
@@ -226,6 +232,34 @@ export const StudentLessons: React.FC = () => {
     return () => clearInterval(interval);
 
   }, [session, currentDate]);
+
+  // Fetch Student Profile for Security Features
+  useEffect(() => {
+    if (!session?.user) return;
+
+    const fetchProfile = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('trusted_contact, security_message')
+          .eq('id', session.user.id)
+          .single();
+
+        if (error) throw error;
+
+        if (data) {
+          setTrustedContact(data.trusted_contact);
+          if (data.security_message) {
+            setSecurityMessage(data.security_message);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching profile for security:', error);
+      }
+    };
+
+    fetchProfile();
+  }, [session]);
 
   const handlePrevWeek = () => setCurrentDate(addDays(currentDate, -7));
   const handleNextWeek = () => setCurrentDate(addDays(currentDate, 7));
@@ -390,12 +424,14 @@ export const StudentLessons: React.FC = () => {
 
   const handleSecurityClick = () => {
     setIsLocating(true);
-    const savedContact = localStorage.getItem('ab_student_trusted_contact') || '';
-    const savedMessage = localStorage.getItem('ab_student_default_message') || 'Estou em aula agora e compartilho minha localização.';
-    const cleanContact = savedContact.replace(/\D/g, '');
+    
+    // Use state data instead of localStorage
+    const contact = trustedContact || '';
+    const cleanContact = contact.replace(/\D/g, '');
 
     if (!cleanContact) {
         addToast("Você precisa cadastrar um contato de confiança no seu Perfil primeiro.", 'warning');
+        setIsLocating(false);
         navigate('/student/profile');
         return;
     }
@@ -410,14 +446,19 @@ export const StudentLessons: React.FC = () => {
       (position) => {
         const { latitude, longitude } = position.coords;
         const mapsLink = `https://maps.google.com/?q=${latitude},${longitude}`;
-        const text = `${savedMessage}\n\nMinha localização atual:\n${mapsLink}`;
+        const text = `${securityMessage}\n\nMinha localização atual:\n${mapsLink}`;
         const encodedText = encodeURIComponent(text);
-        const waLink = `https://wa.me/55${cleanContact}?text=${encodedText}`;
+        
+        // Ensure country code
+        const fullContact = cleanContact.startsWith('55') ? cleanContact : `55${cleanContact}`;
+        
+        const waLink = `https://wa.me/${fullContact}?text=${encodedText}`;
         window.open(waLink, '_blank');
         setIsLocating(false);
       },
       (error) => {
-        addToast("Não foi possível obter a localização.", 'error');
+        console.error("Geolocation error:", error);
+        addToast("Não foi possível obter a localização. Verifique as permissões do navegador.", 'error');
         setIsLocating(false);
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -428,10 +469,6 @@ export const StudentLessons: React.FC = () => {
      const clean = whatsapp.replace(/\D/g, '');
      const full = clean.startsWith('55') ? clean : `55${clean}`;
      window.open(`https://wa.me/${full}`, '_blank');
-  };
-
-  const navigate = (path: string) => {
-      window.location.hash = path;
   };
 
   // --- GROUPING LOGIC ---

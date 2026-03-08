@@ -31,10 +31,11 @@ alter table public.appointments enable row level security;
 
 -- Policies for appointments
 
--- 1. View: Users can view their own appointments (Instrutor sees all theirs, Student sees all theirs)
-create policy "Users can view their own appointments"
+-- 1. View: Authenticated users can view all appointments (to check availability)
+create policy "Authenticated users can view all appointments"
 on public.appointments for select
-using (auth.uid() = student_id OR auth.uid() = instructor_id);
+to authenticated
+using (true);
 
 -- 2. Insert (Student): Can book if they are the student_id
 create policy "Students can book appointments"

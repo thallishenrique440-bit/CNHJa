@@ -352,7 +352,7 @@ export const StudentInstructorProfile: React.FC = () => {
     ];
 
     if (instructor?.hasNightLessons) {
-      slots.push('18:00', '18:50', '19:40', '20:30', '21:20');
+      slots.push('18:00', '18:50', '19:40', '20:30', '21:20', '22:10');
     }
     return slots;
   }, [instructor?.hasNightLessons]);
