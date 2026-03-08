@@ -5,6 +5,7 @@ import { StudentBottomNav } from '../components/StudentBottomNav';
 import { RatingBadge } from '../components/RatingBadge';
 import { supabase } from '../lib/supabase';
 import { CitySelect } from '../components/CitySelect';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Vehicle {
   type: 'car' | 'bike';
@@ -41,6 +42,7 @@ interface Instructor {
 
 export const StudentHome: React.FC = () => {
   const navigate = useNavigate();
+  const { session } = useAuth();
   
   // Search state
   const [searchText, setSearchText] = useState(''); // Name or ID
@@ -53,8 +55,13 @@ export const StudentHome: React.FC = () => {
   // --- FETCH DATA ---
   useEffect(() => {
     fetchInstructors();
-    loadFavorites();
   }, []);
+
+  useEffect(() => {
+    if (session?.user?.id) {
+      loadFavorites();
+    }
+  }, [session?.user?.id]);
 
   const fetchInstructors = async () => {
     setLoading(true);
@@ -103,23 +110,66 @@ export const StudentHome: React.FC = () => {
     }
   };
 
-  const loadFavorites = () => {
-    const saved = localStorage.getItem('ab_student_favorites');
-    if (saved) setFavorites(JSON.parse(saved));
+  const loadFavorites = async () => {
+    if (!session?.user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('student_favorites')
+        .select('instructor_id')
+        .eq('student_id', session.user.id);
+        
+      if (error) throw error;
+      
+      if (data) {
+        setFavorites(data.map(fav => fav.instructor_id));
+      }
+    } catch (error) {
+      console.error('Error loading favorites:', error);
+    }
   };
 
-  const toggleFavorite = (id: string, e: React.MouseEvent) => {
+  const toggleFavorite = async (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     
+    if (!session?.user?.id) return;
+
+    const isCurrentlyFavorite = favorites.includes(id);
+    
+    // Optimistic UI update
     let newFavs;
-    if (favorites.includes(id)) {
+    if (isCurrentlyFavorite) {
       newFavs = favorites.filter(fav => fav !== id);
     } else {
       newFavs = [...favorites, id];
     }
     setFavorites(newFavs);
-    localStorage.setItem('ab_student_favorites', JSON.stringify(newFavs));
+    
+    // Database update
+    try {
+      if (isCurrentlyFavorite) {
+        const { error } = await supabase
+          .from('student_favorites')
+          .delete()
+          .eq('student_id', session.user.id)
+          .eq('instructor_id', id);
+          
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('student_favorites')
+          .insert({
+            student_id: session.user.id,
+            instructor_id: id
+          });
+          
+        if (error) throw error;
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+      // Revert optimistic update on error
+      loadFavorites();
+    }
   };
 
   // --- FILTERING LOGIC ---
@@ -143,6 +193,13 @@ export const StudentHome: React.FC = () => {
     // 3. Search by Name (Partial, Case-Insensitive)
     const nameMatch = inst.profiles.full_name?.toLowerCase().includes(term.toLowerCase());
     return nameMatch;
+  }).sort((a, b) => {
+    const isAFav = favorites.includes(a.id);
+    const isBFav = favorites.includes(b.id);
+    
+    if (isAFav && !isBFav) return -1;
+    if (!isAFav && isBFav) return 1;
+    return 0;
   });
 
   // Helper to format currency
@@ -250,31 +307,48 @@ export const StudentHome: React.FC = () => {
             const lowestPrice = getLowestPrice(inst);
 
             return (
-              <div key={inst.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col space-y-3 relative overflow-hidden transition-all hover:shadow-md active:scale-[0.99]">
+              <div 
+                key={inst.id} 
+                onClick={() => navigate(`/student/instructor/${inst.id}`)}
+                className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden transition-all hover:shadow-md active:scale-[0.99] cursor-pointer"
+              >
                 
-                {/* 
-                   STRUCTURAL FIX: 
-                   Replaced absolute positioning with a Flex Header Row to prevent overlapping.
-                */}
-                <div className="flex justify-between items-center w-full mb-1">
-                   {/* ID Badge */}
-                   <div className="flex-shrink-0">
-                      {inst.public_id ? (
-                        <div className="bg-blue-50 text-blue-600 text-[10px] font-bold px-2.5 py-1 rounded-full border border-blue-100">
-                          ID: {inst.public_id}
-                        </div>
+                {/* Top Row: Avatar, Name, Price, Favorite */}
+                <div className="flex justify-between items-start w-full">
+                  <div className="flex items-start flex-1 min-w-0">
+                    {/* Avatar */}
+                    <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-xl border border-gray-50 flex-shrink-0 mr-3 text-gray-400 overflow-hidden">
+                      {inst.profiles.avatar_url ? (
+                          <img src={inst.profiles.avatar_url} alt="" className="w-full h-full object-cover" />
                       ) : (
-                        <div className="h-6"></div> // Spacer to maintain layout height if no ID
+                          "👤"
                       )}
-                   </div>
+                    </div>
+                    
+                    {/* Name & ID */}
+                    <div className="flex flex-col min-w-0 pr-2 pt-0.5">
+                      <h3 className="font-bold text-gray-900 text-base leading-tight truncate">
+                        {inst.profiles.full_name}
+                      </h3>
+                      {inst.public_id && (
+                        <span className="text-[10px] text-gray-400 font-medium mt-0.5">
+                          ID: {inst.public_id}
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-                   {/* Heart Icon */}
-                   <button
+                  {/* Price & Favorite */}
+                  <div className="flex flex-col items-end flex-shrink-0 ml-2">
+                    <div className="flex items-center mb-1">
+                      <span className="text-sm font-bold text-blue-600">{formatCurrency(lowestPrice)}</span>
+                    </div>
+                    <button
                       onClick={(e) => toggleFavorite(inst.id, e)}
-                      className="p-2 rounded-full hover:bg-gray-50 border border-transparent hover:border-gray-100 transition-all focus:outline-none -mr-2 -mt-2"
+                      className="p-1.5 rounded-full hover:bg-gray-50 transition-all focus:outline-none -mr-1.5"
                     >
                       <svg
-                        className={`w-6 h-6 ${isFavorite ? 'text-red-500 fill-current' : 'text-gray-300'}`}
+                        className={`w-5 h-5 ${isFavorite ? 'text-red-500 fill-current' : 'text-gray-300'}`}
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -282,87 +356,51 @@ export const StudentHome: React.FC = () => {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                       </svg>
                     </button>
-                </div>
-
-                {/* 1. Header: Avatar + Info Block */}
-                <div className="flex justify-between items-start">
-                  
-                  {/* Avatar Placeholder */}
-                  <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center text-2xl border border-gray-50 flex-shrink-0 mr-3 text-gray-400 overflow-hidden">
-                    {inst.profiles.avatar_url ? (
-                        <img src={inst.profiles.avatar_url} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                        "👤"
-                    )}
-                  </div>
-                  
-                  {/* Info Block */}
-                  <div className="flex-1 min-w-0 pt-0.5">
-                    <div className="flex justify-between items-start">
-                      <h3 className="font-bold text-gray-900 text-lg leading-tight truncate">
-                        {inst.profiles.full_name}
-                      </h3>
-                    </div>
-
-                    {/* City */}
-                    <p className="text-xs text-gray-500 mt-0.5 leading-none">
-                      {inst.profiles.city || 'Cidade não informada'}
-                    </p>
-
-                    {/* Category & Rating */}
-                    <div className="flex items-center text-sm text-gray-500 mt-2 space-x-2">
-                      <span className="font-medium text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide border border-gray-200">
-                        {getCategoryLabel(inst.categories)}
-                      </span>
-                      
-                      {/* Rating Component */}
-                      <RatingBadge rating={avgRating} count={reviewsCount} variant="compact" />
-                    </div>
                   </div>
                 </div>
 
-                {/* 2. Vehicles */}
-                {(hasCar || hasBike) && (
-                  <div className="flex flex-wrap gap-2">
-                    {hasCar && (
-                      <span className="inline-flex items-center px-2.5 py-1.5 rounded-lg bg-gray-50 text-gray-600 text-[10px] font-medium border border-gray-100">
-                        {carDetails ? `🚘 ${carDetails.model}` : '🚘 Carro'}
-                      </span>
-                    )}
-                    {hasBike && (
-                      <span className="inline-flex items-center px-2.5 py-1.5 rounded-lg bg-gray-50 text-gray-600 text-[10px] font-medium border border-gray-100">
-                        {bikeDetails ? `🏍 ${bikeDetails.model}` : '🏍 Moto'}
-                      </span>
-                    )}
+                {/* Middle Row: Rating & Location */}
+                <div className="flex items-center text-xs text-gray-500 mt-3 space-x-3">
+                  <RatingBadge rating={avgRating} count={reviewsCount} variant="compact" />
+                  
+                  <div className="flex items-center text-gray-500 truncate">
+                    <svg className="w-3.5 h-3.5 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span className="truncate">{inst.profiles.city || 'Cidade não informada'}</span>
                   </div>
-                )}
-                
-                {/* 3. Location Text */}
+                </div>
+
+                {/* Bottom Row: Tags (Category & Vehicles) */}
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  <span className="inline-flex items-center px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-semibold uppercase tracking-wide">
+                    {getCategoryLabel(inst.categories)}
+                  </span>
+                  
+                  {hasCar && (
+                    <span className="inline-flex items-center px-2 py-1 rounded bg-gray-50 text-gray-600 text-[10px] font-medium border border-gray-100">
+                      {carDetails ? `🚘 ${carDetails.model}` : '🚘 Carro'}
+                    </span>
+                  )}
+                  {hasBike && (
+                    <span className="inline-flex items-center px-2 py-1 rounded bg-gray-50 text-gray-600 text-[10px] font-medium border border-gray-100">
+                      {bikeDetails ? `🏍 ${bikeDetails.model}` : '🏍 Moto'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Location Text (Optional, if different from city) */}
                 {inst.location_text && (
-                  <div className="flex items-start text-gray-600">
-                    <span className="mr-1.5 mt-0.5 text-xs">📍</span>
-                    <span className="line-clamp-1 text-xs">{inst.location_text}</span>
+                  <div className="mt-2 text-[10px] text-gray-400 truncate">
+                    Ponto de encontro: {inst.location_text}
                   </div>
                 )}
 
-                {/* Divider */}
-                <div className="border-t border-gray-50 my-1"></div>
-
-                {/* 4. Price & Action */}
-                <div className="flex items-end justify-end">
-                  {/* Price & CTA */}
-                  <div className="flex flex-col items-end">
-                     <div className="flex items-baseline mb-1">
-                        <span className="text-[10px] uppercase font-bold text-gray-400 mr-1">Aula a partir de</span>
-                        <span className="text-lg font-bold text-blue-600">{formatCurrency(lowestPrice)}</span>
-                     </div>
-                     <Button 
-                        variant="primary" 
-                        onClick={() => navigate(`/student/instructor/${inst.id}`)}
-                        className="py-2 px-6 text-sm h-9 min-h-0 shadow-sm shadow-blue-100"
-                      >
-                        Ver agenda
-                      </Button>
+                {/* Action Button */}
+                <div className="mt-4 pt-3 border-t border-gray-50">
+                  <div className="w-full text-center text-sm font-semibold text-blue-600">
+                    Ver agenda e perfil
                   </div>
                 </div>
 
