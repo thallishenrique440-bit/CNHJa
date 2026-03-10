@@ -109,7 +109,7 @@ serve(async (req) => {
       .from('appointments')
       .update({
         status: 'cancelled',
-        payment_status: 'cancelled',
+        payment_status: 'released',
         cancelled_reason: 'instructor_rejected',
         updated_at: new Date().toISOString()
       })

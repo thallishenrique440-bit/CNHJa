@@ -631,33 +631,38 @@ export const StudentLessons: React.FC = () => {
             const isMulti = group.count > 1;
 
             return (
-              <div key={group.ids[0]} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 space-y-3 relative overflow-hidden">
+              <div key={group.ids[0]} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden transition-all hover:shadow-md">
                 
                 {isMulti && (
                   <div className="absolute top-0 left-0 bottom-0 w-1 bg-blue-500"></div>
                 )}
 
-                <div className="flex justify-between items-start pl-1">
-                  <div className="flex items-center space-x-2">
-                      <span className="text-lg font-bold text-gray-900 tracking-tight">
-                        {group.time} – {group.endTime}
+                {/* Header: Time and Status */}
+                <div className="flex justify-between items-start mb-3 pb-3 border-b border-gray-50 pl-1">
+                  <div className="flex flex-col">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-lg font-bold text-gray-900 tracking-tight">
+                          {group.time} – {group.endTime}
+                        </span>
+                        {isMulti && (
+                            <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full border border-blue-200">
+                               {group.count} aulas
+                            </span>
+                        )}
+                      </div>
+                      <span className={`text-[10px] font-semibold mt-0.5 ${isNight ? 'text-indigo-600' : 'text-gray-400'}`}>
+                          {isNight ? '🌙 Noturna' : '☀️ Diurna'}
                       </span>
-                      {isMulti && (
-                          <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full border border-blue-200">
-                             {group.count} aulas
-                          </span>
-                      )}
                   </div>
                   
                   <div className="flex flex-col items-end">
                       {renderStatusBadge(group.status)}
-                      <span className={`text-[10px] font-semibold mt-1 ${isNight ? 'text-indigo-600' : 'text-gray-400'}`}>
-                          {isNight ? '🌙 Noturna' : '☀️ Diurna'}
-                      </span>
                   </div>
                 </div>
 
-                <div className="flex items-center pl-1">
+                {/* Body: Instructor and Location */}
+                <div className="flex items-center mb-3 pl-1">
+                  {/* Avatar */}
                   <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-sm mr-3 border border-gray-100 overflow-hidden shrink-0 text-gray-400">
                     {group.instructorPhoto ? (
                       <img src={group.instructorPhoto} alt="" className="w-full h-full object-cover" />
@@ -665,19 +670,26 @@ export const StudentLessons: React.FC = () => {
                       <span className="text-xl">👤</span>
                     )}
                   </div>
-                  <div className="flex flex-col">
+                  
+                  {/* Name and Location */}
+                  <div className="flex flex-col min-w-0">
                      <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wide leading-none mb-0.5">Instrutor</span>
-                     <span className="font-semibold text-gray-900 leading-tight">{group.instructorName}</span>
+                     <span className="font-semibold text-gray-900 leading-tight truncate">{group.instructorName}</span>
+                     
+                     <div className="flex items-center text-xs text-gray-500 mt-1 truncate">
+                        <svg className="w-3.5 h-3.5 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        <span className="truncate">{group.location}</span>
+                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-start text-sm text-gray-600 pl-1">
-                   <span className="mr-2 text-base">📍</span>
-                   <span className="leading-snug">{group.location}</span>
-                </div>
-
-                <div className="flex items-end justify-between pt-3 mt-2 border-t border-gray-50 pl-1">
+                {/* Footer: Tags and Actions */}
+                <div className="flex items-end justify-between pt-2 pl-1">
                     
+                    {/* Tags */}
                     <div className="flex flex-col gap-1.5">
                        <span className="inline-flex items-center bg-gray-100 border border-gray-200 px-2 py-1 rounded-[6px] text-[10px] font-bold text-gray-600 uppercase tracking-wide w-fit">
                          Categoria {group.lessonCategory}
@@ -690,6 +702,7 @@ export const StudentLessons: React.FC = () => {
                        )}
                     </div>
 
+                    {/* Actions */}
                     <div className="flex items-center gap-2">
                         {/* Cancel Button */}
                         {(group.status === 'scheduled' || group.status === 'pending') && (
@@ -702,6 +715,7 @@ export const StudentLessons: React.FC = () => {
                            </Button>
                         )}
 
+                        {/* WhatsApp Button */}
                         {group.instructorWhatsapp && (group.status === 'scheduled' || group.status === 'in_progress' || group.status === 'pending') && (
                             <button 
                                 onClick={() => handleWhatsappClick(group.instructorWhatsapp!)}
@@ -714,6 +728,7 @@ export const StudentLessons: React.FC = () => {
                             </button>
                         )}
                         
+                        {/* Review Button */}
                         {group.status === 'completed' && !group.isReviewed && (
                             <Button 
                             variant="outline" 
@@ -724,6 +739,7 @@ export const StudentLessons: React.FC = () => {
                             </Button>
                         )}
 
+                        {/* Location/Security Button */}
                         {group.status === 'in_progress' && (
                             <Button
                                 onClick={handleSecurityClick}
