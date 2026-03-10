@@ -69,16 +69,20 @@ export default async function handler(req: any, res: any) {
     // 2. Validate dates (max 7 days in advance)
     const MAX_DAYS_IN_ADVANCE = 7;
     
-    // Get current time in Brazil (UTC-3)
+    // Get current date in Brazil as YYYY-MM-DD string
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
     const now = new Date();
-    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const brazilTime = new Date(utcTime - (3 * 3600000));
+    const todayString = formatter.format(now);
     
-    const today = new Date(brazilTime);
-    today.setHours(0, 0, 0, 0);
-    
-    const maxDate = new Date(today);
-    maxDate.setDate(maxDate.getDate() + MAX_DAYS_IN_ADVANCE);
+    // Calculate maxDate (7 days in advance)
+    const maxDateObj = new Date(now);
+    maxDateObj.setDate(maxDateObj.getDate() + MAX_DAYS_IN_ADVANCE);
+    const maxDateString = formatter.format(maxDateObj);
 
     for (const lesson of lessons) {
       // Use noon UTC to reliably get the day of the week regardless of server timezone
@@ -109,9 +113,8 @@ export default async function handler(req: any, res: any) {
       }
       
       // NEW: Past date check (Date only)
-      const lessonDateOnly = new Date(`${lesson.date}T00:00:00-03:00`);
-      lessonDateOnly.setHours(0, 0, 0, 0);
-      if (lessonDateOnly < today) {
+      const lessonDateString = lesson.date;
+      if (lessonDateString < todayString) {
          return res.status(400).json({ error: 'Não é possível agendar aulas no passado.' });
       }
 
@@ -134,9 +137,9 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      if (lessonDateOnly > maxDate) {
+      if (lessonDateString > maxDateString) {
         return res.status(400).json({ 
-          error: `Agendamentos permitidos apenas para os próximos ${MAX_DAYS_IN_ADVANCE} dias due a regras de pagamento.` 
+          error: `Agendamentos permitidos apenas para os próximos ${MAX_DAYS_IN_ADVANCE} dias devido a regras de pagamento.` 
         });
       }
     }
