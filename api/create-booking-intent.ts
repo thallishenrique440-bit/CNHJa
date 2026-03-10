@@ -68,15 +68,22 @@ export default async function handler(req: any, res: any) {
 
     // 2. Validate dates (max 7 days in advance)
     const MAX_DAYS_IN_ADVANCE = 7;
-    const today = new Date();
+    
+    // Get current time in Brazil (UTC-3)
+    const now = new Date();
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const brazilTime = new Date(utcTime - (3 * 3600000));
+    
+    const today = new Date(brazilTime);
     today.setHours(0, 0, 0, 0);
     
     const maxDate = new Date(today);
     maxDate.setDate(maxDate.getDate() + MAX_DAYS_IN_ADVANCE);
 
     for (const lesson of lessons) {
-      const lessonDate = new Date(lesson.date + 'T00:00:00');
-      const dayOfWeek = lessonDate.getDay(); // 0 = Sunday, 6 = Saturday
+      // Use noon UTC to reliably get the day of the week regardless of server timezone
+      const lessonDateObj = new Date(`${lesson.date}T12:00:00Z`);
+      const dayOfWeek = lessonDateObj.getUTCDay(); // 0 = Sunday, 6 = Saturday
 
       // NEW: Sunday Check
       if (dayOfWeek === 0) {
@@ -102,23 +109,32 @@ export default async function handler(req: any, res: any) {
       }
       
       // NEW: Past date check (Date only)
-      if (lessonDate < today) {
+      const lessonDateOnly = new Date(`${lesson.date}T00:00:00-03:00`);
+      lessonDateOnly.setHours(0, 0, 0, 0);
+      if (lessonDateOnly < today) {
          return res.status(400).json({ error: 'Não é possível agendar aulas no passado.' });
       }
 
       // NEW: Specific Time Check (Date + Time)
       // Prevent booking if the lesson time has already passed or is within 2 minutes
-      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00`);
-      const nowBuffer = new Date();
-      nowBuffer.setMinutes(nowBuffer.getMinutes() + 2); // 2 minutes buffer for latency/processing
+      // Assume lesson time is in America/Sao_Paulo (UTC-3)
+      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
+      
+      const diffMs = lessonDateTime.getTime() - now.getTime();
+      const diffMinutes = diffMs / (1000 * 60);
 
-      if (lessonDateTime <= nowBuffer) {
+      if (diffMinutes <= 2) {
         return res.status(400).json({ 
-          error: 'Um ou mais horários selecionados já passaram ou estão muito próximos para reserva.' 
+          error: 'Um ou mais horários selecionados já passaram.' 
+        });
+      } else if (diffMinutes <= 10) {
+        return res.status(409).json({ 
+          errorCode: 'TOO_CLOSE',
+          error: 'Horário muito próximo para agendamento automático.' 
         });
       }
 
-      if (lessonDate > maxDate) {
+      if (lessonDateOnly > maxDate) {
         return res.status(400).json({ 
           error: `Agendamentos permitidos apenas para os próximos ${MAX_DAYS_IN_ADVANCE} dias due a regras de pagamento.` 
         });

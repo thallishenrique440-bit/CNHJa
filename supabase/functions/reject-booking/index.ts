@@ -67,41 +67,41 @@ serve(async (req) => {
       )
     }
 
-    if (appointment.status !== 'pending_approval') {
+    if (appointment.status !== 'pending_approval' && appointment.status !== 'pending') {
       throw new Error(`Invalid status change: Cannot reject appointment with status '${appointment.status}'`)
     }
 
-    if (!appointment.payment_intent_id) {
-      throw new Error('Critical: Appointment has no PaymentIntent ID')
-    }
+    // 4. Act (Stripe): Cancel Payment Intent (if exists)
+    if (appointment.payment_intent_id) {
+      try {
+        await stripe.paymentIntents.cancel(
+          appointment.payment_intent_id,
+          {
+            idempotencyKey: `cancel_${appointment.id}`,
+          }
+        )
+      } catch (stripeError: any) {
+        console.error('Stripe Cancel Error:', stripeError)
 
-    // 4. Act (Stripe): Cancel Payment Intent
-    try {
-      await stripe.paymentIntents.cancel(
-        appointment.payment_intent_id,
-        {
-          idempotencyKey: `cancel_${appointment.id}`,
-        }
-      )
-    } catch (stripeError: any) {
-      console.error('Stripe Cancel Error:', stripeError)
+        // Robust Error Handling
+        if (stripeError.code === 'payment_intent_unexpected_state') {
+          const retrievedIntent = await stripe.paymentIntents.retrieve(appointment.payment_intent_id)
 
-      // Robust Error Handling
-      if (stripeError.code === 'payment_intent_unexpected_state') {
-        const retrievedIntent = await stripe.paymentIntents.retrieve(appointment.payment_intent_id)
-
-        if (retrievedIntent.status === 'canceled') {
-          // Already canceled. Proceed.
-          console.log('PaymentIntent was already canceled. Proceeding.')
-        } else if (retrievedIntent.status === 'succeeded') {
-          // CRITICAL: Money already captured. Cannot reject.
-          throw new Error('Payment already captured. Cannot reject. Please use refund flow.')
+          if (retrievedIntent.status === 'canceled') {
+            // Already canceled. Proceed.
+            console.log('PaymentIntent was already canceled. Proceeding.')
+          } else if (retrievedIntent.status === 'succeeded') {
+            // CRITICAL: Money already captured. Cannot reject.
+            throw new Error('Payment already captured. Cannot reject. Please use refund flow.')
+          } else {
+             throw stripeError
+          }
         } else {
-           throw stripeError
+          throw stripeError
         }
-      } else {
-        throw stripeError
       }
+    } else {
+      console.log('No PaymentIntent ID found. Skipping Stripe cancellation.')
     }
 
     // 5. Persist (DB): Update Status with Optimistic Locking
@@ -114,7 +114,7 @@ serve(async (req) => {
         updated_at: new Date().toISOString()
       })
       .eq('id', appointment.id)
-      .eq('status', 'pending_approval') // Optimistic Lock
+      .in('status', ['pending_approval', 'pending']) // Optimistic Lock
       .select()
       .single()
 

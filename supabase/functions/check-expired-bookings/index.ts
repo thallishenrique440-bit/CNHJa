@@ -20,6 +20,21 @@ serve(async (req) => {
     // status = 'pending_approval' AND expires_at < now()
     const now = new Date().toISOString()
     
+    // 1.5 Clean up abandoned checkouts (awaiting_payment)
+    console.log("🧹 Cleaning up abandoned checkouts (awaiting_payment)...")
+    const { data: abandonedBookings, error: deleteError } = await supabaseAdmin
+      .from('appointments')
+      .delete()
+      .eq('status', 'awaiting_payment')
+      .lt('expires_at', now)
+      .select('id')
+
+    if (deleteError) {
+      console.error("❌ Error deleting abandoned bookings:", deleteError)
+    } else if (abandonedBookings && abandonedBookings.length > 0) {
+      console.log(`✅ Cleaned up ${abandonedBookings.length} abandoned checkouts.`)
+    }
+
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, status, purchase_id')
@@ -34,7 +49,10 @@ serve(async (req) => {
     console.log(`Found ${expiredBookings?.length || 0} expired bookings to process.`)
 
     if (!expiredBookings || expiredBookings.length === 0) {
-      return new Response(JSON.stringify({ message: 'No expired bookings found.' }), {
+      return new Response(JSON.stringify({ 
+        message: 'No expired bookings found.',
+        abandoned_cleaned: abandonedBookings?.length || 0
+      }), {
         headers: { 'Content-Type': 'application/json' },
       })
     }
@@ -119,8 +137,9 @@ serve(async (req) => {
     const successCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).status === 'expired_success').length
     const skippedCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
     const failCount = results.filter(r => r.status === 'rejected').length
+    const abandonedCount = abandonedBookings?.length || 0
 
-    console.log(`🏁 Job finished. Success: ${successCount}, Skipped: ${skippedCount}, Failed: ${failCount}`)
+    console.log(`🏁 Job finished. Success: ${successCount}, Skipped: ${skippedCount}, Failed: ${failCount}, Abandoned Cleaned: ${abandonedCount}`)
 
     return new Response(
       JSON.stringify({ 
@@ -129,6 +148,7 @@ serve(async (req) => {
         success: successCount,
         skipped: skippedCount,
         failed: failCount,
+        abandoned_cleaned: abandonedCount,
         results 
       }),
       { headers: { 'Content-Type': 'application/json' } }
