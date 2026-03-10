@@ -169,8 +169,14 @@ export const StudentLessons: React.FC = () => {
             
             const hasReview = apt.reviews && apt.reviews.length > 0;
 
-            if (apt.status === 'pending') {
-               displayStatus = 'pending';
+            if (apt.status === 'expired' || apt.status === 'rejected' || apt.status === 'cancelled') {
+               displayStatus = 'cancelled';
+            } else if (apt.status === 'pending' || apt.status === 'pending_approval') {
+               if (now >= lessonStartDateTime) {
+                  displayStatus = 'cancelled';
+               } else {
+                  displayStatus = 'pending';
+               }
             } else if (apt.status === 'completed') {
                displayStatus = 'completed';
             } else if (apt.status === 'scheduled' || apt.status === 'confirmed') {

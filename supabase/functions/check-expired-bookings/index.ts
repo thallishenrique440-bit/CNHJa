@@ -17,7 +17,7 @@ serve(async (req) => {
     console.log("⏰ Starting check-expired-bookings cron job...")
 
     // 1. Find expired bookings
-    // status = 'pending_approval' AND expires_at < now()
+    // status IN ('pending', 'pending_approval') AND expires_at < now()
     const now = new Date().toISOString()
     
     // 1.5 Clean up abandoned checkouts (awaiting_payment)
@@ -38,7 +38,7 @@ serve(async (req) => {
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, status, purchase_id')
-      .eq('status', 'pending_approval')
+      .in('status', ['pending', 'pending_approval'])
       .lt('expires_at', now)
 
     if (fetchError) {
@@ -108,7 +108,7 @@ serve(async (req) => {
           updated_at: new Date().toISOString()
         })
         .eq('id', id)
-        .eq('status', 'pending_approval') // Optimistic locking
+        .in('status', ['pending', 'pending_approval']) // Optimistic locking
 
       if (updateAptError) {
         console.error(`❌ Failed to update appointment ${id}:`, updateAptError)
