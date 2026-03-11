@@ -405,7 +405,7 @@ export const StudentLessons: React.FC = () => {
         .update({ 
           status: 'cancelled',
           cancelled_by: 'student',
-          cancelled_reason: 'Cancelado pelo aluno via app (>24h ou pendente)'
+          cancelled_reason: 'user_cancelled'
         })
         .in('id', lessonToCancel.ids);
 

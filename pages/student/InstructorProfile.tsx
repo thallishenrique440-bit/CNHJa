@@ -289,7 +289,7 @@ export const StudentInstructorProfile: React.FC = () => {
              // 1. Query all appointments for this instructor on this date
              const { data: instructorData, error: instructorError } = await supabase
                 .from('appointments')
-                .select('start_time, status')
+                .select('start_time, status, student_id')
                 .eq('instructor_id', instructor.id)
                 .eq('date', dateKey)
                 .not('status', 'in', '("cancelled","failed","rejected","expired")'); 
@@ -310,11 +310,21 @@ export const StudentInstructorProfile: React.FC = () => {
              let existingCount = 0;
 
              if (instructorData) {
-                 instructorData.forEach(apt => busySlotsSet.add(apt.start_time.substring(0, 5)));
+                 instructorData.forEach(apt => {
+                     // Allow the student to retry booking their own abandoned checkouts
+                     if ((apt.status === 'awaiting_payment' || apt.status === 'reserved') && apt.student_id === session.user.id) {
+                         return; // Do not mark as busy
+                     }
+                     busySlotsSet.add(apt.start_time.substring(0, 5));
+                 });
              }
              
              if (studentData) {
                  studentData.forEach(apt => {
+                     // Allow the student to retry booking their own abandoned checkouts for this instructor
+                     if (apt.instructor_id === instructor.id && (apt.status === 'awaiting_payment' || apt.status === 'reserved')) {
+                         return; // Do not mark as busy or count as existing
+                     }
                      busySlotsSet.add(apt.start_time.substring(0, 5));
                      if (apt.instructor_id === instructor.id) {
                          existingCount++;
@@ -654,24 +664,34 @@ export const StudentInstructorProfile: React.FC = () => {
       
       const { data: refreshedInstructorData } = await supabase
          .from('appointments')
-         .select('start_time')
+         .select('start_time, status, student_id')
          .eq('instructor_id', instructor.id)
          .eq('date', dateKey)
          .not('status', 'in', '("cancelled","failed","rejected","expired")');
          
       const { data: refreshedStudentData } = await supabase
          .from('appointments')
-         .select('start_time')
+         .select('start_time, status, instructor_id')
          .eq('student_id', session?.user?.id)
          .eq('date', dateKey)
          .not('status', 'in', '("cancelled","failed","rejected","expired")');
 
       const busySlotsSet = new Set<string>();
       if (refreshedInstructorData) {
-          refreshedInstructorData.forEach(apt => busySlotsSet.add(apt.start_time.substring(0, 5)));
+          refreshedInstructorData.forEach(apt => {
+              if ((apt.status === 'awaiting_payment' || apt.status === 'reserved') && apt.student_id === session?.user?.id) {
+                  return;
+              }
+              busySlotsSet.add(apt.start_time.substring(0, 5));
+          });
       }
       if (refreshedStudentData) {
-          refreshedStudentData.forEach(apt => busySlotsSet.add(apt.start_time.substring(0, 5)));
+          refreshedStudentData.forEach(apt => {
+              if (apt.instructor_id === instructor.id && (apt.status === 'awaiting_payment' || apt.status === 'reserved')) {
+                  return;
+              }
+              busySlotsSet.add(apt.start_time.substring(0, 5));
+          });
       }
       setBusySlots(Array.from(busySlotsSet));
     }
@@ -689,9 +709,32 @@ export const StudentInstructorProfile: React.FC = () => {
     window.open(`https://wa.me/${fullNumber}`, '_blank', 'noopener,noreferrer');
   };
 
-  const handleWhatsAppContact = () => {
+  const handleWhatsAppContact = async () => {
     if (!instructor?.whatsapp) return;
     
+    // Release any temporary reservations for these slots
+    if (selectedSlots.length > 0 && session?.user?.id) {
+      const dates = selectedSlots.map(s => s.date);
+      const times = selectedSlots.map(s => s.time);
+      
+      try {
+        await supabase
+          .from('appointments')
+          .update({
+            status: 'failed',
+            payment_status: 'failed',
+            cancelled_reason: 'user_contacted_instructor'
+          })
+          .eq('instructor_id', instructor.id)
+          .in('date', dates)
+          .in('start_time', times)
+          .eq('student_id', session.user.id)
+          .in('status', ['reserved', 'pending', 'awaiting_payment']);
+      } catch (err) {
+        console.error("Error releasing slots before WhatsApp contact:", err);
+      }
+    }
+
     const cleanNumber = instructor.whatsapp.replace(/\D/g, '');
     if (cleanNumber.length < 10) return;
     const fullNumber = cleanNumber.startsWith('55') ? cleanNumber : `55${cleanNumber}`;

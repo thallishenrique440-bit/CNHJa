@@ -148,6 +148,7 @@ export default async function handler(req: any, res: any) {
             .update({
               status: 'failed',
               payment_status: 'failed',
+              cancelled_reason: 'payment_failed'
             })
             .eq('purchase_id', purchaseId);
         }

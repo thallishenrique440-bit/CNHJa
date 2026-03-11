@@ -160,6 +160,23 @@ export default async function handler(req: any, res: any) {
     const groupId = uuidv4();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
 
+    // 3.5 Cleanup previous abandoned checkouts by the same user for the same slots
+    const dates = lessons.map((l: any) => l.date);
+    const times = lessons.map((l: any) => l.startTime);
+    
+    await supabase
+        .from('appointments')
+        .update({
+            status: 'failed',
+            payment_status: 'failed',
+            cancelled_reason: 'user_retry_new_attempt'
+        })
+        .eq('instructor_id', instructorId)
+        .in('date', dates)
+        .in('start_time', times)
+        .eq('student_id', studentId)
+        .in('status', ['reserved', 'pending', 'awaiting_payment']);
+
     // 4. Create appointments in DB (awaiting_payment)
     const appointmentsToInsert = lessons.map((lesson: any) => ({
       instructor_id: instructorId,
