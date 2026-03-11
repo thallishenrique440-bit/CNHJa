@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 // --- Types ---
-type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled' | 'completed';
+type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled' | 'completed' | 'expired' | 'rejected';
 type DisplayStatus = LessonStatus | 'in_progress' | 'finished' | 'past_free' | 'expired' | 'past_pending' | 'cancelled_view' | 'unavailable';
 
 interface Lesson {
@@ -363,7 +363,7 @@ export const InstructorAgenda: React.FC = () => {
 
     if (timeState === 'current') {
         if (lesson.status === 'confirmed') return 'in_progress';
-        if (lesson.status === 'pending') return 'pending';
+        if (lesson.status === 'pending') return 'expired';
         if (lesson.status === 'blocked') return 'blocked';
         return 'free'; 
     }
@@ -420,7 +420,7 @@ export const InstructorAgenda: React.FC = () => {
   }, [selectedDate, appointments, lunchConfig, dynamicSlots]);
 
   const handleSlotClick = (slot: TimeSlot, lesson: Lesson, status: DisplayStatus) => {
-    if (status === 'lunch' || status === 'past_free' || status === 'expired' || status === 'unavailable') return;
+    if (status === 'lunch' || status === 'past_free' || status === 'unavailable') return;
 
     switch (status) {
       case 'free': toggleBlock(slot.start, 'block'); break;
@@ -438,6 +438,9 @@ export const InstructorAgenda: React.FC = () => {
       case 'past_pending':
       case 'cancelled_view':
         openLessonModal(lesson);
+        break;
+      case 'expired':
+        openLessonModal({ ...lesson, status: 'expired' });
         break;
     }
   };

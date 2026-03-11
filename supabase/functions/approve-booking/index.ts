@@ -46,7 +46,7 @@ serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time')
       .eq('id', appointment_id)
       .single()
 
@@ -75,6 +75,44 @@ serve(async (req) => {
 
     if (!appointment.payment_intent_id) {
       throw new Error('Critical: Appointment has no PaymentIntent ID')
+    }
+
+    // Check if the lesson start time has already passed
+    const [year, month, day] = appointment.date.split('-').map(Number)
+    const [hours, minutes] = appointment.start_time.split(':').map(Number)
+    // Assume Brazil time (UTC-3) for the lesson start time
+    const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes))
+    const nowUTC = new Date()
+
+    if (nowUTC >= lessonStartUTC) {
+      console.log(`Lesson ${appointment.id} has already started. Auto-expiring...`)
+      
+      // 1. Cancel Stripe PaymentIntent
+      try {
+        await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
+          idempotencyKey: `auto_expire_start_${appointment.id}`
+        })
+      } catch (stripeError: any) {
+        if (stripeError.code !== 'payment_intent_unexpected_state') {
+          console.error('Failed to cancel Stripe PaymentIntent during auto-expiration:', stripeError)
+        }
+      }
+
+      // 2. Update DB
+      await adminClient
+        .from('appointments')
+        .update({
+          status: 'expired',
+          payment_status: 'released',
+          cancelled_reason: 'auto_expired_start_time',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', appointment.id)
+
+      return new Response(
+        JSON.stringify({ error: 'Esta aula já expirou e não pode mais ser aceita.', code: 'AUTH_EXPIRED' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     // 4. Act (Stripe): Capture Funds

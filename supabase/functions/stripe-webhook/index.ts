@@ -108,9 +108,22 @@ Deno.serve(async (req: Request) => {
         if (purchaseId) {
            console.log(`🔒 Amount Capturable Updated (Auth) for Purchase ID: ${purchaseId}`);
            
-           // 1. Update Appointments -> pending_approval / authorized
-           const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+           // Fetch appointments to determine the start time
+           const { data: apts } = await supabaseAdmin
+             .from("appointments")
+             .select("date, start_time")
+             .eq("purchase_id", purchaseId);
+
+           let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
+           if (apts && apts.length > 0) {
+              const [year, month, day] = apts[0].date.split('-').map(Number);
+              const [hours, minutes] = apts[0].start_time.split(':').map(Number);
+              // Assume Brazil time (UTC-3) for the lesson start time
+              const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes));
+              expiresAt = lessonStartUTC.toISOString();
+           }
            
+           // 1. Update Appointments -> pending_approval / authorized
            const { data: updatedData, error: aptError } = await supabaseAdmin
              .from("appointments")
              .update({
@@ -174,7 +187,20 @@ Deno.serve(async (req: Request) => {
         } else {
             console.warn(`⚠️ Missing purchase_id in metadata. Trying to find by payment_intent_id: ${paymentIntentId}`);
             
-            const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+            // Fetch appointments to determine the start time
+            const { data: apts } = await supabaseAdmin
+              .from("appointments")
+              .select("date, start_time")
+              .eq("payment_intent_id", paymentIntentId);
+
+            let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
+            if (apts && apts.length > 0) {
+               const [year, month, day] = apts[0].date.split('-').map(Number);
+               const [hours, minutes] = apts[0].start_time.split(':').map(Number);
+               // Assume Brazil time (UTC-3) for the lesson start time
+               const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes));
+               expiresAt = lessonStartUTC.toISOString();
+            }
             
             // Fallback: Update by PaymentIntent ID
             const { data: updatedData, error: aptError } = await supabaseAdmin

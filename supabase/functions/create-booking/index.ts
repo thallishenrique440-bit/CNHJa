@@ -123,7 +123,7 @@ Deno.serve(async (req: any) => {
         .eq('student_id', user.id)
         .in('status', ['reserved', 'pending']); 
 
-    // 7. Verificar Disponibilidade (Double booking check)
+    // 7. Verificar Disponibilidade (Double booking check - Instrutor)
     // Agora verificamos se sobrou algum bloqueio REAL (de OUTROS usuários ou confirmados)
     const { data: busySlots, error: busyError } = await supabaseAdmin
       .from('appointments')
@@ -131,8 +131,7 @@ Deno.serve(async (req: any) => {
       .eq('instructor_id', instructor_id)
       .in('date', dates)
       .in('start_time', times)
-      .neq('status', 'cancelled')
-      .neq('status', 'failed') // Importante: ignoramos os que acabamos de falhar
+      .not('status', 'in', '("cancelled","failed","rejected","expired")') // Importante: ignoramos os que não ocupam a agenda
     
     if (busyError) throw busyError;
 
@@ -141,6 +140,59 @@ Deno.serve(async (req: any) => {
         JSON.stringify({ error: 'Alguns horários já foram reservados por outro aluno.', busySlots }),
         { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
+    }
+
+    // 7.5 Verificar Disponibilidade (Double booking check - Aluno)
+    // Impede que o aluno reserve aulas no mesmo horário com instrutores diferentes
+    const { data: studentBusySlots, error: studentBusyError } = await supabaseAdmin
+      .from('appointments')
+      .select('date, start_time')
+      .eq('student_id', user.id)
+      .in('date', dates)
+      .in('start_time', times)
+      .not('status', 'in', '("cancelled","failed","rejected","expired")');
+    
+    if (studentBusyError) throw studentBusyError;
+
+    if (studentBusySlots && studentBusySlots.length > 0) {
+      return new Response(
+        JSON.stringify({ error: 'Você já possui uma aula agendada neste mesmo horário.', busySlots: studentBusySlots }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // 7.8 Verificar limite de aulas por dia (Máximo 3 por instrutor)
+    const requestedSlotsByDate: Record<string, number> = {};
+    for (const slot of slots) {
+      requestedSlotsByDate[slot.date] = (requestedSlotsByDate[slot.date] || 0) + 1;
+    }
+
+    const { data: existingAppointments, error: existingAppointmentsError } = await supabaseAdmin
+      .from('appointments')
+      .select('date')
+      .eq('student_id', user.id)
+      .eq('instructor_id', instructor_id)
+      .in('date', Object.keys(requestedSlotsByDate))
+      .not('status', 'in', '("cancelled","failed","rejected","expired")');
+
+    if (existingAppointmentsError) throw existingAppointmentsError;
+
+    const existingSlotsByDate: Record<string, number> = {};
+    if (existingAppointments) {
+      for (const apt of existingAppointments) {
+        existingSlotsByDate[apt.date] = (existingSlotsByDate[apt.date] || 0) + 1;
+      }
+    }
+
+    for (const date of Object.keys(requestedSlotsByDate)) {
+      const existing = existingSlotsByDate[date] || 0;
+      const requested = requestedSlotsByDate[date];
+      if (existing + requested > 3) {
+        return new Response(
+          JSON.stringify({ error: 'Você pode agendar no máximo 3 aulas por dia com este instrutor.' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
     }
 
     // 8. Buscar dados do instrutor e CONTA STRIPE

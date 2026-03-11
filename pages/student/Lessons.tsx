@@ -8,7 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 
 // --- Types ---
-type LessonStatus = 'scheduled' | 'pending' | 'completed' | 'cancelled' | 'in_progress';
+type LessonStatus = 'scheduled' | 'pending' | 'completed' | 'cancelled' | 'in_progress' | 'expired' | 'rejected';
 
 interface Lesson {
   id: string;
@@ -169,11 +169,15 @@ export const StudentLessons: React.FC = () => {
             
             const hasReview = apt.reviews && apt.reviews.length > 0;
 
-            if (apt.status === 'expired' || apt.status === 'rejected' || apt.status === 'cancelled') {
+            if (apt.status === 'expired') {
+               displayStatus = 'expired';
+            } else if (apt.status === 'rejected') {
+               displayStatus = 'rejected';
+            } else if (apt.status === 'cancelled') {
                displayStatus = 'cancelled';
             } else if (apt.status === 'pending' || apt.status === 'pending_approval') {
                if (now >= lessonStartDateTime) {
-                  displayStatus = 'cancelled';
+                  displayStatus = 'expired';
                } else {
                   displayStatus = 'pending';
                }
@@ -568,6 +572,12 @@ export const StudentLessons: React.FC = () => {
         return <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-1 rounded animate-pulse">Em andamento</span>;
       case 'completed': 
         return <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded">Concluída</span>;
+      case 'expired':
+        return <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-1 rounded">Solicitação expirada</span>;
+      case 'rejected':
+        return <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded">Instrutor recusou</span>;
+      case 'cancelled':
+        return <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded">Cancelada</span>;
       default: return null;
     }
   };

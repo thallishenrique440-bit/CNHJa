@@ -279,6 +279,13 @@ ON public.appointments (instructor_id, date, start_time)
 WHERE status NOT IN ('cancelled', 'failed', 'rejected', 'expired'); 
 -- Adicionamos rejected e expired na lista de EXCLUSÃO, pois esses status liberam a agenda.
 
+DROP INDEX IF EXISTS idx_unique_student_active_slot;
+
+CREATE UNIQUE INDEX idx_unique_student_active_slot
+ON public.appointments (student_id, date, start_time)
+WHERE status NOT IN ('cancelled', 'failed', 'rejected', 'expired') 
+AND student_id IS NOT NULL;
+
 create table if not exists public.instructor_categories (
   id uuid not null default gen_random_uuid() primary key,
   created_at timestamptz not null default now(),

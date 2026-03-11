@@ -61,6 +61,7 @@ export const StudentInstructorProfile: React.FC = () => {
 
   // Real Availability State
   const [busySlots, setBusySlots] = useState<string[]>([]); // Array of "HH:MM"
+  const [existingLessonsCount, setExistingLessonsCount] = useState(0); // Count of lessons with this instructor on selected date
   
   // Modal State
   const [isReviewsModalOpen, setIsReviewsModalOpen] = useState(false);
@@ -279,33 +280,57 @@ export const StudentInstructorProfile: React.FC = () => {
 
   // --- FETCH AVAILABILITY FOR SELECTED DATE ---
   useEffect(() => {
-     if (!instructor?.id) return;
+     if (!instructor?.id || !session?.user?.id) return;
 
      const fetchAvailability = async () => {
          const dateKey = getDateKey(selectedDate);
          
          try {
-             // Query all appointments for this instructor on this date
-             const { data, error } = await supabase
+             // 1. Query all appointments for this instructor on this date
+             const { data: instructorData, error: instructorError } = await supabase
                 .from('appointments')
                 .select('start_time, status')
                 .eq('instructor_id', instructor.id)
                 .eq('date', dateKey)
-                .neq('status', 'cancelled'); 
+                .not('status', 'in', '("cancelled","failed","rejected","expired")'); 
 
-             if (error) throw error;
+             if (instructorError) throw instructorError;
 
-             if (data) {
-                 const busy = data.map(apt => apt.start_time.substring(0, 5));
-                 setBusySlots(busy);
+             // 2. Query all appointments for the student on this date (to prevent double booking)
+             const { data: studentData, error: studentError } = await supabase
+                .from('appointments')
+                .select('start_time, status, instructor_id')
+                .eq('student_id', session.user.id)
+                .eq('date', dateKey)
+                .not('status', 'in', '("cancelled","failed","rejected","expired")');
+
+             if (studentError) throw studentError;
+
+             const busySlotsSet = new Set<string>();
+             let existingCount = 0;
+
+             if (instructorData) {
+                 instructorData.forEach(apt => busySlotsSet.add(apt.start_time.substring(0, 5)));
              }
+             
+             if (studentData) {
+                 studentData.forEach(apt => {
+                     busySlotsSet.add(apt.start_time.substring(0, 5));
+                     if (apt.instructor_id === instructor.id) {
+                         existingCount++;
+                     }
+                 });
+             }
+
+             setBusySlots(Array.from(busySlotsSet));
+             setExistingLessonsCount(existingCount);
          } catch (err) {
              console.error("Error fetching availability:", err);
          }
      };
 
      fetchAvailability();
-  }, [selectedDate, instructor]);
+  }, [selectedDate, instructor, session]);
 
 
   // Navigation handlers
@@ -421,8 +446,8 @@ export const StudentInstructorProfile: React.FC = () => {
     }
 
     const dailySlots = newSlots.filter(s => s.startsWith(dateKey));
-    if (dailySlots.length > 3) {
-      addToast("Máximo de 3 aulas por dia.", 'warning');
+    if (dailySlots.length + existingLessonsCount > 3) {
+      addToast("Você pode agendar no máximo 3 aulas por dia com este instrutor.", 'warning');
       return; 
     }
 
@@ -456,10 +481,10 @@ export const StudentInstructorProfile: React.FC = () => {
     const dailySlots = selectedSlots.filter(s => s.startsWith(dateKey));
     
     const isGlobalLimitReached = selectedSlots.length >= 20;
-    const isDailyLimitReached = dailySlots.length >= 3;
+    const isDailyLimitReached = dailySlots.length + existingLessonsCount >= 3;
 
     return { isGlobalLimitReached, isDailyLimitReached };
-  }, [selectedSlots, selectedDate]);
+  }, [selectedSlots, selectedDate, existingLessonsCount]);
 
   const totalPrice = useMemo(() => {
     if (!instructor) return 0;
@@ -626,15 +651,29 @@ export const StudentInstructorProfile: React.FC = () => {
       
       // Refresh slots
       const dateKey = getDateKey(selectedDate);
-      const { data: refreshedData } = await supabase
+      
+      const { data: refreshedInstructorData } = await supabase
          .from('appointments')
          .select('start_time')
          .eq('instructor_id', instructor.id)
          .eq('date', dateKey)
-         .neq('status', 'cancelled');
-      if (refreshedData) {
-          setBusySlots(refreshedData.map(apt => apt.start_time.substring(0, 5)));
+         .not('status', 'in', '("cancelled","failed","rejected","expired")');
+         
+      const { data: refreshedStudentData } = await supabase
+         .from('appointments')
+         .select('start_time')
+         .eq('student_id', session?.user?.id)
+         .eq('date', dateKey)
+         .not('status', 'in', '("cancelled","failed","rejected","expired")');
+
+      const busySlotsSet = new Set<string>();
+      if (refreshedInstructorData) {
+          refreshedInstructorData.forEach(apt => busySlotsSet.add(apt.start_time.substring(0, 5)));
       }
+      if (refreshedStudentData) {
+          refreshedStudentData.forEach(apt => busySlotsSet.add(apt.start_time.substring(0, 5)));
+      }
+      setBusySlots(Array.from(busySlotsSet));
     }
   };
 
@@ -963,7 +1002,7 @@ export const StudentInstructorProfile: React.FC = () => {
                     }
                 }
 
-                const isDisabled = !isAvailable || isPastTime;
+                const isDisabled = !isAvailable || isPastTime || (limits.isDailyLimitReached && !isSelected);
 
                 return (
                   <button
