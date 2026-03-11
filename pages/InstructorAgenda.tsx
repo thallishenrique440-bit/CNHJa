@@ -104,7 +104,7 @@ const getProcessLabel = (val?: string) => {
 };
 
 export const InstructorAgenda: React.FC = () => {
-  const { session } = useAuth();
+  const { session, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(getStartOfWeek(new Date()));
@@ -378,7 +378,7 @@ export const InstructorAgenda: React.FC = () => {
   };
 
   const sortedSlots = useMemo(() => {
-    const now = new Date();
+    const now = new Date(Date.now() + serverTimeOffset);
     const isToday = selectedDate.toDateString() === now.toDateString();
     
     let currentMins = -1;
@@ -525,7 +525,12 @@ export const InstructorAgenda: React.FC = () => {
             body: { appointment_id: selectedLesson.id }
         });
 
-        if (error) throw error;
+        if (error) {
+            if (error.status === 409) {
+                throw new Error('STATUS_CHANGED');
+            }
+            throw error;
+        }
         
         // Handle application-level errors from the function
         if (data?.error) {
@@ -562,6 +567,11 @@ export const InstructorAgenda: React.FC = () => {
                 });
              }
              closeLessonModal();
+        } else if (err.message === 'STATUS_CHANGED' || err.message.includes('Invalid status change')) {
+             addToast("Esta aula já foi atualizada ou cancelada pelo aluno.", 'error');
+             closeLessonModal();
+             // Reload appointments to get fresh state
+             fetchAppointments(viewDate);
         } else {
              addToast("Erro ao confirmar: " + err.message, 'error');
         }
@@ -581,7 +591,12 @@ export const InstructorAgenda: React.FC = () => {
             body: { appointment_id: selectedLesson.id }
         });
 
-        if (error) throw error;
+        if (error) {
+            if (error.status === 409) {
+                throw new Error('STATUS_CHANGED');
+            }
+            throw error;
+        }
         if (data?.error) throw new Error(data.error);
 
         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
@@ -598,7 +613,13 @@ export const InstructorAgenda: React.FC = () => {
 
     } catch (err: any) {
         console.error("Error rejecting:", err);
-        addToast("Erro ao recusar: " + err.message, 'error');
+        if (err.message === 'STATUS_CHANGED' || err.message.includes('Invalid status change')) {
+            addToast("Esta aula já foi atualizada ou cancelada pelo aluno.", 'error');
+            closeLessonModal();
+            fetchAppointments(viewDate);
+        } else {
+            addToast("Erro ao recusar: " + err.message, 'error');
+        }
     } finally {
         setIsActionLoading(false);
     }

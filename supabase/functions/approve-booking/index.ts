@@ -46,7 +46,7 @@ serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc')
       .eq('id', appointment_id)
       .single()
 
@@ -78,10 +78,15 @@ serve(async (req) => {
     }
 
     // Check if the lesson start time has already passed
-    const [year, month, day] = appointment.date.split('-').map(Number)
-    const [hours, minutes] = appointment.start_time.split(':').map(Number)
-    // Assume Brazil time (UTC-3) for the lesson start time
-    const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes))
+    let lessonStartUTC: Date;
+    if (appointment.start_time_utc) {
+      lessonStartUTC = new Date(appointment.start_time_utc);
+    } else {
+      // Fallback for older records
+      const [year, month, day] = appointment.date.split('-').map(Number)
+      const [hours, minutes] = appointment.start_time.split(':').map(Number)
+      lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes))
+    }
     const nowUTC = new Date()
 
     if (nowUTC >= lessonStartUTC) {

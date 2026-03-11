@@ -6,6 +6,7 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   userRole: 'student' | 'instructor' | null;
+  serverTimeOffset: number;
   signOut: () => Promise<void>;
 }
 
@@ -13,6 +14,7 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   loading: true,
   userRole: null,
+  serverTimeOffset: 0,
   signOut: async () => {},
 });
 
@@ -20,12 +22,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<'student' | 'instructor' | null>(null);
+  const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
 
   useEffect(() => {
     let mounted = true;
 
     const initSession = async () => {
       try {
+        // 0. Fetch server time to calculate offset
+        const t0 = Date.now();
+        const { data: timeData, error: timeError } = await supabase.rpc('get_server_time');
+        const t1 = Date.now();
+        
+        if (!timeError && timeData) {
+          const serverTime = new Date(timeData).getTime();
+          const rtt = t1 - t0;
+          const estimatedServerTime = serverTime + (rtt / 2);
+          const offset = estimatedServerTime - t1;
+          if (mounted) setServerTimeOffset(offset);
+        }
+
         // 1. Check active session safely
         const { data, error } = await supabase.auth.getSession();
         
@@ -77,7 +93,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ session, loading, userRole, signOut }}>
+    <AuthContext.Provider value={{ session, loading, userRole, serverTimeOffset, signOut }}>
       {children}
     </AuthContext.Provider>
   );

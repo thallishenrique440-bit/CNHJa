@@ -20,8 +20,10 @@ serve(async (req) => {
     // status IN ('pending', 'pending_approval') AND expires_at < now()
     const now = new Date().toISOString()
     
-    // 1.5 Clean up abandoned checkouts (awaiting_payment)
-    console.log("🧹 Cleaning up abandoned checkouts (awaiting_payment)...")
+    // 1.5 Clean up abandoned checkouts (awaiting_payment and reserved)
+    console.log("🧹 Cleaning up abandoned checkouts...")
+    
+    // Clean up awaiting_payment (legacy or specific flow)
     const { data: abandonedBookings, error: deleteError } = await supabaseAdmin
       .from('appointments')
       .delete()
@@ -32,7 +34,27 @@ serve(async (req) => {
     if (deleteError) {
       console.error("❌ Error deleting abandoned bookings:", deleteError)
     } else if (abandonedBookings && abandonedBookings.length > 0) {
-      console.log(`✅ Cleaned up ${abandonedBookings.length} abandoned checkouts.`)
+      console.log(`✅ Cleaned up ${abandonedBookings.length} abandoned checkouts (awaiting_payment).`)
+    }
+
+    // Clean up reserved (soft delete to failed)
+    const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+    const { data: reservedBookings, error: reservedError } = await supabaseAdmin
+      .from('appointments')
+      .update({
+        status: 'failed',
+        payment_status: 'failed',
+        cancelled_reason: 'system_cleanup_expired',
+        updated_at: new Date().toISOString()
+      })
+      .eq('status', 'reserved')
+      .lt('created_at', fifteenMinsAgo)
+      .select('id')
+
+    if (reservedError) {
+      console.error("❌ Error cleaning up reserved bookings:", reservedError)
+    } else if (reservedBookings && reservedBookings.length > 0) {
+      console.log(`✅ Cleaned up ${reservedBookings.length} abandoned checkouts (reserved).`)
     }
 
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin

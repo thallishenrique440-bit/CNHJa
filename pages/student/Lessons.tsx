@@ -75,7 +75,7 @@ const isNightLesson = (time: string) => {
 
 export const StudentLessons: React.FC = () => {
   const navigate = useNavigate();
-  const { session } = useAuth();
+  const { session, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
   
@@ -152,7 +152,7 @@ export const StudentLessons: React.FC = () => {
         if (error) throw error;
 
         if (data) {
-          const now = new Date();
+          const now = new Date(Date.now() + serverTimeOffset);
 
           const mappedLessons: Lesson[] = data.map((apt: any) => {
             const [year, month, day] = apt.date.split('-').map(Number);
@@ -365,7 +365,7 @@ export const StudentLessons: React.FC = () => {
     }
 
     // 2. Scheduled: Check 24h rule
-    const now = new Date();
+    const now = new Date(Date.now() + serverTimeOffset);
     // Parse start time "HH:MM"
     const [h, m] = group.time.split(':').map(Number);
     const lessonStart = new Date(group.date);

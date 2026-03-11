@@ -111,16 +111,20 @@ Deno.serve(async (req: Request) => {
            // Fetch appointments to determine the start time
            const { data: apts } = await supabaseAdmin
              .from("appointments")
-             .select("date, start_time")
+             .select("date, start_time, start_time_utc")
              .eq("purchase_id", purchaseId);
 
            let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
            if (apts && apts.length > 0) {
-              const [year, month, day] = apts[0].date.split('-').map(Number);
-              const [hours, minutes] = apts[0].start_time.split(':').map(Number);
-              // Assume Brazil time (UTC-3) for the lesson start time
-              const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes));
-              expiresAt = lessonStartUTC.toISOString();
+              if (apts[0].start_time_utc) {
+                 expiresAt = apts[0].start_time_utc;
+              } else {
+                 const [year, month, day] = apts[0].date.split('-').map(Number);
+                 const [hours, minutes] = apts[0].start_time.split(':').map(Number);
+                 // Assume Brazil time (UTC-3) for the lesson start time
+                 const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes));
+                 expiresAt = lessonStartUTC.toISOString();
+              }
            }
            
            // 1. Update Appointments -> pending_approval / authorized
@@ -190,16 +194,20 @@ Deno.serve(async (req: Request) => {
             // Fetch appointments to determine the start time
             const { data: apts } = await supabaseAdmin
               .from("appointments")
-              .select("date, start_time")
+              .select("date, start_time, start_time_utc")
               .eq("payment_intent_id", paymentIntentId);
 
             let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
             if (apts && apts.length > 0) {
-               const [year, month, day] = apts[0].date.split('-').map(Number);
-               const [hours, minutes] = apts[0].start_time.split(':').map(Number);
-               // Assume Brazil time (UTC-3) for the lesson start time
-               const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes));
-               expiresAt = lessonStartUTC.toISOString();
+               if (apts[0].start_time_utc) {
+                  expiresAt = apts[0].start_time_utc;
+               } else {
+                  const [year, month, day] = apts[0].date.split('-').map(Number);
+                  const [hours, minutes] = apts[0].start_time.split(':').map(Number);
+                  // Assume Brazil time (UTC-3) for the lesson start time
+                  const lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes));
+                  expiresAt = lessonStartUTC.toISOString();
+               }
             }
             
             // Fallback: Update by PaymentIntent ID
