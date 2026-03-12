@@ -247,6 +247,23 @@ Deno.serve(async (req: Request) => {
         const purchaseId = paymentIntent.metadata?.purchase_id;
         const paymentIntentId = paymentIntent.id;
 
+        let transferId = null;
+        if (paymentIntent.latest_charge) {
+          try {
+            const chargeId = typeof paymentIntent.latest_charge === 'string' 
+              ? paymentIntent.latest_charge 
+              : paymentIntent.latest_charge.id;
+            
+            const charge = await stripe.charges.retrieve(chargeId);
+            if (charge.transfer) {
+              transferId = typeof charge.transfer === 'string' ? charge.transfer : charge.transfer.id;
+              console.log(`💸 Extracted Transfer ID: ${transferId} for PI: ${paymentIntentId}`);
+            }
+          } catch (err) {
+            console.error(`⚠️ Failed to retrieve charge/transfer for PI ${paymentIntentId}:`, err);
+          }
+        }
+
         if (purchaseId) {
           console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
 
@@ -262,13 +279,18 @@ Deno.serve(async (req: Request) => {
             .neq("status", "completed")
             .neq("status", "confirmed");
 
-          // 2. Update Transaction -> completed
+          // 2. Update Transaction -> completed + transfer_id
+          const txUpdatePayload: any = {
+            status: "completed",
+            description: `Pagamento Confirmado (Capturado)`
+          };
+          if (transferId) {
+            txUpdatePayload.stripe_transfer_id = transferId;
+          }
+
           await supabaseAdmin
             .from("transactions")
-            .update({
-              status: "completed",
-              description: `Pagamento Confirmado (Capturado)`
-            })
+            .update(txUpdatePayload)
             .eq("stripe_payment_intent_id", paymentIntentId);
 
           // 3. Notify Student
@@ -281,6 +303,58 @@ Deno.serve(async (req: Request) => {
               type: "booking_accepted",
               metadata: { purchase_id: purchaseId }
             });
+          }
+        }
+        break;
+      }
+
+      // ======================================================================
+      // Payout Paid (Funds transferred to Instructor's bank account)
+      // ======================================================================
+      case "payout.paid": {
+        const payout = event.data.object;
+        const connectedAccountId = event.account; // Present if event is from a connected account
+
+        if (connectedAccountId) {
+          console.log(`💰 Payout ${payout.id} paid for connected account ${connectedAccountId}`);
+          try {
+            // Fetch balance transactions for this payout on the connected account
+            const balanceTxns = await stripe.balanceTransactions.list(
+              { payout: payout.id, limit: 100 },
+              { stripeAccount: connectedAccountId }
+            );
+
+            const transferIds: string[] = [];
+
+            for (const bt of balanceTxns.data) {
+              if (bt.type === 'payment' && bt.source) {
+                // Retrieve the charge on the connected account to get the source_transfer
+                const charge = await stripe.charges.retrieve(
+                  bt.source as string,
+                  { stripeAccount: connectedAccountId }
+                );
+                if (charge.source_transfer) {
+                  transferIds.push(typeof charge.source_transfer === 'string' ? charge.source_transfer : charge.source_transfer.id);
+                }
+              }
+            }
+
+            if (transferIds.length > 0) {
+              console.log(`🔗 Linking Payout ${payout.id} to Transfers:`, transferIds);
+              // Update transactions in Supabase
+              const { error } = await supabaseAdmin
+                .from('transactions')
+                .update({ stripe_payout_id: payout.id })
+                .in('stripe_transfer_id', transferIds);
+
+              if (error) {
+                console.error('❌ Error updating payout IDs in transactions:', error);
+              } else {
+                console.log(`✅ Successfully updated payout IDs for ${transferIds.length} transactions.`);
+              }
+            }
+          } catch (err) {
+            console.error(`❌ Error processing payout ${payout.id}:`, err);
           }
         }
         break;

@@ -104,12 +104,60 @@ export const StudentLessons: React.FC = () => {
   // Security Flow State
   const [isLocating, setIsLocating] = useState(false);
 
+  // Pending Review State
+  const [pendingReviewAptId, setPendingReviewAptId] = useState<string | null>(null);
+  const hasPromptedReview = React.useRef(false);
+
   const weekStart = getStartOfWeek(currentDate);
   const weekEnd = addDays(weekStart, 6);
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const selectedDate = weekDays[selectedDayIndex];
 
   const [lessons, setLessons] = useState<Lesson[]>([]);
+
+  // --- FETCH PENDING REVIEW ---
+  useEffect(() => {
+    if (!session?.user) return;
+    const checkPendingReview = async () => {
+      try {
+        const { data, error } = await supabase.rpc('get_pending_review', { p_student_id: session.user.id });
+        if (!error && data && data.length > 0) {
+          setPendingReviewAptId(data[0].appointment_id);
+        }
+      } catch (err) {
+        console.error('Error checking pending review:', err);
+      }
+    };
+    checkPendingReview();
+  }, [session?.user]);
+
+  // --- AUTO-OPEN REVIEW MODAL ---
+  useEffect(() => {
+    if (pendingReviewAptId && lessons.length > 0 && !hasPromptedReview.current && !flowStep) {
+      const apt = lessons.find(l => l.id === pendingReviewAptId);
+      if (apt) {
+        hasPromptedReview.current = true;
+        const group: LessonGroup = {
+          ids: [apt.id],
+          count: 1,
+          totalPrice: apt.price,
+          endTime: apt.endTime,
+          instructorName: apt.instructorName,
+          instructorId: apt.instructorId,
+          instructorPhoto: apt.instructorPhoto,
+          instructorWhatsapp: apt.instructorWhatsapp,
+          vehicleModel: apt.vehicleModel,
+          date: apt.date,
+          time: apt.time,
+          status: apt.status,
+          location: apt.location,
+          lessonCategory: apt.lessonCategory,
+          isReviewed: apt.isReviewed
+        };
+        startFinalization(group);
+      }
+    }
+  }, [pendingReviewAptId, lessons, flowStep]);
 
   // --- FETCH REAL DATA ---
   useEffect(() => {
@@ -308,16 +356,16 @@ export const StudentLessons: React.FC = () => {
     const mainReferenceId = lessonIds[lessonIds.length - 1]; 
 
     try {
-       // 1. Create Review
+       // 1. Create or Update Review
        const { error: reviewError } = await supabase
          .from('reviews')
-         .insert({
+         .upsert({
            appointment_id: mainReferenceId,
            student_id: session.user.id,
            instructor_id: finalizingLessonGroup.instructorId,
            rating: rating,
            comment: comment
-         });
+         }, { onConflict: 'student_id,instructor_id' });
        
        if (reviewError) throw reviewError;
 
@@ -345,6 +393,10 @@ export const StudentLessons: React.FC = () => {
              ? { ...l, isReviewed: true } 
              : l
        ));
+       
+       if (lessonIds.includes(pendingReviewAptId || '')) {
+         setPendingReviewAptId(null);
+       }
 
        setFlowStep('success');
 
@@ -745,7 +797,7 @@ export const StudentLessons: React.FC = () => {
                         )}
                         
                         {/* Review Button */}
-                        {group.status === 'completed' && !group.isReviewed && (
+                        {group.status === 'completed' && group.ids.includes(pendingReviewAptId || '') && (
                             <Button 
                             variant="outline" 
                             onClick={() => startFinalization(group)}

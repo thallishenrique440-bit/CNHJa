@@ -21,6 +21,7 @@ import { StudentProfile } from './pages/student/Profile';
 import { PaymentPage } from './pages/student/PaymentPage';
 import { supabase } from './lib/supabase';
 import { ProfileGuard } from './components/ProfileGuard';
+import { PushNotificationManager } from './components/PushNotificationManager';
 
 // --- GUARDS ---
 
@@ -150,6 +151,7 @@ const App: React.FC = () => {
   return (
     <AuthProvider>
       <ToastProvider>
+        <PushNotificationManager />
         <HashRouter>
           <AppRoutes />
         </HashRouter>

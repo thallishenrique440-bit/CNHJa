@@ -130,6 +130,14 @@ export const StudentInstructorProfile: React.FC = () => {
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
   
+  // Review State
+  const [canReview, setCanReview] = useState(false);
+  const [existingReview, setExistingReview] = useState<any>(null);
+  const [isSubmitReviewModalOpen, setIsSubmitReviewModalOpen] = useState(false);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewComment, setReviewComment] = useState('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+
   // FETCH INSTRUCTOR DATA
   useEffect(() => {
     const fetchInstructor = async () => {
@@ -197,6 +205,35 @@ export const StudentInstructorProfile: React.FC = () => {
           .order('created_at', { ascending: false });
 
         if (reviewsError) console.error("Error fetching reviews:", reviewsError);
+
+        // 4. Check if student can review
+        if (session?.user) {
+          const { data: aptData } = await supabase
+            .from('appointments')
+            .select('id')
+            .eq('student_id', session.user.id)
+            .eq('instructor_id', id)
+            .eq('status', 'completed')
+            .limit(1);
+          
+          if (aptData && aptData.length > 0) {
+            setCanReview(true);
+            
+            // Fetch existing review
+            const { data: myReview } = await supabase
+              .from('reviews')
+              .select('*')
+              .eq('student_id', session.user.id)
+              .eq('instructor_id', id)
+              .maybeSingle();
+              
+            if (myReview) {
+              setExistingReview(myReview);
+              setReviewRating(myReview.rating);
+              setReviewComment(myReview.comment || '');
+            }
+          }
+        }
 
         if (data) {
           // Normalize Categories
@@ -763,6 +800,73 @@ export const StudentInstructorProfile: React.FC = () => {
     setVisibleReviewsCount((prev) => prev + 3);
   };
 
+  const submitReview = async () => {
+    if (!session?.user || !instructor) return;
+    setIsSubmittingReview(true);
+
+    try {
+      // We need an appointment_id to link the review. 
+      // We can fetch the most recent completed appointment.
+      const { data: latestApt } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('student_id', session.user.id)
+        .eq('instructor_id', instructor.id)
+        .eq('status', 'completed')
+        .order('date', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!latestApt) throw new Error("Nenhuma aula concluída encontrada.");
+
+      const { error } = await supabase
+        .from('reviews')
+        .upsert({
+          appointment_id: latestApt.id,
+          student_id: session.user.id,
+          instructor_id: instructor.id,
+          rating: reviewRating,
+          comment: reviewComment
+        }, { onConflict: 'student_id,instructor_id' });
+
+      if (error) throw error;
+
+      addToast("Avaliação salva com sucesso!", "success");
+      setIsSubmitReviewModalOpen(false);
+      
+      // Update local state to reflect the new review
+      setExistingReview({
+        rating: reviewRating,
+        comment: reviewComment
+      });
+
+      // Optionally refresh the instructor's reviews list
+      const { data: reviewsData } = await supabase
+        .from('reviews')
+        .select(`
+          id,
+          rating,
+          comment,
+          created_at,
+          profiles:student_id (
+            full_name
+          )
+        `)
+        .eq('instructor_id', instructor.id)
+        .order('created_at', { ascending: false });
+
+      if (reviewsData) {
+        setInstructor(prev => prev ? { ...prev, reviews: reviewsData } : null);
+      }
+
+    } catch (err: any) {
+      console.error("Error submitting review:", err);
+      addToast("Erro ao salvar avaliação: " + err.message, "error");
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
   if (loading) {
       return <div className="min-h-screen flex items-center justify-center bg-white text-gray-500">Carregando instrutor...</div>;
   }
@@ -925,6 +1029,23 @@ export const StudentInstructorProfile: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Review Action Button */}
+          {canReview && (
+            <div className="mt-5">
+              <Button 
+                variant="outline" 
+                fullWidth 
+                onClick={() => setIsSubmitReviewModalOpen(true)}
+                className="bg-white border-gray-200 text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                </svg>
+                {existingReview ? 'Editar Avaliação' : 'Avaliar Instrutor'}
+              </Button>
+            </div>
+          )}
 
         </div>
 
@@ -1255,6 +1376,57 @@ export const StudentInstructorProfile: React.FC = () => {
         <p className="text-gray-600">
           Esse horário está muito próximo para agendamento automático. Você pode tentar falar diretamente com o instrutor para verificar se ele ainda pode atender.
         </p>
+      </Modal>
+
+      {/* Submit Review Modal */}
+      <Modal
+        isOpen={isSubmitReviewModalOpen}
+        onClose={() => setIsSubmitReviewModalOpen(false)}
+        title={existingReview ? "Editar Avaliação" : "Avaliar Instrutor"}
+      >
+        <div className="flex flex-col items-center space-y-4">
+          <p className="text-sm text-gray-600 text-center">
+            Como foi sua experiência com {instructor?.name}?
+          </p>
+          
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                onClick={() => setReviewRating(star)}
+                className={`text-4xl transition-colors ${
+                  star <= reviewRating ? 'text-yellow-400' : 'text-gray-200'
+                }`}
+              >
+                ★
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            value={reviewComment}
+            onChange={(e) => setReviewComment(e.target.value)}
+            placeholder="Deixe um comentário (opcional)"
+            className="w-full p-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+            rows={3}
+          />
+
+          <div className="w-full space-y-2 pt-2">
+            <Button 
+              fullWidth 
+              onClick={submitReview} 
+              disabled={reviewRating === 0 || isSubmittingReview}
+            >
+              {isSubmittingReview ? 'Salvando...' : 'Salvar Avaliação'}
+            </Button>
+            <button 
+              onClick={() => setIsSubmitReviewModalOpen(false)} 
+              className="w-full text-center text-sm text-gray-400 py-2"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
       </Modal>
 
     </div>
