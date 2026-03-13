@@ -1,6 +1,6 @@
 {
-  "name": "Autoescola Brasil",
-  "short_name": "AutoBrasil",
+  "name": "AutoescolaBR",
+  "short_name": "AutoescolaBR",
   "description": "Marketplace de aulas de direção com instrutores independentes.",
   "start_url": "/",
   "display": "standalone",
