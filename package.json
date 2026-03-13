@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/generate-icons.js && rm -rf dist && vite build",
+    "build": "rm -rf dist && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-router-dom": "6.22.3",
+    "sharp": "^0.34.5",
     "stripe": "^20.4.0",
     "uuid": "^13.0.0"
   },
