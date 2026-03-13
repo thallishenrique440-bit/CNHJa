@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/generate-icons.js",
     "build": "rm -rf dist && vite build",
     "preview": "vite preview"
   },
