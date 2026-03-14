@@ -1,0 +1,7 @@
+project_id = "ohftsqsxymtrclnpadam"
+
+[functions.create-booking]
+verify_jwt = false
+
+[functions.create-stripe-account]
+verify_jwt = false
