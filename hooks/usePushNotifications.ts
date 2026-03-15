@@ -26,8 +26,11 @@ export function usePushNotifications() {
         // Request permission
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
-          // 1. Explicitly register Service Worker
-          const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+          // 1. Explicitly register Service Worker, avoiding duplicates
+          let registration = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js');
+          if (!registration) {
+            registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+          }
 
           // 2. Get FCM token with VAPID key and SW registration
           const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
@@ -43,11 +46,17 @@ export function usePushNotifications() {
           if (currentToken) {
             setToken(currentToken);
             
-            // 3. Save to Supabase using the secure RPC (bypasses RLS conflict)
-            const { error } = await supabase.rpc('register_fcm_token', {
-              p_token: currentToken,
-              p_device_type: 'web'
-            });
+            // 3. Save to Supabase using upsert
+            const { error } = await supabase
+              .from('fcm_tokens')
+              .upsert({
+                user_id: user.id,
+                token: currentToken,
+                device_type: 'web',
+                last_used_at: new Date().toISOString()
+              }, {
+                onConflict: 'token'
+              });
 
             if (error) {
               console.error('Error saving FCM token to Supabase:', error);

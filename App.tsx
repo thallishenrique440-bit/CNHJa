@@ -57,7 +57,12 @@ const AuthGuard: React.FC<{ allowedRole: string }> = ({ allowedRole }) => {
     return <Navigate to={userRole === 'student' ? '/student/home' : '/instructor/agenda'} replace />;
   }
 
-  return <Outlet />;
+  return (
+    <>
+      <PushNotificationManager />
+      <Outlet />
+    </>
+  );
 };
 
 const PublicGuard: React.FC = () => {
@@ -151,7 +156,6 @@ const App: React.FC = () => {
   return (
     <AuthProvider>
       <ToastProvider>
-        <PushNotificationManager />
         <HashRouter>
           <AppRoutes />
         </HashRouter>

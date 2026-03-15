@@ -1,6 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { JWT } from 'https://esm.sh/google-auth-library@9'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,6 +12,94 @@ interface WebhookPayload {
   record: any
   old_record: any
 }
+
+// --- Funções Utilitárias para Geração de JWT Nativo no Deno ---
+
+function encodeBase64Url(str: string): string {
+  const base64 = btoa(str);
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function encodeBase64UrlBuffer(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const base64 = btoa(binary);
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  const pemHeader = "-----BEGIN PRIVATE KEY-----";
+  const pemFooter = "-----END PRIVATE KEY-----";
+  const pemContents = pem.substring(
+    pem.indexOf(pemHeader) + pemHeader.length,
+    pem.indexOf(pemFooter)
+  ).replace(/\s/g, '');
+
+  const binaryDerString = atob(pemContents);
+  const binaryDer = new Uint8Array(binaryDerString.length);
+  for (let i = 0; i < binaryDerString.length; i++) {
+    binaryDer[i] = binaryDerString.charCodeAt(i);
+  }
+
+  return await crypto.subtle.importKey(
+    "pkcs8",
+    binaryDer.buffer,
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256",
+    },
+    true,
+    ["sign"]
+  );
+}
+
+async function getFirebaseAccessToken(serviceAccount: any): Promise<string> {
+  const header = { alg: "RS256", typ: "JWT" };
+  const now = Math.floor(Date.now() / 1000);
+  const claimSet = {
+    iss: serviceAccount.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now,
+  };
+
+  const encodedHeader = encodeBase64Url(JSON.stringify(header));
+  const encodedClaimSet = encodeBase64Url(JSON.stringify(claimSet));
+  const signatureInput = `${encodedHeader}.${encodedClaimSet}`;
+
+  const privateKey = await importPrivateKey(serviceAccount.private_key);
+  const encoder = new TextEncoder();
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    privateKey,
+    encoder.encode(signatureInput)
+  );
+
+  const encodedSignature = encodeBase64UrlBuffer(signature);
+  const jwt = `${signatureInput}.${encodedSignature}`;
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(`Failed to get access token: ${JSON.stringify(data)}`);
+  }
+
+  return data.access_token;
+}
+
+// --- Fim das Funções Utilitárias ---
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -110,15 +197,8 @@ serve(async (req) => {
     
     const serviceAccount = JSON.parse(serviceAccountStr)
 
-    // Authenticate with Google to get an OAuth2 token for FCM HTTP v1 API
-    const auth = new JWT({
-      email: serviceAccount.client_email,
-      key: serviceAccount.private_key,
-      scopes: ['https://www.googleapis.com/auth/firebase.messaging'],
-    })
-
-    const accessTokenObj = await auth.getAccessToken()
-    const accessToken = accessTokenObj.token
+    // Authenticate with Google to get an OAuth2 token for FCM HTTP v1 API using Deno Native Web Crypto
+    const accessToken = await getFirebaseAccessToken(serviceAccount)
 
     if (!accessToken) {
       throw new Error('Failed to get access token for Firebase')
