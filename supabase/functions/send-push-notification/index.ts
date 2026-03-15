@@ -23,9 +23,9 @@ serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json()
     
-    // Only process updates to the appointments table
-    if (payload.table !== 'appointments' || payload.type !== 'UPDATE') {
-      return new Response(JSON.stringify({ message: 'Ignored: Not an appointment update' }), {
+    // Only process INSERT and UPDATE to the appointments table
+    if (payload.table !== 'appointments' || (payload.type !== 'UPDATE' && payload.type !== 'INSERT')) {
+      return new Response(JSON.stringify({ message: 'Ignored: Not an appointment update or insert' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
@@ -34,8 +34,8 @@ serve(async (req) => {
     const oldStatus = payload.old_record?.status
     const newStatus = payload.record?.status
 
-    // Only process if the status actually changed
-    if (oldStatus === newStatus) {
+    // Only process if the status actually changed (for UPDATE)
+    if (payload.type === 'UPDATE' && oldStatus === newStatus) {
       return new Response(JSON.stringify({ message: 'Ignored: Status did not change' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
@@ -47,8 +47,13 @@ serve(async (req) => {
     let title = ''
     let body = ''
 
-    if (newStatus === 'confirmed' && oldStatus === 'pending_approval') {
-      // 1. Instructor approved -> Notify Student
+    if (payload.type === 'INSERT' && newStatus === 'pending_approval') {
+      // 1. Student requested a class -> Notify Instructor
+      targetUserId = payload.record.instructor_id
+      title = 'Novo agendamento'
+      body = 'Um aluno solicitou uma nova aula.'
+    } else if (payload.type === 'UPDATE' && newStatus === 'confirmed' && oldStatus === 'pending_approval') {
+      // 2. Instructor approved -> Notify Student
       targetUserId = payload.record.student_id
       const category = payload.record.category
       
@@ -59,11 +64,11 @@ serve(async (req) => {
         title = 'Aula Aprovada 🚗'
         body = 'Seu instrutor aceitou a aula de carro. Nos vemos no horário combinado!'
       }
-    } else if (newStatus === 'cancelled' && oldStatus === 'confirmed') {
-      // 3. Instructor cancelled a confirmed class -> Notify Student
-      targetUserId = payload.record.student_id
+    } else if (payload.type === 'UPDATE' && newStatus === 'cancelled') {
+      // 3. Someone cancelled -> Notify the other party
+      targetUserId = payload.record.cancelled_by === 'student' ? payload.record.instructor_id : payload.record.student_id
       title = 'Aula cancelada'
-      body = 'Seu instrutor cancelou a aula. Verifique o motivo diretamente pelo WhatsApp com ele.'
+      body = `A aula foi cancelada pelo ${payload.record.cancelled_by === 'student' ? 'aluno' : 'instrutor'}.`
     }
 
     if (!targetUserId) {
@@ -123,6 +128,8 @@ serve(async (req) => {
     const projectId = serviceAccount.project_id
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`
 
+    const url = targetUserId === payload.record.student_id ? '/student/lessons' : '/instructor/agenda'
+
     const sendPromises = tokens.map(async (token) => {
       const message = {
         message: {
@@ -134,7 +141,7 @@ serve(async (req) => {
           data: {
             appointmentId: payload.record.id,
             status: newStatus,
-            url: targetUserId === payload.record.student_id ? '/student/lessons' : '/instructor/agenda'
+            url
           }
         }
       }
