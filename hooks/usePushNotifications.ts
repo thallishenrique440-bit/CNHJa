@@ -6,7 +6,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 export function usePushNotifications() {
-  const { user } = useAuth();
+  const { session } = useAuth();
+  const user = session?.user;
   const { addToast } = useToast();
   const [token, setToken] = useState<string | null>(null);
   // Estado para controlar se o navegador suporta e se a permissão já foi dada/negada
