@@ -30,10 +30,13 @@ export function usePushNotifications() {
       const messaging = await getMessagingInstance();
       if (!messaging) return null;
 
-      let registration = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js');
-      if (!registration) {
-        registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      if (!('serviceWorker' in navigator)) {
+        console.error('Service Worker is not supported in this browser.');
+        return null;
       }
+
+      await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      const registration = await navigator.serviceWorker.ready;
 
       const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
       if (!vapidKey) {
