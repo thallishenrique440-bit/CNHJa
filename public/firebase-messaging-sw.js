@@ -2,12 +2,13 @@ importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js'
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
 const firebaseConfig = {
-  projectId: "project-8f074d80-81a7-431d-891",
-  appId: "1:552343497091:web:49f45739c96cdab7786eb6",
-  apiKey: "AIzaSyDF-WJEUJatTTZOzpY2EDmIWk8rAbsZnAc",
-  authDomain: "project-8f074d80-81a7-431d-891.firebaseapp.com",
-  messagingSenderId: "552343497091",
-  storageBucket: "project-8f074d80-81a7-431d-891.firebasestorage.app"
+  apiKey: "AIzaSyCj7CHQrvDGw2zPidXXOLTgsPN3XJSng2I",
+  authDomain: "autoescoladobrasil.firebaseapp.com",
+  projectId: "autoescoladobrasil",
+  storageBucket: "autoescoladobrasil.firebasestorage.app",
+  messagingSenderId: "898405109775",
+  appId: "1:898405109775:web:92940f139fa0b625acd37a",
+  measurementId: "G-KLSEZSHCLZ"
 };
 
 firebase.initializeApp(firebaseConfig);
