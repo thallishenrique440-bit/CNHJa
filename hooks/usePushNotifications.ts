@@ -89,6 +89,16 @@ export function usePushNotifications() {
           console.log('Message received in foreground: ', payload);
           if (payload.notification) {
             addToast(payload.notification.title || 'Nova notificação', 'info');
+            
+            if (Notification.permission === 'granted') {
+              navigator.serviceWorker.ready.then((registration) => {
+                registration.showNotification(payload.notification.title || 'Nova notificação', {
+                  body: payload.notification.body,
+                  icon: '/icon-192x192.png',
+                  data: payload.data
+                });
+              });
+            }
           }
         });
       } catch (error) {
