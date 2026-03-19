@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
 import { RatingBadge } from '../../components/RatingBadge';
@@ -52,6 +52,7 @@ interface InstructorProfileData {
 export const StudentInstructorProfile: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { session } = useAuth();
   const { addToast } = useToast();
 
@@ -78,6 +79,24 @@ export const StudentInstructorProfile: React.FC = () => {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   // Note: isSuccess is handled by the redirect flow mostly, but kept for transient UI states if needed
   const [isSuccess, setIsSuccess] = useState(false);
+
+  useEffect(() => {
+    const success = searchParams.get('success');
+    const canceled = searchParams.get('canceled');
+
+    if (success === 'true') {
+      clearPersistedSlots();
+      setSelectedSlots([]);
+      setIsSuccess(true);
+      addToast('Pagamento concluído com sucesso! Suas aulas foram agendadas.', 'success');
+      // Clean up URL
+      navigate(`/student/instructor/${id}`, { replace: true });
+    } else if (canceled === 'true') {
+      addToast('Pagamento cancelado. Seus horários continuam reservados temporariamente.', 'error');
+      // Clean up URL
+      navigate(`/student/instructor/${id}`, { replace: true });
+    }
+  }, [searchParams, id, navigate, addToast]);
 
   // --- Helpers for Agenda ---
   const getStartOfWeek = (date: Date) => {
@@ -122,13 +141,53 @@ export const StudentInstructorProfile: React.FC = () => {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   };
 
+  const LOCAL_STORAGE_KEY = 'booking_selected_slots';
+  const TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+  const getPersistedSlots = () => {
+    try {
+      const itemStr = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (!itemStr) return [];
+      const item = JSON.parse(itemStr);
+      const now = new Date();
+      if (now.getTime() > item.expiry) {
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
+        return [];
+      }
+      return item.value || [];
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const savePersistedSlots = (slots: string[]) => {
+    try {
+      const now = new Date();
+      const item = {
+        value: slots,
+        expiry: now.getTime() + TTL_MS,
+      };
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(item));
+    } catch (e) {
+      console.error('Error saving to localStorage', e);
+    }
+  };
+
+  const clearPersistedSlots = () => {
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+  };
+
   // Agenda State
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(getStartOfWeek(new Date()));
   
   // Selected Slots now stores composite keys: "YYYY-MM-DD|HH:MM"
-  const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
+  const [selectedSlots, setSelectedSlots] = useState<string[]>(() => getPersistedSlots());
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
+
+  useEffect(() => {
+    savePersistedSlots(selectedSlots);
+  }, [selectedSlots]);
   
   // Review State
   const [canReview, setCanReview] = useState(false);
@@ -736,6 +795,8 @@ export const StudentInstructorProfile: React.FC = () => {
 
   const handleRetryPayment = () => {
     setIsPaymentErrorOpen(false);
+    clearPersistedSlots();
+    window.location.reload();
   };
 
   const openWhatsApp = () => {
@@ -1114,6 +1175,17 @@ export const StudentInstructorProfile: React.FC = () => {
                       // Disable if date is past maxBookingDate OR if date is in the past (before today)
                       const isDisabled = date > maxBookingDate || date < today;
 
+                      const dateString = getDateKey(date);
+                      const hasSelectedSlots = selectedSlots.some(slot => slot.startsWith(dateString + '|'));
+                      
+                      const showDot = hasSelectedSlots || isToday;
+                      let dotClass = '';
+                      if (hasSelectedSlots) {
+                        dotClass = isSelected ? 'bg-white' : 'bg-blue-600';
+                      } else if (isToday) {
+                        dotClass = isSelected ? 'bg-blue-300' : 'bg-gray-400';
+                      }
+
                       return (
                       <button
                           key={index}
@@ -1125,7 +1197,7 @@ export const StudentInstructorProfile: React.FC = () => {
                       >
                           <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : isDisabled ? 'text-gray-300' : 'text-gray-400'}`}>{getDayLabel(date)}</span>
                           <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : isDisabled ? 'text-gray-300' : 'text-gray-700'}`}>{date.getDate()}</span>
-                          {isToday && (<div className={`w-1 h-1 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-blue-600'}`}></div>)}
+                          {showDot && (<div className={`w-1.5 h-1.5 rounded-full mt-1 ${dotClass}`}></div>)}
                       </button>
                       );
                   })}

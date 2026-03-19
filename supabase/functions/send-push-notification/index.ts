@@ -110,9 +110,9 @@ serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json()
     
-    // Only process INSERT and UPDATE to the appointments table
-    if (payload.table !== 'appointments' || (payload.type !== 'UPDATE' && payload.type !== 'INSERT')) {
-      return new Response(JSON.stringify({ message: 'Ignored: Not an appointment update or insert' }), {
+    // Only process UPDATE to the appointments table
+    if (payload.table !== 'appointments' || payload.type !== 'UPDATE') {
+      return new Response(JSON.stringify({ message: 'Ignored: Not an appointment update' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
@@ -122,7 +122,7 @@ serve(async (req) => {
     const newStatus = payload.record?.status
 
     // Only process if the status actually changed (for UPDATE)
-    if (payload.type === 'UPDATE' && oldStatus === newStatus) {
+    if (oldStatus === newStatus) {
       return new Response(JSON.stringify({ message: 'Ignored: Status did not change' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
@@ -134,12 +134,12 @@ serve(async (req) => {
     let title = ''
     let body = ''
 
-    if (payload.type === 'INSERT' && newStatus === 'pending_approval') {
-      // 1. Student requested a class -> Notify Instructor
+    if (newStatus === 'pending_approval' && oldStatus !== 'pending_approval') {
+      // 1. Student requested a class (payment confirmed) -> Notify Instructor
       targetUserId = payload.record.instructor_id
       title = 'Novo agendamento'
       body = 'Um aluno solicitou uma nova aula.'
-    } else if (payload.type === 'UPDATE' && newStatus === 'confirmed' && oldStatus === 'pending_approval') {
+    } else if (newStatus === 'confirmed' && oldStatus === 'pending_approval') {
       // 2. Instructor approved -> Notify Student
       targetUserId = payload.record.student_id
       const category = payload.record.category
