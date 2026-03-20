@@ -23,6 +23,7 @@ export const InstructorDiscounts: React.FC = () => {
   const [discountToDelete, setDiscountToDelete] = useState<string | null>(null);
   
   const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
+  const [basePrice, setBasePrice] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -32,11 +33,27 @@ export const InstructorDiscounts: React.FC = () => {
     discountPercentage: '',
   });
 
+  // Helper for currency
+  const formatCurrency = (valInCents: number) => {
+    return (valInCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  };
+
   // --- FETCH DATA ---
   const fetchDiscounts = async () => {
     if (!session?.user) return;
     setLoading(true);
     try {
+      // Fetch base price (using legacy base_price for simplicity, or could fetch from instructor_categories)
+      const { data: instructorData } = await supabase
+        .from('instructors')
+        .select('base_price')
+        .eq('id', session.user.id)
+        .single();
+        
+      if (instructorData && instructorData.base_price) {
+          setBasePrice(instructorData.base_price);
+      }
+
       const { data, error } = await supabase
         .from('instructor_discounts')
         .select('*')
@@ -229,39 +246,52 @@ export const InstructorDiscounts: React.FC = () => {
                  <button onClick={handleCreateNew} className="text-blue-600 font-bold mt-2 text-sm">Criar a primeira</button>
                </div>
             ) : (
-              discounts.map((rule) => (
-                <div key={rule.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden transition-all hover:shadow-md flex justify-between items-center">
-                  
-                  <div>
-                    <div className="flex items-baseline space-x-2">
-                      <span className="text-2xl font-bold text-green-600">{rule.discount_percentage}% OFF</span>
-                    </div>
-                    <p className="text-sm text-gray-600 font-medium mt-1">
-                      A partir de <span className="font-bold text-gray-900">{rule.min_lessons} aulas</span>
-                    </p>
-                  </div>
+              discounts.map((rule) => {
+                const discountedPrice = basePrice > 0 
+                  ? basePrice - (basePrice * (rule.discount_percentage / 100))
+                  : 0;
 
-                  {/* Actions */}
-                  <div className="flex space-x-2">
-                    <button 
-                      onClick={() => handleEdit(rule)}
-                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                    >
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
-                    <button 
-                      onClick={() => handleDelete(rule.id)}
-                      className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                    >
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
+                return (
+                  <div key={rule.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden transition-all hover:shadow-md flex justify-between items-center">
+                    
+                    <div>
+                      <div className="flex items-baseline space-x-2">
+                        <span className="text-2xl font-bold text-green-600">{rule.discount_percentage}% OFF</span>
+                      </div>
+                      <p className="text-sm text-gray-600 font-medium mt-1">
+                        A partir de <span className="font-bold text-gray-900">{rule.min_lessons} aulas</span>
+                      </p>
+                      {basePrice > 0 && (
+                        <p className="text-xs text-gray-500 mt-1.5">
+                          <span className="line-through opacity-70">{formatCurrency(basePrice)}</span>
+                          <span className="mx-1">➔</span>
+                          <span className="font-semibold text-gray-700">{formatCurrency(discountedPrice)} / aula</span>
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex space-x-2">
+                      <button 
+                        onClick={() => handleEdit(rule)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                      >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(rule.id)}
+                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
             
             {discounts.length > 0 && discounts.length < 3 && (

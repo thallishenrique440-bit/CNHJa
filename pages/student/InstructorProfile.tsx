@@ -196,6 +196,16 @@ export const StudentInstructorProfile: React.FC = () => {
   const [reviewRating, setReviewRating] = useState(0);
   const [reviewComment, setReviewComment] = useState('');
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [isIdCopied, setIsIdCopied] = useState(false);
+
+  const handleCopyId = () => {
+    if (instructor?.publicId) {
+      navigator.clipboard.writeText(instructor.publicId);
+      setIsIdCopied(true);
+      addToast('ID copiado para a área de transferência!', 'success');
+      setTimeout(() => setIsIdCopied(false), 2000);
+    }
+  };
 
   // FETCH INSTRUCTOR DATA
   useEffect(() => {
@@ -294,6 +304,15 @@ export const StudentInstructorProfile: React.FC = () => {
           }
         }
 
+        // 5. Fetch total completed lessons
+        const { count: lessonsTaughtCount, error: countError } = await supabase
+          .from('appointments')
+          .select('*', { count: 'exact', head: true })
+          .eq('instructor_id', id)
+          .eq('status', 'completed');
+
+        if (countError) console.error("Error fetching lessons count:", countError);
+
         if (data) {
           // Normalize Categories
           let cat: 'A' | 'B' | 'AB' = 'B';
@@ -352,7 +371,7 @@ export const StudentInstructorProfile: React.FC = () => {
             defaultLocation: data.location_text || 'Local a combinar',
             rating: displayRating,
             reviewsCount: formattedReviews.length,
-            lessonsTaught: formattedReviews.length * 5, 
+            lessonsTaught: lessonsTaughtCount || 0, 
             priceDay: basePrice,
             priceNight: data.night_price || basePrice,
             hasNightLessons: !!data.has_night_lessons,
@@ -591,6 +610,15 @@ export const StudentInstructorProfile: React.FC = () => {
 
     return { isGlobalLimitReached, isDailyLimitReached };
   }, [selectedSlots, selectedDate, existingLessonsCount]);
+
+  const startingPrice = useMemo(() => {
+    if (!instructor) return 0;
+    let minPrice = instructor.priceDay || 0;
+    if (instructor.categoryPrices && instructor.categoryPrices.length > 0) {
+      minPrice = Math.min(...instructor.categoryPrices.map(c => c.day_price));
+    }
+    return minPrice;
+  }, [instructor]);
 
   const totalPrice = useMemo(() => {
     if (!instructor) return 0;
@@ -960,135 +988,158 @@ export const StudentInstructorProfile: React.FC = () => {
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 pt-6 pb-4 bg-white">
           <div className="flex justify-between items-start w-full">
-            <div className="flex items-start flex-1 min-w-0">
-              {/* Avatar */}
-              <div 
-                onClick={() => instructor.photoUrl && setIsPhotoModalOpen(true)}
-                className={`relative w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center text-2xl border-2 border-gray-50 flex-shrink-0 mr-4 text-gray-400 overflow-hidden shadow-sm ${instructor.photoUrl ? 'cursor-pointer hover:scale-105 transition-transform group' : ''}`}
-              >
-                {instructor.photoUrl ? (
-                    <>
-                      <img src={instructor.photoUrl} alt={instructor.name} className="w-full h-full object-cover" />
-                      <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <svg className="w-5 h-5 text-white drop-shadow-md" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
-                        </svg>
-                      </div>
-                    </>
-                ) : (
-                    "👤"
-                )}
-              </div>
+            <div className="flex flex-col flex-1 min-w-0">
               
-              {/* Name & ID & Stats */}
-              <div className="flex flex-col min-w-0 pr-2 pt-0.5">
-                <div className="flex items-center space-x-2 mb-0.5">
-                  <h1 className="font-bold text-gray-900 text-xl leading-tight truncate">
+              {/* 1. Identity Block */}
+              <div className="flex items-start justify-between w-full mb-4">
+                <div className="flex flex-col pr-4">
+                  <h1 className="text-2xl font-bold text-gray-900 leading-tight mb-1">
                     {instructor.name}
                   </h1>
-                  {instructor.publicId && (
-                    <span className="bg-blue-50 text-blue-600 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-100 flex-shrink-0">
-                      ID: {instructor.publicId}
-                    </span>
+                  
+                  {/* Rating & Experience */}
+                  <div className="flex flex-col gap-1.5 mb-3">
+                    <div className="flex items-center text-sm">
+                      <span className="text-yellow-400 mr-1">
+                        <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                      </span>
+                      <span className="font-bold text-gray-800 mr-1">{instructor.rating}</span>
+                      <button onClick={handleOpenReviews} disabled={instructor.reviews.length === 0} className={`text-gray-500 underline decoration-gray-300 underline-offset-2 ${instructor.reviews.length > 0 ? 'hover:text-gray-700' : 'cursor-default'}`}>
+                        ({instructor.reviewsCount} avaliações)
+                      </button>
+                    </div>
+                    {instructor.lessonsTaught > 0 && (
+                      <div className="flex items-center text-xs text-gray-500 font-medium">
+                        <svg className="w-3.5 h-3.5 mr-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        +{instructor.lessonsTaught} aulas realizadas
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Price Highlight */}
+                  {startingPrice > 0 && (
+                    <div className="inline-flex items-baseline text-blue-700">
+                      <span className="text-xs font-medium mr-1 text-gray-500">A partir de</span>
+                      <span className="text-xl font-black">{formatCurrency(startingPrice)}</span>
+                      <span className="text-xs font-medium ml-1 text-gray-500">/ aula</span>
+                    </div>
                   )}
                 </div>
-                
-                {/* Rating & Lessons */}
-                <div className="flex items-center text-xs text-gray-500 mt-1">
-                  <button 
-                    onClick={handleOpenReviews}
-                    disabled={instructor.reviews.length === 0}
-                    className={`group flex items-center transition-colors ${instructor.reviews.length > 0 ? 'hover:text-gray-800 cursor-pointer' : 'cursor-default'}`}
+
+                <div className="flex flex-col items-center">
+                  {/* Avatar */}
+                  <div 
+                    onClick={() => instructor.photoUrl && setIsPhotoModalOpen(true)}
+                    className={`relative w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center text-3xl border border-gray-200 flex-shrink-0 text-gray-400 overflow-hidden shadow-sm ${instructor.photoUrl ? 'cursor-pointer hover:scale-105 transition-transform group' : ''}`}
                   >
-                    <span className="text-yellow-400 mr-1">⭐</span>
-                    <span className="font-medium text-gray-700">{instructor.rating}</span>
-                    <span className={`ml-1 ${instructor.reviews.length > 0 ? 'underline decoration-gray-300 underline-offset-2 group-hover:decoration-gray-500' : ''}`}>
-                      ({instructor.reviewsCount} avaliações)
-                    </span>
-                    {instructor.reviews.length > 0 && (
-                      <svg className="w-3 h-3 ml-0.5 text-gray-400 group-hover:text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    {instructor.photoUrl ? (
+                      <>
+                        <img src={instructor.photoUrl} alt={instructor.name} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <svg className="w-6 h-6 text-white drop-shadow-md" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
+                          </svg>
+                        </div>
+                      </>
+                    ) : (
+                      "👤"
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* WhatsApp Button (Prominent but secondary) */}
+              {instructor.whatsapp && (
+                <button
+                  onClick={openWhatsApp}
+                  className="w-full mb-5 flex items-center justify-center gap-2 py-2.5 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition-colors text-green-700 font-semibold text-sm"
+                >
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                  </svg>
+                  Falar com o instrutor
+                </button>
+              )}
+
+              {/* 2. Chips (Category, Credential) */}
+              <div className="flex flex-wrap gap-2">
+                {instructor.credential && instructor.credential !== 'N/A' && (
+                  <div className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 text-xs font-medium border border-green-200">
+                    <svg className="w-4 h-4 mr-1.5 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                    Credencial DETRAN &bull; {instructor.credential}
+                  </div>
+                )}
+
+                <div className="inline-flex items-center px-2.5 py-1.5 rounded-lg bg-gray-50 text-gray-700 text-xs font-medium border border-gray-200">
+                  <svg className="w-4 h-4 mr-1.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
+                  </svg>
+                  Cat. {instructor.category === 'AB' ? 'A/B' : instructor.category}
+                </div>
+              </div>
+
+              {/* 3. Vehicles Highlight */}
+              {instructor.vehicles && instructor.vehicles.length > 0 && (
+                <div className="mt-4 bg-blue-50/50 rounded-xl p-4 border border-blue-100 flex flex-col gap-2">
+                  <span className="text-xs font-bold text-blue-900 uppercase tracking-wide">Veículos disponíveis</span>
+                  <div className="flex flex-col gap-2">
+                    {instructor.vehicles.map((v, idx) => (
+                      <div key={idx} className="flex items-center text-sm text-gray-800 font-medium">
+                        <span className="mr-2 text-lg">{v.type === 'car' ? '🚘' : '🏍️'}</span>
+                        {v.model || (v.type === 'car' ? 'Carro' : 'Moto')}
+                        {v.year ? <span className="text-gray-500 font-normal ml-1">({v.year})</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 4. Location (City + Meeting point in a light card) */}
+              <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100 flex items-start">
+                <div className="bg-white p-2 rounded-full shadow-sm border border-gray-100 mr-3 flex-shrink-0">
+                  <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold text-gray-900 mb-0.5">{instructor.city}</span>
+                  {instructor.defaultLocation ? (
+                    <span className="text-sm text-gray-600 leading-snug">Ponto de encontro: {instructor.defaultLocation}</span>
+                  ) : (
+                    <span className="text-sm text-gray-500 italic">Ponto de encontro a combinar</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 5. Discrete ID */}
+              {instructor.publicId && (
+                <div className="mt-4 flex justify-center">
+                  <button 
+                    onClick={handleCopyId}
+                    className="group flex items-center text-gray-400 hover:text-gray-600 text-[10px] font-mono transition-colors"
+                  >
+                    <span>ID do Instrutor: {instructor.publicId}</span>
+                    {isIdCopied ? (
+                      <svg className="w-3 h-3 ml-1 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3 h-3 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                       </svg>
                     )}
                   </button>
-                  <span className="mx-2 text-gray-300">•</span>
-                  <span className="flex items-center">
-                    <span className="mr-1">🎓</span>
-                    <span>{instructor.lessonsTaught}+ aulas</span>
-                  </span>
                 </div>
-              </div>
+              )}
+
             </div>
-
-            {/* WhatsApp Button */}
-            {instructor.whatsapp && (
-              <button
-                onClick={openWhatsApp}
-                className="flex items-center justify-center w-10 h-10 bg-green-50 border border-green-100 rounded-full hover:bg-green-100 transition-colors active:scale-95 text-green-600 flex-shrink-0 ml-2"
-                title="Contato via WhatsApp"
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-                </svg>
-              </button>
-            )}
-          </div>
-
-          {/* Location */}
-          <div className="mt-5 space-y-1.5">
-            <div className="flex items-center text-sm text-gray-600">
-              <svg className="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              <span className="font-medium">{instructor.city}</span>
-            </div>
-            {instructor.defaultLocation && (
-              <div className="flex items-start text-xs text-gray-500 pl-6">
-                <span className="truncate">Ponto de encontro: {instructor.defaultLocation}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Tags (Category, Vehicles, Credential) */}
-          <div className="flex flex-wrap gap-2 mt-4">
-            <span className="inline-flex items-center px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-semibold uppercase tracking-wide">
-              {instructor.category === 'AB' ? 'Categoria A/B' : `Categoria ${instructor.category}`}
-            </span>
-            
-            {instructor.vehicles?.map((v, idx) => (
-              <span key={idx} className="inline-flex items-center px-2 py-1 rounded bg-gray-50 text-gray-600 text-[10px] font-medium border border-gray-100">
-                {v.type === 'car' ? '🚘' : '🏍️'} {v.model || (v.type === 'car' ? 'Carro' : 'Moto')}
-              </span>
-            ))}
-
-            {instructor.credential && instructor.credential !== 'N/A' && (
-              <span className="inline-flex items-center px-2 py-1 rounded bg-gray-50 text-gray-500 text-[10px] font-medium border border-gray-100">
-                <svg className="w-3.5 h-3.5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
-                </svg>
-                Credencial: {instructor.credential}
-              </span>
-            )}
-          </div>
-
-          {/* Pricing Bar */}
-          <div className="mt-5 bg-gray-50 rounded-xl p-3 border border-gray-100 flex items-center justify-between">
-            <div className="flex items-center">
-              <span className="text-lg mr-2">💰</span>
-              <div className="flex flex-col">
-                <span className="text-sm font-bold text-gray-900">{formatCurrency(currentDisplayPrices.day)} <span className="text-xs font-normal text-gray-500">/ aula</span></span>
-              </div>
-            </div>
-            {instructor.hasNightLessons && (
-              <div className="flex items-center pl-4 border-l border-gray-200">
-                <span className="text-lg mr-2">🌙</span>
-                <div className="flex flex-col">
-                  <span className="text-xs text-gray-500">Noturno:</span>
-                  <span className="text-sm font-bold text-gray-900">{formatCurrency(currentDisplayPrices.night)}</span>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Review Action Button */}
@@ -1312,12 +1363,27 @@ export const StudentInstructorProfile: React.FC = () => {
 
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 sm:max-w-md sm:mx-auto z-20">
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 sm:max-w-md sm:mx-auto z-20 flex items-center justify-between">
+        <div className="flex flex-col">
+          {selectedSlots.length > 0 ? (
+            <>
+              <span className="text-sm text-gray-500 font-medium">Total ({selectedSlots.length} {selectedSlots.length === 1 ? 'aula' : 'aulas'})</span>
+              <span className="text-xl font-bold text-gray-900">{formatCurrency(totalPrice)}</span>
+            </>
+          ) : (
+            <>
+              <span className="text-sm text-gray-500 font-medium">A partir de</span>
+              <span className="text-xl font-bold text-gray-900">
+                {formatCurrency(currentDisplayPrices.day)}
+                <span className="text-sm font-normal text-gray-500">/aula</span>
+              </span>
+            </>
+          )}
+        </div>
         <Button 
-          fullWidth 
           onClick={handleBook} 
           disabled={selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || isSuccess}
-          className={`shadow-lg transition-all duration-300 ${
+          className={`shadow-lg transition-all duration-300 px-8 py-3 ${
             isSuccess 
               ? 'bg-green-600 hover:bg-green-700 border-transparent text-white shadow-green-200' 
               : (selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment) 
@@ -1333,10 +1399,10 @@ export const StudentInstructorProfile: React.FC = () => {
                 Redirecionando...
              </span>
           ) : isProcessingPayment 
-            ? 'Processando pagamento...' 
+            ? 'Processando...' 
             : selectedSlots.length > 0 
-                  ? `Pagar ${selectedSlots.length} ${selectedSlots.length === 1 ? 'aula' : 'aulas'} — ${formatCurrency(totalPrice)}`
-                  : 'Selecione um horário'
+                  ? 'Pagar agora'
+                  : 'Agendar'
           }
         </Button>
       </div>

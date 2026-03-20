@@ -60,8 +60,28 @@ export const StudentHome: React.FC = () => {
   useEffect(() => {
     if (session?.user?.id) {
       loadFavorites();
+      loadStudentCity();
     }
   }, [session?.user?.id]);
+
+  const loadStudentCity = async () => {
+    if (!session?.user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('city')
+        .eq('id', session.user.id)
+        .single();
+        
+      if (error) throw error;
+      
+      if (data?.city) {
+        setSelectedCity(data.city);
+      }
+    } catch (error) {
+      console.error('Error loading student city:', error);
+    }
+  };
 
   const fetchInstructors = async () => {
     setLoading(true);
@@ -173,32 +193,52 @@ export const StudentHome: React.FC = () => {
   };
 
   // --- FILTERING LOGIC ---
-  const filteredInstructors = instructors.filter((inst) => {
-    // 1. City Match (Exact String Match)
-    // We rely on CitySelect standardization "City - UF"
-    if (selectedCity) {
-        if (inst.profiles.city !== selectedCity) {
-            return false;
-        }
-    }
-
+  const textFilteredInstructors = instructors.filter((inst) => {
     const term = searchText.trim();
     if (!term) return true;
     
-    // 2. Search by Public ID (EXACT MATCH required by validation rules)
+    // Search by Public ID (EXACT MATCH required by validation rules)
     if (term.toUpperCase().startsWith('ALT-')) {
       return inst.public_id?.toUpperCase() === term.toUpperCase();
     }
 
-    // 3. Search by Name (Partial, Case-Insensitive)
-    const nameMatch = inst.profiles.full_name?.toLowerCase().includes(term.toLowerCase());
-    return nameMatch;
-  }).sort((a, b) => {
+    // Search by Name (Partial, Case-Insensitive)
+    return inst.profiles.full_name?.toLowerCase().includes(term.toLowerCase());
+  });
+
+  const cityFilteredInstructors = textFilteredInstructors.filter((inst) => {
+    if (!selectedCity) return true;
+    return inst.profiles.city === selectedCity;
+  });
+
+  // Fallback: If a city is selected but there are NO instructors in that city at all
+  const cityHasInstructors = selectedCity 
+    ? instructors.some(inst => inst.profiles.city === selectedCity)
+    : true;
+
+  const isFallback = selectedCity !== '' && !cityHasInstructors;
+  const finalInstructors = isFallback ? textFilteredInstructors : cityFilteredInstructors;
+
+  const sortedInstructors = [...finalInstructors].sort((a, b) => {
     const isAFav = favorites.includes(a.id);
     const isBFav = favorites.includes(b.id);
     
+    // 1. Favorites always first
     if (isAFav && !isBFav) return -1;
     if (!isAFav && isBFav) return 1;
+    
+    // 2. If in fallback mode, prioritize by rating and review count
+    if (isFallback) {
+      const aReviews = a.reviews || [];
+      const bReviews = b.reviews || [];
+      
+      const aRating = aReviews.length > 0 ? aReviews.reduce((acc, r) => acc + r.rating, 0) / aReviews.length : 0;
+      const bRating = bReviews.length > 0 ? bReviews.reduce((acc, r) => acc + r.rating, 0) / bReviews.length : 0;
+      
+      if (aRating !== bRating) return bRating - aRating;
+      return bReviews.length - aReviews.length;
+    }
+    
     return 0;
   });
 
@@ -272,14 +312,12 @@ export const StudentHome: React.FC = () => {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
             <span className="text-gray-400 text-sm">Buscando instrutores...</span>
           </div>
-        ) : filteredInstructors.length === 0 ? (
+        ) : sortedInstructors.length === 0 ? (
           <div className="text-center py-12 px-6">
             <div className="text-5xl mb-3 grayscale opacity-30">🔍</div>
             <p className="text-gray-600 font-semibold text-lg">Nenhum instrutor encontrado</p>
             <p className="text-sm text-gray-400 mt-2 leading-relaxed">
-               {selectedCity 
-                 ? `Não encontramos instrutores ativos em "${selectedCity}".` 
-                 : "Tente mudar os filtros de busca."}
+               Tente mudar os filtros de busca.
             </p>
             {selectedCity && (
                 <button 
@@ -291,7 +329,14 @@ export const StudentHome: React.FC = () => {
             )}
           </div>
         ) : (
-          filteredInstructors.map((inst) => {
+          <>
+            {isFallback && (
+              <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-4 mb-2 text-center">
+                <p className="text-yellow-800 font-medium text-sm">Ainda não temos instrutores na sua região</p>
+                <p className="text-yellow-600 text-xs mt-1">Mostrando instrutores de outras cidades</p>
+              </div>
+            )}
+            {sortedInstructors.map((inst) => {
             const isFavorite = favorites.includes(inst.id);
             const hasCar = inst.instructor_vehicles.some(v => v.type === 'car');
             const hasBike = inst.instructor_vehicles.some(v => v.type === 'bike');
@@ -313,9 +358,9 @@ export const StudentHome: React.FC = () => {
                 className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden transition-all hover:shadow-md active:scale-[0.99] cursor-pointer"
               >
                 
-                {/* Top Row: Avatar, Name, Price, Favorite */}
+                {/* Top Row: Avatar, Name & Verification, Rating, City, Price */}
                 <div className="flex justify-between items-start w-full">
-                  <div className="flex items-start flex-1 min-w-0">
+                  <div className="flex items-center flex-1 min-w-0">
                     {/* Avatar */}
                     <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-xl border border-gray-50 flex-shrink-0 mr-3 text-gray-400 overflow-hidden">
                       {inst.profiles.avatar_url ? (
@@ -325,27 +370,35 @@ export const StudentHome: React.FC = () => {
                       )}
                     </div>
                     
-                    {/* Name & ID */}
-                    <div className="flex flex-col min-w-0 pr-2 pt-0.5">
-                      <h3 className="font-bold text-gray-900 text-base leading-tight truncate">
-                        {inst.profiles.full_name}
-                      </h3>
-                      {inst.public_id && (
-                        <span className="text-[10px] text-gray-400 font-medium mt-0.5">
-                          ID: {inst.public_id}
-                        </span>
-                      )}
+                    {/* Info */}
+                    <div className="flex flex-col min-w-0 pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="font-bold text-gray-900 text-base leading-tight truncate">
+                          {inst.profiles.full_name}
+                        </h3>
+                        {inst.credential && inst.credential !== 'N/A' && (
+                          <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="flex items-center text-xs text-gray-500 mt-1 space-x-2">
+                        {reviewsCount > 0 && (
+                          <>
+                            <RatingBadge rating={avgRating} count={reviewsCount} variant="compact" />
+                            <span className="text-gray-300">•</span>
+                          </>
+                        )}
+                        <span className="truncate">{inst.profiles.city || 'Cidade não informada'}</span>
+                      </div>
                     </div>
                   </div>
 
                   {/* Price & Favorite */}
                   <div className="flex flex-col items-end flex-shrink-0 ml-2">
-                    <div className="flex items-center mb-1">
-                      <span className="text-sm font-bold text-blue-600">{formatCurrency(lowestPrice)}</span>
-                    </div>
                     <button
-                      onClick={(e) => toggleFavorite(inst.id, e)}
-                      className="p-1.5 rounded-full hover:bg-gray-50 transition-all focus:outline-none -mr-1.5"
+                      onClick={(e) => { e.stopPropagation(); toggleFavorite(inst.id, e); }}
+                      className="p-1.5 rounded-full hover:bg-gray-50 transition-all focus:outline-none -mr-1.5 mb-1"
                     >
                       <svg
                         className={`w-5 h-5 ${isFavorite ? 'text-red-500 fill-current' : 'text-gray-300'}`}
@@ -356,24 +409,15 @@ export const StudentHome: React.FC = () => {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                       </svg>
                     </button>
-                  </div>
-                </div>
-
-                {/* Middle Row: Rating & Location */}
-                <div className="flex items-center text-xs text-gray-500 mt-3 space-x-3">
-                  <RatingBadge rating={avgRating} count={reviewsCount} variant="compact" />
-                  
-                  <div className="flex items-center text-gray-500 truncate">
-                    <svg className="w-3.5 h-3.5 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <span className="truncate">{inst.profiles.city || 'Cidade não informada'}</span>
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">A partir de</span>
+                      <span className="text-lg font-bold text-blue-600 leading-none mt-0.5">{formatCurrency(lowestPrice)}</span>
+                    </div>
                   </div>
                 </div>
 
                 {/* Bottom Row: Tags (Category & Vehicles) */}
-                <div className="flex flex-wrap gap-1.5 mt-3">
+                <div className="flex flex-wrap gap-1.5 mt-4">
                   <span className="inline-flex items-center px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-semibold uppercase tracking-wide">
                     {getCategoryLabel(inst.categories)}
                   </span>
@@ -390,23 +434,10 @@ export const StudentHome: React.FC = () => {
                   )}
                 </div>
 
-                {/* Location Text (Optional, if different from city) */}
-                {inst.location_text && (
-                  <div className="mt-2 text-[10px] text-gray-400 truncate">
-                    Ponto de encontro: {inst.location_text}
-                  </div>
-                )}
-
-                {/* Action Button */}
-                <div className="mt-4 pt-3 border-t border-gray-50">
-                  <div className="w-full text-center text-sm font-semibold text-blue-600">
-                    Ver agenda e perfil
-                  </div>
-                </div>
-
               </div>
             );
-          })
+          })}
+          </>
         )}
       </div>
 
