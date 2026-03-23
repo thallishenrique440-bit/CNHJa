@@ -124,7 +124,7 @@ export const InstructorProfile: React.FC = () => {
           setCredential(instructor.credential_number || '');
           setWhatsapp(instructor.whatsapp || '');
           setNightLessonsEnabled(instructor.has_night_lessons || false);
-          setDefaultLocation(instructor.location_text || '');
+          setDefaultLocation(instructor.meeting_point || '');
           setMeetingPointLat(instructor.meeting_point_lat || null);
           setMeetingPointLng(instructor.meeting_point_lng || null);
           setMeetingPointPlaceId(instructor.meeting_point_place_id || null);
@@ -319,7 +319,7 @@ export const InstructorProfile: React.FC = () => {
         base_price: legacyBasePrice,
         night_price: legacyNightPrice,
         has_night_lessons: nightLessonsEnabled,
-        location_text: defaultLocation,
+        meeting_point: defaultLocation,
         meeting_point_lat: meetingPointLat,
         meeting_point_lng: meetingPointLng,
         meeting_point_place_id: meetingPointPlaceId,

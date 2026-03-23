@@ -87,13 +87,14 @@ export function usePushNotifications() {
 
         unsubscribe = onMessage(messaging, (payload) => {
           console.log('Message received in foreground: ', payload);
-          if (payload.notification) {
-            addToast(payload.notification.title || 'Nova notificação', 'info');
+          const notification = payload.notification;
+          if (notification) {
+            addToast(notification.title || 'Nova notificação', 'info');
             
             if (Notification.permission === 'granted') {
               navigator.serviceWorker.ready.then((registration) => {
-                registration.showNotification(payload.notification.title || 'Nova notificação', {
-                  body: payload.notification.body,
+                registration.showNotification(notification.title || 'Nova notificação', {
+                  body: notification.body,
                   icon: '/icon-192x192.png',
                   data: payload.data
                 });

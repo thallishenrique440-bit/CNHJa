@@ -270,7 +270,7 @@ export const StudentLessons: React.FC = () => {
             instructor_id,
             instructors (
               whatsapp,
-              location_text,
+              meeting_point,
               profiles (
                 full_name,
                 avatar_url,
@@ -343,7 +343,7 @@ export const StudentLessons: React.FC = () => {
               instructorPhoto: instructorData?.profiles?.avatar_url,
               instructorWhatsapp: instructorData?.whatsapp,
               vehicleModel: vehicleModel,
-              location: instructorData?.location_text || 'Local a combinar',
+              location: instructorData?.meeting_point || 'Local a combinar',
               date: lessonDate,
               time: timeStr,
               endTime: endTimeStr,
