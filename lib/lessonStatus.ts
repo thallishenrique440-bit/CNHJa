@@ -36,12 +36,26 @@ export function getDerivedStatus(
   endTimeStr: string,
   now: Date
 ): LessonDisplayStatus {
+  // Defensive checks for missing or invalid inputs
+  if (!dateStr || !startTimeStr || !endTimeStr) {
+    console.warn('getDerivedStatus: Missing required time fields', { dateStr, startTimeStr, endTimeStr });
+    return (dbStatus === 'pending_approval' ? 'pending' : dbStatus) as LessonDisplayStatus;
+  }
+
   // Parsing date and time
   // Ensure we only take the YYYY-MM-DD part if dateStr contains time
   const cleanDateStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
-  const [year, month, day] = cleanDateStr.split('-').map(Number);
-  const [startH, startM] = startTimeStr.split(':').map(Number);
-  const [endH, endM] = endTimeStr.split(':').map(Number);
+  const dateParts = cleanDateStr.split('-').map(Number);
+  const startParts = startTimeStr.split(':').map(Number);
+  const endParts = endTimeStr.split(':').map(Number);
+
+  if (dateParts.length < 3 || startParts.length < 2 || endParts.length < 2) {
+    return (dbStatus === 'pending_approval' ? 'pending' : dbStatus) as LessonDisplayStatus;
+  }
+
+  const [year, month, day] = dateParts;
+  const [startH, startM] = startParts;
+  const [endH, endM] = endParts;
 
   const start = new Date(year, month - 1, day, startH, startM);
   const end = new Date(year, month - 1, day, endH, endM);

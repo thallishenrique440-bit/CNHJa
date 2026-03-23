@@ -30,6 +30,32 @@ interface Lesson {
   isReviewed?: boolean; 
 }
 
+interface DBAppointment {
+  id: string;
+  date: string;
+  start_time: string;
+  end_time: string | null;
+  status: string;
+  price: number;
+  category: string;
+  instructor_id: string;
+  instructors: {
+    whatsapp: string;
+    meeting_point: string;
+    profiles: {
+      full_name: string;
+      avatar_url: string;
+      experience_level: string;
+      cnh_process_type: string;
+    };
+    instructor_vehicles: {
+      type: string;
+      model: string;
+    }[];
+  };
+  reviews: { id: string }[];
+}
+
 interface LessonGroup extends Omit<Lesson, 'id' | 'price' | 'endTime'> {
     ids: string[];
     totalPrice: number;
@@ -265,6 +291,7 @@ export const StudentLessons: React.FC = () => {
             id,
             date,
             start_time,
+            end_time,
             status,
             price,
             category,
@@ -293,66 +320,70 @@ export const StudentLessons: React.FC = () => {
         if (error) throw error;
 
         if (data) {
-          const now = new Date(Date.now() + serverTimeOffset);
+          const mappedLessons: Lesson[] = (data as unknown as DBAppointment[]).map((apt): Lesson | null => {
+            try {
+              const [year, month, day] = apt.date.split('-').map(Number);
+              const [hours, minutes] = apt.start_time.split(':').map(Number);
+              const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+              
+              // Use end_time from DB if available, fallback to +50min
+              const endTimeStr = apt.end_time 
+                ? apt.end_time.substring(0, 5) 
+                : addMinutesToTime(timeStr, 50);
 
-          const mappedLessons: Lesson[] = data.map((apt: any) => {
-            const [year, month, day] = apt.date.split('-').map(Number);
-            const [hours, minutes] = apt.start_time.split(':').map(Number);
-            const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-            const endTimeStr = addMinutesToTime(timeStr, 50);
+              const lessonDate = new Date(year, month - 1, day);
+              const now = new Date(Date.now() + serverTimeOffset);
+              
+              const displayStatus = getDerivedStatus(
+                apt.status,
+                apt.date,
+                apt.start_time,
+                apt.end_time || addMinutesToTime(apt.start_time, 50),
+                now
+              );
+              
+              const hasReview = apt.reviews && apt.reviews.length > 0;
+              const instructorData = apt.instructors;
+              const category = apt.category as 'A' | 'B';
+              
+              let vehicleModel = undefined;
+              if (instructorData?.instructor_vehicles) {
+                  if (category === 'B') {
+                      const car = instructorData.instructor_vehicles.find((v) => v.type === 'car');
+                      if (car) vehicleModel = car.model;
+                  } else if (category === 'A') {
+                      const bike = instructorData.instructor_vehicles.find((v) => v.type === 'bike');
+                      if (bike) vehicleModel = bike.model;
+                  }
+              }
 
-            const lessonDate = new Date(year, month - 1, day);
-            const lessonStartDateTime = new Date(year, month - 1, day, hours, minutes);
-            const lessonEndDateTime = new Date(lessonStartDateTime);
-            lessonEndDateTime.setMinutes(lessonEndDateTime.getMinutes() + 50);
-
-            const now = new Date(Date.now() + serverTimeOffset);
-            const displayStatus = getDerivedStatus(
-              apt.status,
-              apt.date,
-              apt.start_time,
-              apt.end_time,
-              now
-            );
-            
-            const hasReview = apt.reviews && apt.reviews.length > 0;
-
-            const instructorData = apt.instructors;
-            const category = apt.category as 'A' | 'B';
-            
-            let vehicleModel = undefined;
-            if (instructorData?.instructor_vehicles) {
-                if (category === 'B') {
-                    const car = instructorData.instructor_vehicles.find((v: any) => v.type === 'car');
-                    if (car) vehicleModel = car.model;
-                } else if (category === 'A') {
-                    const bike = instructorData.instructor_vehicles.find((v: any) => v.type === 'bike');
-                    if (bike) vehicleModel = bike.model;
-                }
+              return {
+                id: apt.id,
+                instructorId: apt.instructor_id,
+                instructorName: instructorData?.profiles?.full_name || 'Instrutor',
+                instructorPhoto: instructorData?.profiles?.avatar_url,
+                instructorWhatsapp: instructorData?.whatsapp,
+                vehicleModel: vehicleModel,
+                location: instructorData?.meeting_point || 'Local a combinar',
+                date: lessonDate,
+                time: timeStr,
+                endTime: endTimeStr,
+                status: displayStatus,
+                price: apt.price,
+                lessonCategory: category,
+                isReviewed: hasReview
+              };
+            } catch (mapErr) {
+              console.error('Error mapping individual lesson:', apt.id, mapErr);
+              return null;
             }
-
-            return {
-              id: apt.id,
-              instructorId: apt.instructor_id,
-              instructorName: instructorData?.profiles?.full_name || 'Instrutor',
-              instructorPhoto: instructorData?.profiles?.avatar_url,
-              instructorWhatsapp: instructorData?.whatsapp,
-              vehicleModel: vehicleModel,
-              location: instructorData?.meeting_point || 'Local a combinar',
-              date: lessonDate,
-              time: timeStr,
-              endTime: endTimeStr,
-              status: displayStatus,
-              price: apt.price,
-              lessonCategory: category,
-              isReviewed: hasReview
-            };
-          });
+          }).filter((l): l is Lesson => l !== null);
 
           setLessons(mappedLessons);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error fetching lessons:', err);
+        addToast('Erro ao carregar suas aulas. Tente novamente.', 'error');
       } finally {
         setLoading(false);
       }
