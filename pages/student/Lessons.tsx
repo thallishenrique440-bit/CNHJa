@@ -723,8 +723,6 @@ export const StudentLessons: React.FC = () => {
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando</span>;
       case 'in_progress': 
         return <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 animate-pulse">Em andamento</span>;
-      case 'confirmed':
-        return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Confirmada</span>;
       case 'awaiting_completion':
         return <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">Aguardando finalização</span>;
       case 'completed': 

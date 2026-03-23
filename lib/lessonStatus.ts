@@ -48,29 +48,20 @@ export function getDerivedStatus(
 
   // Safety check for invalid dates
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    return dbStatus as LessonDisplayStatus;
+    return (dbStatus === 'pending_approval' ? 'pending' : dbStatus) as LessonDisplayStatus;
   }
 
-  // Status terminais do banco
-  if (dbStatus === 'completed') return 'completed';
-  if (dbStatus === 'cancelled') return 'cancelled';
-  if (dbStatus === 'rejected') return 'rejected';
-  if (dbStatus === 'blocked') return 'blocked';
-  if (dbStatus === 'reserved') return 'reserved';
-  if (dbStatus === 'expired') return 'expired';
-
-  // Lógica para pendentes (não confirmadas)
-  if (dbStatus === 'pending' || dbStatus === 'pending_approval') {
-    if (now >= start) return 'expired';
-    return 'pending';
-  }
-
-  // Lógica para confirmadas/agendadas
+  // Lógica baseada em tempo APENAS para aulas confirmadas ou agendadas
   if (dbStatus === 'confirmed' || dbStatus === 'scheduled') {
     if (now < start) return 'confirmed';
     if (now >= start && now < end) return 'in_progress';
     return 'awaiting_completion';
   }
 
+  // Mapeamento necessário para compatibilidade com LessonDisplayStatus
+  if (dbStatus === 'pending_approval') return 'pending';
+
+  // Para todos os outros status (cancelled, rejected, completed, expired, etc.), 
+  // retorna o status original sem modificação baseada em tempo.
   return dbStatus as LessonDisplayStatus;
 }
