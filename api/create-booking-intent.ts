@@ -19,13 +19,29 @@ export default async function handler(req: any, res: any) {
 
   // Get token from header
   const authHeader = req.headers.authorization;
+  
+  // Diagnostic logs (Safe: no secrets logged)
+  console.log('[DEBUG] Auth Header present:', !!authHeader);
+  if (authHeader) {
+    console.log('[DEBUG] Auth Header length:', authHeader.length);
+  }
+
   if (!authHeader) {
     return res.status(401).json({ error: 'Missing Authorization header' });
   }
+  
   const token = authHeader.replace('Bearer ', '');
+  console.log('[DEBUG] Token extracted, length:', token.length);
+  
+  // Check Supabase config presence
+  console.log('[DEBUG] SUPABASE_URL present:', !!process.env.SUPABASE_URL);
+  console.log('[DEBUG] SUPABASE_SERVICE_ROLE_KEY present:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+  console.log('[DEBUG] SUPABASE_ANON_KEY present:', !!process.env.SUPABASE_ANON_KEY);
+
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
 
   if (authError || !user) {
+    console.error('[DEBUG] Auth Error:', authError?.message || 'No user found');
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
