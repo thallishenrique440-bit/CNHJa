@@ -34,7 +34,8 @@ export function getDerivedStatus(
   dateStr: string,
   startTimeStr: string,
   endTimeStr: string,
-  now: Date
+  now: Date,
+  isInstructor: boolean = false
 ): LessonDisplayStatus {
   // Defensive checks for missing or invalid inputs
   if (!dateStr || !startTimeStr || !endTimeStr) {
@@ -69,6 +70,10 @@ export function getDerivedStatus(
   if (dbStatus === 'confirmed' || dbStatus === 'scheduled') {
     if (now < start) return 'confirmed';
     if (now >= start && now < end) return 'in_progress';
+    
+    // Para instrutores, aulas passadas são sempre 'completed' na UI
+    if (isInstructor) return 'completed';
+    
     return 'awaiting_completion';
   }
 

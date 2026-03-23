@@ -21,9 +21,11 @@ interface Lesson {
   instructorWhatsapp?: string;
   vehicleModel?: string;
   date: Date;
+  dateStr: string;
   time: string;
   endTime: string;
   status: LessonStatus;
+  dbStatus: string;
   price: number;
   location: string;
   lessonCategory: 'A' | 'B';
@@ -206,6 +208,7 @@ export const StudentLessons: React.FC = () => {
   // Finalization Flow State
   const [finalizingLessonGroup, setFinalizingLessonGroup] = useState<LessonGroup | null>(null);
   const [flowStep, setFlowStep] = useState<'rating' | 'tip' | 'success' | null>(null);
+  const [isAutoModal, setIsAutoModal] = useState(false);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
 
@@ -252,10 +255,15 @@ export const StudentLessons: React.FC = () => {
 
   // --- AUTO-OPEN REVIEW MODAL ---
   useEffect(() => {
-    if (pendingReviewAptId && lessons.length > 0 && !hasPromptedReview.current && !flowStep) {
-      const apt = lessons.find(l => l.id === pendingReviewAptId);
-      if (apt) {
+    if (!loading && lessons.length > 0 && !hasPromptedReview.current && !flowStep) {
+      // Find all lessons that are "awaiting_completion"
+      const awaitingLessons = lessons.filter(l => l.status === 'awaiting_completion');
+      
+      // Only auto-open if there is exactly ONE pending lesson
+      if (awaitingLessons.length === 1) {
         hasPromptedReview.current = true;
+        const apt = awaitingLessons[0];
+        
         const group: LessonGroup = {
           ids: [apt.id],
           count: 1,
@@ -267,16 +275,19 @@ export const StudentLessons: React.FC = () => {
           instructorWhatsapp: apt.instructorWhatsapp,
           vehicleModel: apt.vehicleModel,
           date: apt.date,
+          dateStr: apt.dateStr,
           time: apt.time,
           status: apt.status,
+          dbStatus: apt.dbStatus,
           location: apt.location,
           lessonCategory: apt.lessonCategory,
           isReviewed: apt.isReviewed
         };
+        setIsAutoModal(true);
         startFinalization(group);
       }
     }
-  }, [pendingReviewAptId, lessons, flowStep]);
+  }, [loading, lessons, flowStep]);
 
   // --- FETCH REAL DATA ---
   useEffect(() => {
@@ -366,9 +377,11 @@ export const StudentLessons: React.FC = () => {
                 vehicleModel: vehicleModel,
                 location: instructorData?.meeting_point || 'Local a combinar',
                 date: lessonDate,
+                dateStr: apt.date,
                 time: timeStr,
                 endTime: endTimeStr,
                 status: displayStatus,
+                dbStatus: apt.status,
                 price: apt.price,
                 lessonCategory: category,
                 isReviewed: hasReview
@@ -427,15 +440,44 @@ export const StudentLessons: React.FC = () => {
   const handlePrevWeek = () => setCurrentDate(addDays(currentDate, -7));
   const handleNextWeek = () => setCurrentDate(addDays(currentDate, 7));
 
-  const startFinalization = (group: LessonGroup) => {
+  const startFinalization = async (group: LessonGroup) => {
     setFinalizingLessonGroup(group);
-    setFlowStep('rating');
     setRating(0);
     setComment('');
     setSelectedTip(20); // Reset to 20
     setCustomTip('');
     setIsSubmittingTip(false);
     setTipClientSecret(null);
+
+    // Determine if we should show the rating step
+    try {
+      // Check how many COMPLETED lessons this student has with this instructor
+      const { count, error } = await supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('student_id', session?.user?.id)
+        .eq('instructor_id', group.instructorId)
+        .eq('status', 'completed');
+
+      if (error) throw error;
+
+      const completedCount = count || 0;
+      
+      // Show rating if:
+      // 1. First lesson (completedCount === 0)
+      // 2. Every 5 lessons (completedCount is 4, 9, 14... so this next one makes it 5, 10, 15...)
+      const shouldShowRating = completedCount === 0 || (completedCount > 0 && (completedCount + 1) % 5 === 0);
+
+      if (shouldShowRating) {
+        setFlowStep('rating');
+      } else {
+        setFlowStep('tip');
+      }
+    } catch (err) {
+      console.error("Error checking lesson count:", err);
+      // Fallback to rating if error
+      setFlowStep('rating');
+    }
   };
 
   const submitRating = () => {
@@ -614,6 +656,7 @@ export const StudentLessons: React.FC = () => {
     setIsSubmittingTip(false);
     setTipClientSecret(null);
     setTipGiven(false);
+    setIsAutoModal(false);
   };
 
   const handleSecurityClick = () => {
@@ -687,8 +730,10 @@ export const StudentLessons: React.FC = () => {
         instructorWhatsapp: daily[0].instructorWhatsapp,
         vehicleModel: daily[0].vehicleModel,
         date: daily[0].date,
+        dateStr: daily[0].dateStr,
         time: daily[0].time,
         status: daily[0].status,
+        dbStatus: daily[0].dbStatus,
         location: daily[0].location,
         lessonCategory: daily[0].lessonCategory,
         isReviewed: daily[0].isReviewed
@@ -723,8 +768,10 @@ export const StudentLessons: React.FC = () => {
                 instructorWhatsapp: next.instructorWhatsapp,
                 vehicleModel: next.vehicleModel,
                 date: next.date,
+                dateStr: next.dateStr,
                 time: next.time,
                 status: next.status,
+                dbStatus: next.dbStatus,
                 location: next.location,
                 lessonCategory: next.lessonCategory,
                 isReviewed: next.isReviewed
@@ -904,16 +951,29 @@ export const StudentLessons: React.FC = () => {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0">
-                        {/* Cancel Button */}
-                        {(group.status === 'confirmed' || group.status === 'pending') && (
-                           <Button 
-                             variant="outline"
-                             onClick={() => handleCancelClick(group)}
-                             className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-gray-200 text-red-500 hover:bg-red-50 hover:border-red-100"
-                           >
-                             Cancelar
-                           </Button>
-                        )}
+                        {/* Cancel Button - Based on real-time check and DB status */}
+                        {(() => {
+                            const isCancellableStatus = group.dbStatus === 'confirmed' || group.dbStatus === 'scheduled' || group.dbStatus === 'pending_approval';
+                            if (!isCancellableStatus) return null;
+
+                            const now = new Date(Date.now() + serverTimeOffset);
+                            const [y, m, d] = group.dateStr.split('-').map(Number);
+                            const [h, min] = group.time.split(':').map(Number);
+                            const lessonStart = new Date(y, m - 1, d, h, min);
+
+                            if (now < lessonStart) {
+                                return (
+                                    <Button 
+                                      variant="outline"
+                                      onClick={() => handleCancelClick(group)}
+                                      className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-gray-200 text-red-500 hover:bg-red-50 hover:border-red-100"
+                                    >
+                                      Cancelar
+                                    </Button>
+                                );
+                            }
+                            return null;
+                        })()}
 
                         {/* WhatsApp Button */}
                         {group.instructorWhatsapp && (group.status === 'confirmed' || group.status === 'in_progress' || group.status === 'pending') && (
@@ -1035,7 +1095,9 @@ export const StudentLessons: React.FC = () => {
                 <Button fullWidth onClick={submitRating} disabled={rating === 0}>
                     Avaliar
                 </Button>
-                <button onClick={closeFlow} className="w-full text-center text-sm text-gray-400 py-2">Cancelar</button>
+                <button onClick={closeFlow} className="w-full text-center text-sm text-gray-400 py-2">
+                    {isAutoModal ? 'Ignorar por enquanto' : 'Cancelar'}
+                </button>
             </div>
             </div>
         )}
@@ -1133,6 +1195,15 @@ export const StudentLessons: React.FC = () => {
                     >
                       Pular caixinha
                     </Button>
+
+                    {isAutoModal && (
+                      <button 
+                        onClick={closeFlow} 
+                        className="w-full text-center text-xs text-gray-400 py-1 hover:text-gray-600"
+                      >
+                        Ignorar por enquanto
+                      </button>
+                    )}
                   </div>
                 </>
               ) : (

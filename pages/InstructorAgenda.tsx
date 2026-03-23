@@ -14,6 +14,7 @@ type DisplayStatus = LessonDisplayStatus | 'finished' | 'past_free' | 'past_pend
 interface Lesson {
   id: string;
   status: LessonStatus;
+  dbStatus?: string;
   studentName?: string;
   studentPhoto?: string | null;
   studentPhone?: string | null; // NEW FIELD
@@ -317,6 +318,7 @@ export const InstructorAgenda: React.FC = () => {
                     newAppointments[key] = {
                         id: apt.id,
                         status: uiStatus,
+                        dbStatus: apt.status,
                         studentName: apt.profiles?.full_name || 'Aluno',
                         studentPhoto: apt.profiles?.avatar_url,
                         studentPhone: apt.profiles?.phone, // Map phone
@@ -391,11 +393,12 @@ export const InstructorAgenda: React.FC = () => {
     const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     
     const sharedStatus = getSharedDerivedStatus(
-      lesson.status,
+      lesson.dbStatus || lesson.status,
       dateStr,
       slot.start,
       slot.end,
-      now
+      now,
+      true // isInstructor
     );
 
     // Map shared status to instructor UI status
@@ -1079,25 +1082,29 @@ export const InstructorAgenda: React.FC = () => {
                    Voltar
                 </Button>
              </div>
-          ) : selectedLesson?.status === 'pending' ? (
-             <div className="flex space-x-3 w-full">
-                <Button variant="outline" fullWidth onClick={handleRejectLesson} disabled={isActionLoading} className="border-red-200 text-red-600 hover:bg-red-50">{isActionLoading ? '...' : 'Recusar'}</Button>
-                <Button fullWidth onClick={handleConfirmLesson} disabled={isActionLoading}>{isActionLoading ? 'Processando...' : 'Aceitar e Confirmar'}</Button>
-             </div>
-          ) : (
-             <div className="space-y-3 w-full">
-                {/* Finalize Button for Awaiting Completion Lessons */}
-                {selectedDisplayStatus === 'past_pending' && (
-                    <Button 
-                       fullWidth 
-                       onClick={handleFinalizeLesson}
-                       disabled={isActionLoading}
-                       className="bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200"
-                    >
-                        {isActionLoading ? 'Finalizando...' : 'Finalizar aula'}
-                    </Button>
-                )}
+          ) : selectedLesson?.status === 'pending' ? (() => {
+              const now = new Date(Date.now() + serverTimeOffset);
+              const [y, m, d] = selectedLesson.dateStr!.split('-').map(Number);
+              const [h, min] = selectedLesson.timeStr!.split(':').map(Number);
+              const lessonStart = new Date(y, m - 1, d, h, min);
 
+              if (now >= lessonStart) {
+                  return (
+                      <div className="w-full text-center py-2">
+                          <p className="text-xs text-gray-400 italic">Esta solicitação expirou (horário já passou).</p>
+                          <Button variant="outline" fullWidth onClick={closeLessonModal} className="mt-2">Fechar</Button>
+                      </div>
+                  );
+              }
+
+              return (
+                 <div className="flex space-x-3 w-full">
+                    <Button variant="outline" fullWidth onClick={handleRejectLesson} disabled={isActionLoading} className="border-red-200 text-red-600 hover:bg-red-50">{isActionLoading ? '...' : 'Recusar'}</Button>
+                    <Button fullWidth onClick={handleConfirmLesson} disabled={isActionLoading}>{isActionLoading ? 'Processando...' : 'Aceitar e Confirmar'}</Button>
+                 </div>
+              );
+          })() : (
+             <div className="space-y-3 w-full">
                 {selectedLesson?.status !== 'free' && selectedLesson?.status !== 'blocked' && (
                     <Button 
                        fullWidth 
@@ -1112,11 +1119,11 @@ export const InstructorAgenda: React.FC = () => {
                 <Button fullWidth variant="outline" onClick={closeLessonModal} className="py-2.5 text-sm h-10 min-h-0">Fechar</Button>
                 
                 {/* Cancel Button for Scheduled/Confirmed Lessons - Only if not started yet */}
-                {(selectedLesson?.status === 'confirmed') && (() => {
+                {(selectedLesson?.dbStatus === 'confirmed' || selectedLesson?.dbStatus === 'scheduled') && (() => {
                     const now = new Date(Date.now() + serverTimeOffset);
-                    const [h, m] = selectedLesson.timeStr!.split(':').map(Number);
-                    const lessonStart = new Date(selectedLesson.dateStr!);
-                    lessonStart.setHours(h, m, 0, 0);
+                    const [y, m, d] = selectedLesson.dateStr!.split('-').map(Number);
+                    const [h, min] = selectedLesson.timeStr!.split(':').map(Number);
+                    const lessonStart = new Date(y, m - 1, d, h, min);
                     
                     if (now < lessonStart) {
                         return (

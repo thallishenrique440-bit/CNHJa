@@ -23,7 +23,7 @@ export const InstructorDiscounts: React.FC = () => {
   const [discountToDelete, setDiscountToDelete] = useState<string | null>(null);
   
   const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
-  const [basePrice, setBasePrice] = useState<number>(0);
+  const [categoryPrices, setCategoryPrices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -43,15 +43,14 @@ export const InstructorDiscounts: React.FC = () => {
     if (!session?.user) return;
     setLoading(true);
     try {
-      // Fetch base price (using legacy base_price for simplicity, or could fetch from instructor_categories)
-      const { data: instructorData } = await supabase
-        .from('instructors')
-        .select('base_price')
-        .eq('id', session.user.id)
-        .single();
+      // Fetch instructor categories for real prices
+      const { data: catData } = await supabase
+        .from('instructor_categories')
+        .select('*')
+        .eq('instructor_id', session.user.id);
         
-      if (instructorData && instructorData.base_price) {
-          setBasePrice(instructorData.base_price);
+      if (catData) {
+          setCategoryPrices(catData);
       }
 
       const { data, error } = await supabase
@@ -247,47 +246,82 @@ export const InstructorDiscounts: React.FC = () => {
                </div>
             ) : (
               discounts.map((rule) => {
-                const discountedPrice = basePrice > 0 
-                  ? basePrice - (basePrice * (rule.discount_percentage / 100))
-                  : 0;
-
                 return (
-                  <div key={rule.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden transition-all hover:shadow-md flex justify-between items-center">
+                  <div key={rule.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden transition-all hover:shadow-md">
                     
-                    <div>
-                      <div className="flex items-baseline space-x-2">
-                        <span className="text-2xl font-bold text-green-600">{rule.discount_percentage}% OFF</span>
-                      </div>
-                      <p className="text-sm text-gray-600 font-medium mt-1">
-                        A partir de <span className="font-bold text-gray-900">{rule.min_lessons} aulas</span>
-                      </p>
-                      {basePrice > 0 && (
-                        <p className="text-xs text-gray-500 mt-1.5">
-                          <span className="line-through opacity-70">{formatCurrency(basePrice)}</span>
-                          <span className="mx-1">➔</span>
-                          <span className="font-semibold text-gray-700">{formatCurrency(discountedPrice)} / aula</span>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <div className="flex items-baseline space-x-2">
+                          <span className="text-2xl font-bold text-green-600">{rule.discount_percentage}% OFF</span>
+                        </div>
+                        <p className="text-sm text-gray-600 font-medium mt-1">
+                          A partir de <span className="font-bold text-gray-900">{rule.min_lessons} aulas</span>
                         </p>
-                      )}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex space-x-2">
+                        <button 
+                          onClick={() => handleEdit(rule)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        >
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(rule.id)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Actions */}
-                    <div className="flex space-x-2">
-                      <button 
-                        onClick={() => handleEdit(rule)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                      >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(rule.id)}
-                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
+                    {/* 2x2 Preview Grid */}
+                    <div className="grid grid-cols-2 gap-3 pt-4 border-t border-gray-50">
+                      {['A', 'B'].map(cat => {
+                        const catData = categoryPrices.find(c => c.category === cat);
+                        if (!catData) return null;
+                        const pct = rule.discount_percentage / 100;
+
+                        return (
+                          <React.Fragment key={cat}>
+                            <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-1.5">
+                                {cat === 'A' ? '🏍️ Moto • Diurno' : '🚗 Carro • Diurno'}
+                              </p>
+                              <div className="flex flex-col">
+                                <span className="text-base font-bold text-gray-900 leading-tight">
+                                  {formatCurrency(catData.day_price * (1 - pct))}
+                                  <span className="text-[10px] font-normal text-gray-500 ml-1">/ aula</span>
+                                </span>
+                                <div className="flex items-center text-[10px] text-gray-400 mt-0.5">
+                                  <span className="line-through">{formatCurrency(catData.day_price)}</span>
+                                  <span className="ml-1">(- {formatCurrency(catData.day_price * pct)})</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-1.5">
+                                {cat === 'A' ? '🏍️ Moto • Noturno' : '🚗 Carro • Noturno'}
+                              </p>
+                              <div className="flex flex-col">
+                                <span className="text-base font-bold text-gray-900 leading-tight">
+                                  {formatCurrency(catData.night_price * (1 - pct))}
+                                  <span className="text-[10px] font-normal text-gray-500 ml-1">/ aula</span>
+                                </span>
+                                <div className="flex items-center text-[10px] text-gray-400 mt-0.5">
+                                  <span className="line-through">{formatCurrency(catData.night_price)}</span>
+                                  <span className="ml-1">(- {formatCurrency(catData.night_price * pct)})</span>
+                                </div>
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -353,9 +387,58 @@ export const InstructorDiscounts: React.FC = () => {
                     )}
                  </div>
                  <p className="text-xs text-gray-400 mt-1 ml-1">
-                   Desconto aplicado sobre o valor total.
-                 </p>
-               </div>
+                  Desconto aplicado sobre o valor total.
+                </p>
+              </div>
+
+              {/* Real-time Preview 2x2 */}
+              {formData.discountPercentage && parseInt(formData.discountPercentage) > 0 && (
+                <div className="pt-2">
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Preview dos preços com desconto:</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {['A', 'B'].map(cat => {
+                      const catData = categoryPrices.find(c => c.category === cat);
+                      if (!catData) return null;
+                      const pct = parseInt(formData.discountPercentage) / 100;
+
+                      return (
+                        <React.Fragment key={cat}>
+                          <div className="bg-green-50/50 p-4 rounded-xl border border-green-100">
+                            <p className="text-[10px] font-bold text-green-800 uppercase mb-1.5">
+                              {cat === 'A' ? '🏍️ Moto • Diurno' : '🚗 Carro • Diurno'}
+                            </p>
+                            <div className="flex flex-col">
+                              <span className="text-base font-bold text-green-900 leading-tight">
+                                {formatCurrency(catData.day_price * (1 - pct))}
+                                <span className="text-[10px] font-normal text-green-700/70 ml-1">/ aula</span>
+                              </span>
+                              <div className="flex items-center text-[10px] text-green-700/60 mt-0.5">
+                                <span className="line-through">{formatCurrency(catData.day_price)}</span>
+                                <span className="ml-1">(- {formatCurrency(catData.day_price * pct)})</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="bg-green-50/50 p-4 rounded-xl border border-green-100">
+                            <p className="text-[10px] font-bold text-green-800 uppercase mb-1.5">
+                              {cat === 'A' ? '🏍️ Moto • Noturno' : '🚗 Carro • Noturno'}
+                            </p>
+                            <div className="flex flex-col">
+                              <span className="text-base font-bold text-green-900 leading-tight">
+                                {formatCurrency(catData.night_price * (1 - pct))}
+                                <span className="text-[10px] font-normal text-green-700/70 ml-1">/ aula</span>
+                              </span>
+                              <div className="flex items-center text-[10px] text-green-700/60 mt-0.5">
+                                <span className="line-through">{formatCurrency(catData.night_price)}</span>
+                                <span className="ml-1">(- {formatCurrency(catData.night_price * pct)})</span>
+                              </div>
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="pt-4">

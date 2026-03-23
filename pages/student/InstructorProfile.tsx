@@ -665,8 +665,8 @@ export const StudentInstructorProfile: React.FC = () => {
     return minPrice;
   }, [instructor]);
 
-  const totalPrice = useMemo(() => {
-    if (!instructor) return 0;
+  const priceInfo = useMemo(() => {
+    if (!instructor) return { total: 0, base: 0, discountPct: 0 };
 
     // 1. Calculate Base Price
     const basePrice = selectedSlots.reduce((acc, slotKey) => {
@@ -694,23 +694,25 @@ export const StudentInstructorProfile: React.FC = () => {
     let discountPercentage = 0;
 
     if (instructor.discounts && instructor.discounts.length > 0) {
-        // Find the best applicable discount
-        // Sort by min_lessons desc to find the highest threshold met
         const sortedDiscounts = [...instructor.discounts].sort((a, b) => b.min_lessons - a.min_lessons);
-        
         const applicableRule = sortedDiscounts.find(d => lessonCount >= d.min_lessons);
         if (applicableRule) {
             discountPercentage = applicableRule.discount_percentage;
         }
     }
 
-    if (discountPercentage > 0) {
-        const discountAmount = Math.round(basePrice * (discountPercentage / 100));
-        return basePrice - discountAmount;
-    }
+    const finalPrice = discountPercentage > 0 
+      ? basePrice - Math.round(basePrice * (discountPercentage / 100))
+      : basePrice;
 
-    return basePrice;
+    return {
+      total: finalPrice,
+      base: basePrice,
+      discountPct: discountPercentage
+    };
   }, [selectedSlots, instructor, selectedLessonCategory]);
+
+  const totalPrice = priceInfo.total;
 
 
   const handleBook = async () => {
@@ -1067,10 +1069,29 @@ export const StudentInstructorProfile: React.FC = () => {
 
                   {/* Price Highlight */}
                   {startingPrice > 0 && (
-                    <div className="inline-flex items-baseline text-blue-700">
-                      <span className="text-xs font-medium mr-1 text-gray-500">A partir de</span>
-                      <span className="text-xl font-black">{formatCurrency(startingPrice)}</span>
-                      <span className="text-xs font-medium ml-1 text-gray-500">/ aula</span>
+                    <div className="flex flex-col items-start">
+                      <div className="inline-flex items-baseline text-blue-700">
+                        {!selectedLessonCategory ? (
+                          <>
+                            <span className="text-xs font-medium mr-1 text-gray-500">A partir de</span>
+                            <span className="text-xl font-black">{formatCurrency(startingPrice)}</span>
+                            <span className="text-xs font-medium ml-1 text-gray-500">/ aula</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xl font-black">{formatCurrency(currentDisplayPrices.day)}</span>
+                            <span className="text-xs font-medium ml-1 text-gray-500">/ aula</span>
+                          </>
+                        )}
+                      </div>
+                      {instructor.discounts.length > 0 && (
+                        <div className="mt-1 inline-flex items-center px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-[10px] font-bold border border-green-100">
+                          <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                          </svg>
+                          Descontos progressivos
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1425,14 +1446,26 @@ export const StudentInstructorProfile: React.FC = () => {
         <div className="flex flex-col">
           {selectedSlots.length > 0 ? (
             <>
-              <span className="text-sm text-gray-500 font-medium">Total ({selectedSlots.length} {selectedSlots.length === 1 ? 'aula' : 'aulas'})</span>
-              <span className="text-xl font-bold text-gray-900">{formatCurrency(totalPrice)}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-gray-500 font-medium">Total ({selectedSlots.length} {selectedSlots.length === 1 ? 'aula' : 'aulas'})</span>
+                {priceInfo.discountPct > 0 && (
+                  <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded uppercase">-{priceInfo.discountPct}%</span>
+                )}
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-xl font-bold text-gray-900">{formatCurrency(totalPrice)}</span>
+                {priceInfo.discountPct > 0 && (
+                  <span className="text-xs text-gray-400 line-through">{formatCurrency(priceInfo.base)}</span>
+                )}
+              </div>
             </>
           ) : (
             <>
-              <span className="text-sm text-gray-500 font-medium">A partir de</span>
+              <span className="text-sm text-gray-500 font-medium">
+                {!selectedLessonCategory ? 'A partir de' : 'Valor da aula'}
+              </span>
               <span className="text-xl font-bold text-gray-900">
-                {formatCurrency(currentDisplayPrices.day)}
+                {formatCurrency(!selectedLessonCategory ? startingPrice : currentDisplayPrices.day)}
                 <span className="text-sm font-normal text-gray-500">/aula</span>
               </span>
             </>
