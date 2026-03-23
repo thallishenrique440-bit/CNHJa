@@ -5,10 +5,11 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { getDerivedStatus as getSharedDerivedStatus, LessonDisplayStatus } from '../lib/lessonStatus';
 
 // --- Types ---
 type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled' | 'completed' | 'expired' | 'rejected';
-type DisplayStatus = LessonStatus | 'in_progress' | 'finished' | 'past_free' | 'expired' | 'past_pending' | 'cancelled_view' | 'unavailable';
+type DisplayStatus = LessonDisplayStatus | 'finished' | 'past_free' | 'past_pending' | 'cancelled_view' | 'unavailable';
 
 interface Lesson {
   id: string;
@@ -126,6 +127,7 @@ export const InstructorAgenda: React.FC = () => {
 
   // Modal State
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
+  const [selectedDisplayStatus, setSelectedDisplayStatus] = useState<DisplayStatus | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
 
   // Cancellation State
@@ -382,26 +384,34 @@ export const InstructorAgenda: React.FC = () => {
     return appointments[key] || { id: 'free', status: 'free' };
   };
 
-  const getDerivedStatus = (lesson: Lesson, timeState: 'current' | 'future' | 'past'): DisplayStatus => {
+  const getDerivedStatus = (lesson: Lesson, slot: TimeSlot, now: Date): DisplayStatus => {
     if (selectedDate.getDay() === 0) return 'unavailable';
     if (lesson.status === 'lunch') return 'lunch';
-    if (lesson.status === 'completed') return 'finished';
-    if (lesson.status === 'cancelled') return 'cancelled_view';
+    
+    const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+    
+    const sharedStatus = getSharedDerivedStatus(
+      lesson.status,
+      dateStr,
+      slot.start,
+      slot.end,
+      now
+    );
 
-    if (timeState === 'current') {
-        if (lesson.status === 'confirmed') return 'in_progress';
-        if (lesson.status === 'pending') return 'expired';
-        if (lesson.status === 'blocked') return 'blocked';
-        return 'free'; 
+    // Map shared status to instructor UI status
+    if (sharedStatus === 'completed') return 'finished';
+    if (sharedStatus === 'cancelled') return 'cancelled_view';
+    if (sharedStatus === 'awaiting_completion') return 'past_pending';
+    
+    // Handle special cases for instructor grid
+    if (sharedStatus === 'free') {
+        const [startH, startM] = slot.start.split(':').map(Number);
+        const start = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), startH, startM);
+        if (now > start) return 'past_free';
+        return 'free';
     }
 
-    if (timeState === 'past') {
-        if (lesson.status === 'confirmed') return 'past_pending';
-        if (lesson.status === 'pending') return 'expired';
-        return 'past_free'; 
-    }
-
-    return lesson.status; 
+    return sharedStatus as DisplayStatus;
   };
 
   const sortedSlots = useMemo(() => {
@@ -434,7 +444,7 @@ export const InstructorAgenda: React.FC = () => {
             timeState = 'past';
        }
 
-       const displayStatus = getDerivedStatus(lesson, timeState);
+       const displayStatus = getDerivedStatus(lesson, slot, now);
 
        return { slot, lesson, displayStatus, startMins, queueGroup };
     });
@@ -448,6 +458,7 @@ export const InstructorAgenda: React.FC = () => {
 
   const handleSlotClick = (slot: TimeSlot, lesson: Lesson, status: DisplayStatus) => {
     if (status === 'lunch' || status === 'past_free' || status === 'unavailable') return;
+    setSelectedDisplayStatus(status);
 
     switch (status) {
       case 'free': toggleBlock(slot.start, 'block'); break;
@@ -649,6 +660,29 @@ export const InstructorAgenda: React.FC = () => {
         }
     } finally {
         setIsActionLoading(false);
+    }
+  };
+
+  const handleFinalizeLesson = async () => {
+    if (!selectedLesson) return;
+    setIsActionLoading(true);
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ 
+          status: 'completed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedLesson.id);
+
+      if (error) throw error;
+      
+      addToast('Aula finalizada com sucesso!', 'success');
+      closeLessonModal();
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsActionLoading(false);
     }
   };
 
@@ -1052,6 +1086,18 @@ export const InstructorAgenda: React.FC = () => {
              </div>
           ) : (
              <div className="space-y-3 w-full">
+                {/* Finalize Button for Awaiting Completion Lessons */}
+                {selectedDisplayStatus === 'past_pending' && (
+                    <Button 
+                       fullWidth 
+                       onClick={handleFinalizeLesson}
+                       disabled={isActionLoading}
+                       className="bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200"
+                    >
+                        {isActionLoading ? 'Finalizando...' : 'Finalizar aula'}
+                    </Button>
+                )}
+
                 {selectedLesson?.status !== 'free' && selectedLesson?.status !== 'blocked' && (
                     <Button 
                        fullWidth 
@@ -1065,15 +1111,25 @@ export const InstructorAgenda: React.FC = () => {
                 
                 <Button fullWidth variant="outline" onClick={closeLessonModal} className="py-2.5 text-sm h-10 min-h-0">Fechar</Button>
                 
-                {/* Cancel Button for Scheduled/Confirmed Lessons */}
-                {(selectedLesson?.status === 'confirmed') && (
-                    <button 
-                      onClick={() => setViewState('cancel_form')}
-                      className="w-full text-center text-xs text-red-500 font-semibold hover:text-red-600 pt-2"
-                    >
-                      Cancelar esta aula
-                    </button>
-                )}
+                {/* Cancel Button for Scheduled/Confirmed Lessons - Only if not started yet */}
+                {(selectedLesson?.status === 'confirmed') && (() => {
+                    const now = new Date(Date.now() + serverTimeOffset);
+                    const [h, m] = selectedLesson.timeStr!.split(':').map(Number);
+                    const lessonStart = new Date(selectedLesson.dateStr!);
+                    lessonStart.setHours(h, m, 0, 0);
+                    
+                    if (now < lessonStart) {
+                        return (
+                            <button 
+                              onClick={() => setViewState('cancel_form')}
+                              className="w-full text-center text-xs text-red-500 font-semibold hover:text-red-600 pt-2"
+                            >
+                              Cancelar esta aula
+                            </button>
+                        );
+                    }
+                    return null;
+                })()}
              </div>
           )
         }

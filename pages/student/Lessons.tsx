@@ -8,9 +8,10 @@ import { Modal } from '../../components/Modal';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { getDerivedStatus, LessonDisplayStatus } from '../../lib/lessonStatus';
 
 // --- Types ---
-type LessonStatus = 'scheduled' | 'pending' | 'completed' | 'cancelled' | 'in_progress' | 'expired' | 'rejected' | 'confirmed';
+type LessonStatus = LessonDisplayStatus;
 
 interface Lesson {
   id: string;
@@ -305,22 +306,16 @@ export const StudentLessons: React.FC = () => {
             const lessonEndDateTime = new Date(lessonStartDateTime);
             lessonEndDateTime.setMinutes(lessonEndDateTime.getMinutes() + 50);
 
-            let displayStatus: LessonStatus = apt.status as LessonStatus;
+            const now = new Date(Date.now() + serverTimeOffset);
+            const displayStatus = getDerivedStatus(
+              apt.status,
+              apt.date,
+              apt.start_time,
+              apt.end_time,
+              now
+            );
             
             const hasReview = apt.reviews && apt.reviews.length > 0;
-
-            if (apt.status === 'pending' || apt.status === 'pending_approval') {
-               const [year, month, day] = apt.date.split('-').map(Number);
-               const [hours, minutes] = apt.start_time.split(':').map(Number);
-               const lessonStartDateTime = new Date(year, month - 1, day, hours, minutes);
-               const now = new Date(Date.now() + serverTimeOffset);
-               
-               if (now >= lessonStartDateTime) {
-                  displayStatus = 'expired';
-               } else {
-                  displayStatus = 'pending';
-               }
-            }
 
             const instructorData = apt.instructors;
             const category = apt.category as 'A' | 'B';
@@ -508,19 +503,25 @@ export const StudentLessons: React.FC = () => {
 
   // --- CANCELLATION LOGIC START ---
   const handleCancelClick = (group: LessonGroup) => {
-    // 1. Pending: Always allow cancel
-    if (group.status === 'pending') {
-      setLessonToCancel(group);
-      return;
-    }
-
-    // 2. Scheduled: Check 24h rule
     const now = new Date(Date.now() + serverTimeOffset);
     // Parse start time "HH:MM"
     const [h, m] = group.time.split(':').map(Number);
     const lessonStart = new Date(group.date);
     lessonStart.setHours(h, m, 0, 0);
 
+    // CRITICAL: Block if already started or passed
+    if (now >= lessonStart) {
+      addToast("Não é possível cancelar aulas que já começaram ou passaram.", "warning");
+      return;
+    }
+
+    // 1. Pending: Always allow cancel (if not passed)
+    if (group.status === 'pending') {
+      setLessonToCancel(group);
+      return;
+    }
+
+    // 2. Scheduled: Check 24h rule
     const diffMs = lessonStart.getTime() - now.getTime();
     const diffHours = diffMs / (1000 * 60 * 60);
 
@@ -704,7 +705,7 @@ export const StudentLessons: React.FC = () => {
     return groups.sort((a, b) => {
       const getWeight = (s: LessonStatus) => {
         if (s === 'in_progress') return 1;
-        if (s === 'scheduled' || s === 'pending') return 2;
+        if (s === 'confirmed' || s === 'pending') return 2;
         return 3;
       };
       const wA = getWeight(a.status);
@@ -716,14 +717,16 @@ export const StudentLessons: React.FC = () => {
 
   const renderStatusBadge = (status: LessonStatus) => {
     switch (status) {
-      case 'scheduled': 
+      case 'confirmed': 
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Agendada</span>;
       case 'pending': 
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando</span>;
       case 'in_progress': 
         return <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 animate-pulse">Em andamento</span>;
       case 'confirmed':
-        return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando finalização</span>;
+        return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Confirmada</span>;
+      case 'awaiting_completion':
+        return <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">Aguardando finalização</span>;
       case 'completed': 
         return <span className="text-xs font-medium text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100">Aula concluída</span>;
       case 'expired':
@@ -873,7 +876,7 @@ export const StudentLessons: React.FC = () => {
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0">
                         {/* Cancel Button */}
-                        {(group.status === 'scheduled' || group.status === 'pending') && (
+                        {(group.status === 'confirmed' || group.status === 'pending') && (
                            <Button 
                              variant="outline"
                              onClick={() => handleCancelClick(group)}
@@ -884,7 +887,7 @@ export const StudentLessons: React.FC = () => {
                         )}
 
                         {/* WhatsApp Button */}
-                        {group.instructorWhatsapp && (group.status === 'scheduled' || group.status === 'in_progress' || group.status === 'pending') && (
+                        {group.instructorWhatsapp && (group.status === 'confirmed' || group.status === 'in_progress' || group.status === 'pending') && (
                             <button 
                                 onClick={() => handleWhatsappClick(group.instructorWhatsapp!)}
                                 className="flex items-center justify-center w-8 h-8 rounded-full bg-green-50 text-green-600 hover:bg-green-100 border border-green-100 transition-colors shadow-sm"
@@ -896,14 +899,14 @@ export const StudentLessons: React.FC = () => {
                             </button>
                         )}
                         
-                        {/* Finalize Button */}
-                        {group.status === 'confirmed' && (
+                        {/* Finalize/Review Button */}
+                        {(group.status === 'awaiting_completion' || (group.status === 'completed' && !group.isReviewed)) && (
                             <Button 
                             variant="primary" 
                             onClick={() => startFinalization(group)}
                             className="text-xs px-4 py-2 h-8 min-h-0 shadow-sm"
                             >
-                            Finalizar aula
+                            {group.status === 'completed' ? 'Avaliar aula' : 'Finalizar aula'}
                             </Button>
                         )}
 
@@ -954,7 +957,7 @@ export const StudentLessons: React.FC = () => {
            <p className="text-sm text-gray-600 leading-relaxed">
              Tem certeza que deseja cancelar?
            </p>
-           {lessonToCancel?.status === 'scheduled' && (
+           {lessonToCancel?.status === 'confirmed' && (
              <p className="text-xs text-gray-400 mt-2">
                O horário ficará livre para outro aluno agendar.
              </p>
