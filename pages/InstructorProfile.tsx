@@ -1,8 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { 
+  MessageCircle, 
+  IdCard, 
+  GraduationCap, 
+  DollarSign, 
+  Car, 
+  MapPin, 
+  Camera, 
+  Share2,
+  Check,
+  ChevronRight,
+  LogOut,
+  Navigation
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { CitySelect } from '../components/CitySelect';
+import { GooglePlacesInput } from '../components/GooglePlacesInput';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -69,6 +84,9 @@ export const InstructorProfile: React.FC = () => {
 
   // 6. Location
   const [defaultLocation, setDefaultLocation] = useState('');
+  const [meetingPointLat, setMeetingPointLat] = useState<number | null>(null);
+  const [meetingPointLng, setMeetingPointLng] = useState<number | null>(null);
+  const [meetingPointPlaceId, setMeetingPointPlaceId] = useState<string | null>(null);
 
   // --- FETCH DATA ---
   useEffect(() => {
@@ -107,6 +125,9 @@ export const InstructorProfile: React.FC = () => {
           setWhatsapp(instructor.whatsapp || '');
           setNightLessonsEnabled(instructor.has_night_lessons || false);
           setDefaultLocation(instructor.location_text || '');
+          setMeetingPointLat(instructor.meeting_point_lat || null);
+          setMeetingPointLng(instructor.meeting_point_lng || null);
+          setMeetingPointPlaceId(instructor.meeting_point_place_id || null);
           
           if (instructor.categories && instructor.categories.length > 0) {
             const cats = instructor.categories;
@@ -299,6 +320,9 @@ export const InstructorProfile: React.FC = () => {
         night_price: legacyNightPrice,
         has_night_lessons: nightLessonsEnabled,
         location_text: defaultLocation,
+        meeting_point_lat: meetingPointLat,
+        meeting_point_lng: meetingPointLng,
+        meeting_point_place_id: meetingPointPlaceId,
         categories: catArray
       };
 
@@ -407,213 +431,280 @@ export const InstructorProfile: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col pb-24 sm:max-w-md sm:mx-auto relative">
+    <div className="min-h-screen bg-gray-50 flex flex-col pb-24 sm:max-w-md sm:mx-auto relative">
       
-      <div className="px-6 pt-6 pb-4 border-b border-gray-100 bg-white sticky top-0 z-10">
-        <h1 className="text-xl font-bold text-gray-900 text-center">Meu Perfil</h1>
+      {/* Header Minimalista */}
+      <div className="px-6 pt-8 pb-6 bg-white border-b border-gray-100">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="relative group cursor-pointer" onClick={handleImageClick}>
+            <div className="w-28 h-28 rounded-full border-4 border-white shadow-lg overflow-hidden bg-gray-100 flex items-center justify-center ring-1 ring-blue-100">
+              {profileImage ? (
+                <img src={profileImage} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <IdCard className="w-12 h-12 text-gray-300" />
+              )}
+            </div>
+            <div className="absolute bottom-1 right-1 bg-blue-600 text-white p-2 rounded-full shadow-md border-2 border-white">
+              <Camera className="w-4 h-4" />
+            </div>
+          </div>
+          
+          <div className="w-full text-center px-4">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Seu nome completo"
+              className="w-full text-2xl font-bold text-gray-900 text-center bg-transparent border-none focus:ring-0 focus:outline-none placeholder-gray-300 cursor-text"
+            />
+            {publicId && (
+              <div className="mt-1 flex items-center justify-center space-x-2">
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">ID: {publicId}</span>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div className="flex-1 px-6 py-6 space-y-8 overflow-y-auto">
+      <div className="flex-1 px-4 py-6 space-y-6 overflow-y-auto">
         
-        <section className="flex flex-col items-center space-y-4">
-           <div className="relative group cursor-pointer" onClick={handleImageClick}>
-              <div className="w-24 h-24 rounded-full border-4 border-white shadow-md overflow-hidden bg-gray-100 flex items-center justify-center">
-                {profileImage ? (
-                  <img src={profileImage} alt="Profile" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-4xl text-gray-400">👤</span>
-                )}
-              </div>
-              <div className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full shadow-sm border-2 border-white">
-                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </div>
-           </div>
-           
-           {/* Public ID Badge & Share */}
-           {publicId && (
-              <div className="flex flex-col items-center space-y-3 mt-1 w-full">
-                  <div className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold border border-gray-200">
-                    Meu ID: {publicId}
-                  </div>
-                  
-                  <div className="text-center max-w-[260px]">
-                     <p className="text-xs text-gray-400 mb-2 leading-relaxed">
-                       Compartilhe seu perfil com alunos para que eles encontrem você facilmente.
-                     </p>
-                     <button 
-                        onClick={handleCopyProfileLink}
-                        className="inline-flex items-center space-x-1.5 text-xs font-semibold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
-                     >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                        <span>Copiar link do perfil</span>
-                     </button>
-                  </div>
-              </div>
-           )}
-
-           <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-           
-           <div className="w-full space-y-3">
-             <Input label="Nome completo" value={name} readOnly className="bg-gray-100 text-gray-500 border-transparent" />
-             
-             <Input 
-                label="Número da credencial do instrutor" 
-                placeholder="Digite apenas números"
-                value={credential}
-                onChange={(e) => setCredential(e.target.value.replace(/\D/g, ''))}
-                inputMode="numeric"
-             />
-
-             <CitySelect 
-                label="Cidade / Região" 
-                value={city} 
-                onChange={setCity}
-             />
-             
-             <div>
-                <Input 
-                  label="WhatsApp para contato (obrigatório)" 
-                  placeholder="(11) 99999-9999"
-                  type="tel"
-                  value={formatPhone(whatsapp)}
-                  onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
-                  inputMode="numeric"
-                />
-             </div>
-           </div>
+        {/* Card de Divulgação */}
+        <section className="bg-blue-50 border border-blue-100 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-start space-x-4">
+            <div className="bg-blue-600 p-2.5 rounded-xl shadow-blue-200 shadow-lg">
+              <Share2 className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-base font-bold text-blue-900">Divulgue seu perfil</h3>
+              <p className="text-sm text-blue-700 mt-1 leading-snug">
+                Compartilhe seu perfil no WhatsApp e redes sociais para atrair mais alunos
+              </p>
+              <button 
+                onClick={handleCopyProfileLink}
+                className="mt-4 w-full bg-white text-blue-600 font-bold py-2.5 rounded-xl shadow-sm border border-blue-200 hover:bg-blue-50 transition-all flex items-center justify-center space-x-2"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>Compartilhar meu perfil</span>
+              </button>
+            </div>
+          </div>
         </section>
 
-        <hr className="border-gray-100" />
+        {/* Seção: Contato */}
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center space-x-2 mb-5">
+            <MessageCircle className="w-5 h-5 text-blue-600" />
+            <h2 className="text-base font-bold text-gray-900">Contato</h2>
+          </div>
+          <Input 
+            label="WhatsApp de atendimento" 
+            placeholder="(11) 99999-9999"
+            type="tel"
+            value={formatPhone(whatsapp)}
+            onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
+            inputMode="numeric"
+            className="bg-white border-gray-200"
+          />
+          <p className="text-xs text-gray-400 mt-2 ml-1">
+            Este número será usado pelos alunos para tirar dúvidas e agendar aulas.
+          </p>
+        </section>
 
-        <section className="space-y-6">
-           <div>
-             <h2 className="text-lg font-bold text-gray-900 mb-4">Veículos e Categorias</h2>
-             
-             <div className="grid grid-cols-3 gap-3 mb-6">
-               {['A', 'B', 'AB'].map((cat) => (
-                 <button
-                   key={cat}
-                   onClick={() => setCategory(cat)}
-                   className={`
-                     py-2 rounded-xl text-sm font-bold border-2 transition-all duration-200
-                     ${category === cat 
-                        ? 'border-blue-600 bg-blue-50 text-blue-700' 
-                        : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
-                     }
-                   `}
-                 >
-                   {cat}
-                 </button>
-               ))}
-             </div>
-           </div>
+        {/* Seção: Dados Profissionais */}
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center space-x-2 mb-5">
+            <IdCard className="w-5 h-5 text-blue-600" />
+            <h2 className="text-base font-bold text-gray-900">Dados profissionais</h2>
+          </div>
+          <div className="space-y-4">
+            <Input 
+              label="Sua credencial profissional" 
+              placeholder="Digite apenas números"
+              value={credential}
+              onChange={(e) => setCredential(e.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+              className="bg-white border-gray-200"
+            />
+            <CitySelect 
+              label="Cidade / Região de atuação" 
+              value={city} 
+              onChange={setCity}
+            />
+          </div>
+        </section>
 
-           {/* --- PRICING SECTION (NEW) --- */}
-           <div className="space-y-6 animate-fade-in">
-              <div className="flex items-center justify-between">
-                 <label className="text-base font-semibold text-gray-900">Aulas noturnas</label>
-                 <ToggleSwitch checked={nightLessonsEnabled} onChange={() => setNightLessonsEnabled(!nightLessonsEnabled)} />
+        {/* Seção: Categorias de Ensino */}
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center space-x-2 mb-5">
+            <GraduationCap className="w-5 h-5 text-blue-600" />
+            <h2 className="text-base font-bold text-gray-900">Categorias de ensino</h2>
+          </div>
+          
+          <p className="text-sm text-gray-500 mb-4">Selecione as categorias que você ensina:</p>
+          
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            {['A', 'B', 'AB'].map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setCategory(cat)}
+                className={`
+                  py-3 rounded-xl text-sm font-bold border-2 transition-all duration-200 flex flex-col items-center justify-center space-y-1
+                  ${category === cat 
+                    ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm' 
+                    : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
+                  }
+                `}
+              >
+                <span className="text-lg">
+                  {cat === 'A' ? '🏍️' : cat === 'B' ? '🚘' : '🏍️+🚘'}
+                </span>
+                <span>{cat}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-gray-900">Aulas noturnas</span>
+              <span className="text-xs text-gray-500">Ative se você atende após as 18h</span>
+            </div>
+            <ToggleSwitch checked={nightLessonsEnabled} onChange={() => setNightLessonsEnabled(!nightLessonsEnabled)} />
+          </div>
+        </section>
+
+        {/* Seção: Seus Preços */}
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center space-x-2 mb-5">
+            <DollarSign className="w-5 h-5 text-blue-600" />
+            <h2 className="text-base font-bold text-gray-900">Valores das aulas</h2>
+          </div>
+
+          <div className="space-y-6">
+            {/* Category A Pricing */}
+            {(category === 'A' || category === 'AB') && (
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">🏍️</span>
+                  <h3 className="font-bold text-gray-800">Moto (Cat. A)</h3>
+                </div>
+                <div className="grid grid-cols-1 gap-4">
+                  <div className="relative">
+                    <Input 
+                      label="Preço Aula Diurna" 
+                      placeholder="0,00"
+                      value={formatCurrency(pricesA.day).replace('R$', '').trim()}
+                      onChange={(e) => setPricesA(prev => ({ ...prev, day: e.target.value.replace(/\D/g, '') }))}
+                      inputMode="numeric"
+                      className="pl-12 bg-white border-gray-200"
+                    />
+                    <span className="absolute left-4 top-[42px] text-gray-400 font-semibold">R$</span>
+                  </div>
+                  {nightLessonsEnabled && (
+                    <div className="relative">
+                      <Input 
+                        label="Preço Aula Noturna" 
+                        placeholder="0,00"
+                        value={formatCurrency(pricesA.night).replace('R$', '').trim()}
+                        onChange={(e) => setPricesA(prev => ({ ...prev, night: e.target.value.replace(/\D/g, '') }))}
+                        inputMode="numeric"
+                        className="pl-12 bg-white border-gray-200"
+                      />
+                      <span className="absolute left-4 top-[42px] text-gray-400 font-semibold">R$</span>
+                    </div>
+                  )}
+                </div>
               </div>
+            )}
 
-              {/* Category A Pricing */}
-              {(category === 'A' || category === 'AB') && (
-                <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-3">
-                   <h3 className="font-bold text-gray-800 flex items-center">
-                     <span className="text-xl mr-2">🏍️</span> Valores Moto (Cat. A)
-                   </h3>
-                   <div className="grid grid-cols-1 gap-3">
-                      <Input 
-                        label="Preço Aula Diurna (R$)" 
-                        placeholder="R$ 0,00"
-                        value={formatCurrency(pricesA.day)}
-                        onChange={(e) => setPricesA(prev => ({ ...prev, day: e.target.value.replace(/\D/g, '') }))}
-                        inputMode="numeric"
-                      />
-                      {nightLessonsEnabled && (
-                        <Input 
-                          label="Preço Aula Noturna (R$)" 
-                          placeholder="R$ 0,00"
-                          value={formatCurrency(pricesA.night)}
-                          onChange={(e) => setPricesA(prev => ({ ...prev, night: e.target.value.replace(/\D/g, '') }))}
-                          inputMode="numeric"
-                        />
-                      )}
-                   </div>
+            {/* Divider if both categories */}
+            {category === 'AB' && <hr className="border-gray-50" />}
+
+            {/* Category B Pricing */}
+            {(category === 'B' || category === 'AB') && (
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">🚘</span>
+                  <h3 className="font-bold text-gray-800">Carro (Cat. B)</h3>
                 </div>
-              )}
-
-              {/* Category B Pricing */}
-              {(category === 'B' || category === 'AB') && (
-                <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-3">
-                   <h3 className="font-bold text-gray-800 flex items-center">
-                     <span className="text-xl mr-2">🚘</span> Valores Carro (Cat. B)
-                   </h3>
-                   <div className="grid grid-cols-1 gap-3">
+                <div className="grid grid-cols-1 gap-4">
+                  <div className="relative">
+                    <Input 
+                      label="Preço Aula Diurna" 
+                      placeholder="0,00"
+                      value={formatCurrency(pricesB.day).replace('R$', '').trim()}
+                      onChange={(e) => setPricesB(prev => ({ ...prev, day: e.target.value.replace(/\D/g, '') }))}
+                      inputMode="numeric"
+                      className="pl-12 bg-white border-gray-200"
+                    />
+                    <span className="absolute left-4 top-[42px] text-gray-400 font-semibold">R$</span>
+                  </div>
+                  {nightLessonsEnabled && (
+                    <div className="relative">
                       <Input 
-                        label="Preço Aula Diurna (R$)" 
-                        placeholder="R$ 0,00"
-                        value={formatCurrency(pricesB.day)}
-                        onChange={(e) => setPricesB(prev => ({ ...prev, day: e.target.value.replace(/\D/g, '') }))}
+                        label="Preço Aula Noturna" 
+                        placeholder="0,00"
+                        value={formatCurrency(pricesB.night).replace('R$', '').trim()}
+                        onChange={(e) => setPricesB(prev => ({ ...prev, night: e.target.value.replace(/\D/g, '') }))}
                         inputMode="numeric"
+                        className="pl-12 bg-white border-gray-200"
                       />
-                      {nightLessonsEnabled && (
-                        <Input 
-                          label="Preço Aula Noturna (R$)" 
-                          placeholder="R$ 0,00"
-                          value={formatCurrency(pricesB.night)}
-                          onChange={(e) => setPricesB(prev => ({ ...prev, night: e.target.value.replace(/\D/g, '') }))}
-                          inputMode="numeric"
-                        />
-                      )}
-                   </div>
+                      <span className="absolute left-4 top-[42px] text-gray-400 font-semibold">R$</span>
+                    </div>
+                  )}
                 </div>
-              )}
-           </div>
+              </div>
+            )}
+          </div>
+        </section>
 
-           {showCarOptions && (
-             <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 animate-fade-in">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-800 flex items-center">
-                    <span className="text-xl mr-2">🚘</span> Carro
-                  </h3>
-                  <label className="flex items-center space-x-2 text-sm text-gray-600">
+        {/* Seção: Veículos */}
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center space-x-2 mb-5">
+            <Car className="w-5 h-5 text-blue-600" />
+            <h2 className="text-base font-bold text-gray-900">Seus veículos</h2>
+          </div>
+
+          <div className="space-y-6">
+            {showCarOptions && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xl">🚘</span>
+                    <h3 className="font-bold text-gray-800">Carro</h3>
+                  </div>
+                  <label className="flex items-center space-x-2 text-xs font-medium text-gray-500 cursor-pointer">
                     <input 
                       type="checkbox" 
                       checked={hasCar} 
                       onChange={(e) => setHasCar(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded" 
+                      className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500" 
                     />
-                    <span>Possuo veículo</span>
+                    <span>Tenho veículo próprio</span>
                   </label>
                 </div>
 
                 {hasCar && (
-                  <div className="space-y-3">
+                  <div className="space-y-4 animate-fade-in">
                     <Input 
                       label="Modelo" 
                       placeholder="Ex: Fiat Mobi" 
                       value={carModel}
                       onChange={(e) => setCarModel(e.target.value)}
+                      className="bg-white border-gray-200"
                     />
-                    <div className="flex space-x-3">
-                      <div className="w-1/2">
-                         <Input 
-                           label="Ano" 
-                           placeholder="2022" 
-                           type="number"
-                           value={carYear}
-                           onChange={(e) => setCarYear(e.target.value)}
-                         />
-                      </div>
-                      <div className="w-1/2">
-                        <label className="text-sm font-semibold text-gray-700 ml-1 mb-2 block">Câmbio</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <Input 
+                        label="Ano" 
+                        placeholder="2022" 
+                        type="number"
+                        value={carYear}
+                        onChange={(e) => setCarYear(e.target.value)}
+                        className="bg-white border-gray-200"
+                      />
+                      <div className="flex flex-col space-y-2">
+                        <label className="text-sm font-semibold text-gray-700 ml-1">Câmbio</label>
                         <select 
-                          className="w-full px-4 py-3.5 rounded-xl bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-4 py-3.5 rounded-xl bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
                           value={carTransmission}
                           onChange={(e) => setCarTransmission(e.target.value)}
                         >
@@ -624,48 +715,51 @@ export const InstructorProfile: React.FC = () => {
                     </div>
                   </div>
                 )}
-             </div>
-           )}
+              </div>
+            )}
 
-           {showBikeOptions && (
-             <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 animate-fade-in">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-800 flex items-center">
-                    <span className="text-xl mr-2">🏍️</span> Moto
-                  </h3>
-                  <label className="flex items-center space-x-2 text-sm text-gray-600">
+            {showCarOptions && showBikeOptions && <hr className="border-gray-50" />}
+
+            {showBikeOptions && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xl">🏍️</span>
+                    <h3 className="font-bold text-gray-800">Moto</h3>
+                  </div>
+                  <label className="flex items-center space-x-2 text-xs font-medium text-gray-500 cursor-pointer">
                     <input 
                       type="checkbox" 
                       checked={hasBike} 
                       onChange={(e) => setHasBike(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded" 
+                      className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500" 
                     />
-                    <span>Possuo veículo</span>
+                    <span>Tenho veículo próprio</span>
                   </label>
                 </div>
 
                 {hasBike && (
-                  <div className="space-y-3">
+                  <div className="space-y-4 animate-fade-in">
                     <Input 
                       label="Modelo" 
                       placeholder="Ex: Honda CG 160" 
                       value={bikeModel}
                       onChange={(e) => setBikeModel(e.target.value)}
+                      className="bg-white border-gray-200"
                     />
-                    <div className="flex space-x-3">
-                      <div className="w-1/2">
-                         <Input 
-                           label="Ano" 
-                           placeholder="2023" 
-                           type="number"
-                           value={bikeYear}
-                           onChange={(e) => setBikeYear(e.target.value)}
-                         />
-                      </div>
-                      <div className="w-1/2">
-                        <label className="text-sm font-semibold text-gray-700 ml-1 mb-2 block">Câmbio</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <Input 
+                        label="Ano" 
+                        placeholder="2023" 
+                        type="number"
+                        value={bikeYear}
+                        onChange={(e) => setBikeYear(e.target.value)}
+                        className="bg-white border-gray-200"
+                      />
+                      <div className="flex flex-col space-y-2">
+                        <label className="text-sm font-semibold text-gray-700 ml-1">Câmbio</label>
                         <select 
-                          className="w-full px-4 py-3.5 rounded-xl bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-4 py-3.5 rounded-xl bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
                           value={bikeTransmission}
                           onChange={(e) => setBikeTransmission(e.target.value)}
                         >
@@ -676,53 +770,80 @@ export const InstructorProfile: React.FC = () => {
                     </div>
                   </div>
                 )}
-             </div>
-           )}
-
+              </div>
+            )}
+          </div>
         </section>
 
-        <hr className="border-gray-100" />
-
-        <section className="space-y-4">
-            <h2 className="text-lg font-bold text-gray-900">Local de atendimento</h2>
-            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-               <p className="text-sm text-blue-800 mb-3">
-                 Defina um ponto de encontro padrão (ex: Estação de Metrô, Shopping ou Praça).
-               </p>
-               <Input 
-                  label="Ponto de encontro padrão" 
-                  placeholder="Ex: Metrô Itaquera - Catracas"
-                  value={defaultLocation}
-                  onChange={(e) => setDefaultLocation(e.target.value)}
-               />
-            </div>
+        {/* Seção: Ponto de Encontro */}
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center space-x-2 mb-5">
+            <MapPin className="w-5 h-5 text-blue-600" />
+            <h2 className="text-base font-bold text-gray-900">Ponto de encontro</h2>
+          </div>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500 leading-relaxed">
+              Onde você costuma encontrar seus alunos? (Ex: estação, praça, shopping...)
+            </p>
+            <GooglePlacesInput 
+              label="Localização padrão" 
+              placeholder="Ex: Metrô Itaquera - Catracas"
+              value={defaultLocation}
+              onChange={(val) => {
+                setDefaultLocation(val);
+                // If user types manually, clear coordinates
+                setMeetingPointLat(null);
+                setMeetingPointLng(null);
+                setMeetingPointPlaceId(null);
+              }}
+              onAddressSelect={(address, lat, lng, placeId) => {
+                setDefaultLocation(address);
+                setMeetingPointLat(lat);
+                setMeetingPointLng(lng);
+                setMeetingPointPlaceId(placeId);
+              }}
+              className="bg-white border-gray-200"
+            />
+            {meetingPointLat && (
+              <div className="flex items-center space-x-2 px-3 py-2 bg-green-50 rounded-lg border border-green-100 animate-fade-in">
+                <Navigation className="w-4 h-4 text-green-600" />
+                <span className="text-xs font-medium text-green-700">Localização GPS vinculada com sucesso!</span>
+              </div>
+            )}
+          </div>
         </section>
 
-        <div className="pt-4 pb-8">
-           <Button fullWidth onClick={handleSave} disabled={saving}>
-             {saving ? 'Salvando...' : 'Salvar Alterações'}
-           </Button>
-           <div className="mt-4 text-center">
-             <button onClick={handleLogout} className="text-red-500 font-medium text-sm hover:text-red-600">
-               Sair da conta
-             </button>
-           </div>
-           
-           {/* Futuramente será um link externo oficial */}
-           <div className="mt-8 text-center space-x-2">
-             <a href="#" className="text-xs text-gray-400 hover:text-gray-600 hover:underline transition-colors">
-               Política de Privacidade
-             </a>
-             <span className="text-gray-300 text-xs">·</span>
-             <a href="#" className="text-xs text-gray-400 hover:text-gray-600 hover:underline transition-colors">
-               Termos de Uso
-             </a>
-           </div>
+        {/* Ações Finais */}
+        <div className="pt-6 pb-12 space-y-6">
+          <Button 
+            fullWidth 
+            onClick={handleSave} 
+            disabled={saving}
+            className="h-14 text-lg shadow-lg shadow-blue-100"
+          >
+            {saving ? 'Salvando...' : 'Salvar alterações'}
+          </Button>
+          
+          <button 
+            onClick={handleLogout} 
+            className="w-full flex items-center justify-center space-x-2 text-red-500 font-semibold py-3 rounded-xl hover:bg-red-50 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Sair da conta</span>
+          </button>
+
+          <div className="flex items-center justify-center space-x-3 text-xs text-gray-400">
+            <a href="#" className="hover:text-gray-600 transition-colors">Política de Privacidade</a>
+            <span className="w-1 h-1 bg-gray-300 rounded-full" />
+            <a href="#" className="hover:text-gray-600 transition-colors">Termos de Uso</a>
+          </div>
         </div>
 
       </div>
 
       <InstructorBottomNav />
+      
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
     </div>
   );
 };

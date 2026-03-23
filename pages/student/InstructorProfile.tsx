@@ -32,6 +32,9 @@ interface InstructorProfileData {
   name: string;
   city: string;
   defaultLocation: string;
+  meetingPointLat: number | null;
+  meetingPointLng: number | null;
+  meetingPointPlaceId: string | null;
   credential: string;
   whatsapp: string;
   rating: number;
@@ -184,6 +187,7 @@ export const StudentInstructorProfile: React.FC = () => {
   // Selected Slots now stores composite keys: "YYYY-MM-DD|HH:MM"
   const [selectedSlots, setSelectedSlots] = useState<string[]>(() => getPersistedSlots());
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
+  const [isGPSModalOpen, setIsGPSModalOpen] = useState(false);
 
   useEffect(() => {
     savePersistedSlots(selectedSlots);
@@ -227,6 +231,9 @@ export const StudentInstructorProfile: React.FC = () => {
             whatsapp,
             credential_number,
             location_text,
+            meeting_point_lat,
+            meeting_point_lng,
+            meeting_point_place_id,
             categories,
             profiles (
               full_name,
@@ -369,6 +376,9 @@ export const StudentInstructorProfile: React.FC = () => {
             whatsapp: data.whatsapp || '',
             credential: data.credential_number || 'N/A',
             defaultLocation: data.location_text || 'Local a combinar',
+            meetingPointLat: data.meeting_point_lat || null,
+            meetingPointLng: data.meeting_point_lng || null,
+            meetingPointPlaceId: data.meeting_point_place_id || null,
             rating: displayRating,
             reviewsCount: formattedReviews.length,
             lessonsTaught: lessonsTaughtCount || 0, 
@@ -457,6 +467,41 @@ export const StudentInstructorProfile: React.FC = () => {
      fetchAvailability();
   }, [selectedDate, instructor, session]);
 
+
+  // --- CONTINUOUS VALIDATION OF SELECTED SLOTS ---
+  useEffect(() => {
+    if (!selectedSlots.length) return;
+
+    const now = new Date();
+    const dateKeyToday = getDateKey(now);
+    const currentSelectedDateKey = getDateKey(selectedDate);
+
+    const filteredSlots = selectedSlots.filter(slotKey => {
+      const [dateStr, timeStr] = slotKey.split('|');
+      
+      // 1. Check if it's in the past
+      if (dateStr < dateKeyToday) return false;
+      if (dateStr === dateKeyToday) {
+        const [h, m] = timeStr.split(':').map(Number);
+        const slotTime = new Date();
+        slotTime.setHours(h, m, 0, 0);
+        if (slotTime < now) return false;
+      }
+
+      // 2. Check if it's busy on the CURRENT selected date
+      // (We only have busySlots for the selectedDate)
+      if (dateStr === currentSelectedDateKey && busySlots.includes(timeStr)) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (filteredSlots.length !== selectedSlots.length) {
+      setSelectedSlots(filteredSlots);
+      addToast("Alguns horários não estão mais disponíveis e foram removidos", 'info');
+    }
+  }, [busySlots, selectedDate, instructor?.id]);
 
   // Navigation handlers
   const handlePrevRange = () => {
@@ -840,8 +885,8 @@ export const StudentInstructorProfile: React.FC = () => {
     
     // Release any temporary reservations for these slots
     if (selectedSlots.length > 0 && session?.user?.id) {
-      const dates = selectedSlots.map(s => s.date);
-      const times = selectedSlots.map(s => s.time);
+      const dates = selectedSlots.map(s => s.split('|')[0]);
+      const times = selectedSlots.map(s => s.split('|')[1]);
       
       try {
         await supabase
@@ -865,7 +910,7 @@ export const StudentInstructorProfile: React.FC = () => {
     if (cleanNumber.length < 10) return;
     const fullNumber = cleanNumber.startsWith('55') ? cleanNumber : `55${cleanNumber}`;
     
-    const time = selectedSlots[0]?.time || 'agora';
+    const time = selectedSlots[0]?.split('|')[1] || 'agora';
     const message = `Olá, ${instructor.name}! Tentei agendar uma aula pelo aplicativo para hoje às ${time}, mas o sistema informou que o horário está muito em cima. Você ainda consegue me atender?`;
     
     const whatsappUrl = `https://wa.me/${fullNumber}?text=${encodeURIComponent(message)}`;
@@ -1111,7 +1156,20 @@ export const StudentInstructorProfile: React.FC = () => {
                 <div className="flex flex-col">
                   <span className="text-sm font-semibold text-gray-900 mb-0.5">{instructor.city}</span>
                   {instructor.defaultLocation ? (
-                    <span className="text-sm text-gray-600 leading-snug">Ponto de encontro: {instructor.defaultLocation}</span>
+                    <div className="flex flex-col">
+                      <span className="text-sm text-gray-600 leading-snug">Ponto de encontro: {instructor.defaultLocation}</span>
+                      {instructor.meetingPointLat !== null && instructor.meetingPointLng !== null && (
+                        <button 
+                          onClick={() => setIsGPSModalOpen(true)}
+                          className="mt-2 flex items-center text-blue-600 text-xs font-bold hover:text-blue-700 transition-colors"
+                        >
+                          <svg className="w-3.5 h-3.5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          </svg>
+                          Abrir no GPS
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <span className="text-sm text-gray-500 italic">Ponto de encontro a combinar</span>
                   )}
@@ -1564,6 +1622,64 @@ export const StudentInstructorProfile: React.FC = () => {
               Cancelar
             </button>
           </div>
+        </div>
+      </Modal>
+
+      {/* GPS Modal */}
+      <Modal
+        isOpen={isGPSModalOpen}
+        onClose={() => setIsGPSModalOpen(false)}
+        title="Abrir no GPS"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500 mb-4">
+            Escolha seu aplicativo de navegação preferido:
+          </p>
+          
+          <button
+            onClick={() => {
+              const url = `https://www.google.com/maps/dir/?api=1&destination=${instructor.meetingPointLat},${instructor.meetingPointLng}`;
+              window.open(url, '_blank');
+              setIsGPSModalOpen(false);
+            }}
+            className="w-full flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100 hover:bg-blue-50 hover:border-blue-200 transition-all group"
+          >
+            <div className="flex items-center">
+              <div className="w-10 h-10 bg-white rounded-lg shadow-sm border border-gray-100 flex items-center justify-center mr-3">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/a/aa/Google_Maps_icon_%282020%29.svg" alt="Google Maps" className="w-6 h-6" />
+              </div>
+              <span className="font-bold text-gray-900">Google Maps</span>
+            </div>
+            <svg className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+
+          <button
+            onClick={() => {
+              const url = `https://waze.com/ul?ll=${instructor.meetingPointLat},${instructor.meetingPointLng}&navigate=yes`;
+              window.open(url, '_blank');
+              setIsGPSModalOpen(false);
+            }}
+            className="w-full flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100 hover:bg-orange-50 hover:border-orange-200 transition-all group"
+          >
+            <div className="flex items-center">
+              <div className="w-10 h-10 bg-white rounded-lg shadow-sm border border-gray-100 flex items-center justify-center mr-3">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/6/66/Waze_icon.svg" alt="Waze" className="w-6 h-6" />
+              </div>
+              <span className="font-bold text-gray-900">Waze</span>
+            </div>
+            <svg className="w-5 h-5 text-gray-400 group-hover:text-orange-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+
+          <button
+            onClick={() => setIsGPSModalOpen(false)}
+            className="w-full py-3 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            Cancelar
+          </button>
         </div>
       </Modal>
 

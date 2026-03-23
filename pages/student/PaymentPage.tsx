@@ -44,10 +44,12 @@ const CheckoutForm = ({ purchaseId }: { purchaseId: string }) => {
 
         if (status === 'requires_capture') {
           // SUCCESS: Auth & Capture flow
+          localStorage.removeItem('booking_selected_slots');
           addToast('Pagamento autorizado com sucesso! Aguardando aceite do instrutor.', 'success');
           navigate('/student/lessons?authorized=true');
         } else if (status === 'succeeded') {
           // SUCCESS: Immediate capture (rare but possible)
+          localStorage.removeItem('booking_selected_slots');
           addToast('Pagamento confirmado!', 'success');
           navigate('/student/lessons?success=true');
         } else if (status === 'requires_action') {

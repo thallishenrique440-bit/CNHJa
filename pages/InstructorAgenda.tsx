@@ -159,6 +159,33 @@ export const InstructorAgenda: React.FC = () => {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${time}`;
   };
 
+  // --- NOTIFICATION LISTENER ---
+  useEffect(() => {
+    if (!session?.user) return;
+
+    const channel = supabase
+      .channel('instructor-notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${session.user.id}`
+        },
+        (payload) => {
+          const notification = payload.new as any;
+          // Show toast for any new notification
+          addToast(notification.message || notification.title || "Nova notificação", 'success');
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session, addToast]);
+
   const dynamicSlots = useMemo<TimeSlot[]>(() => {
     const slots: TimeSlot[] = [];
     let currentMins = timeToMinutes('07:00');
@@ -571,7 +598,7 @@ export const InstructorAgenda: React.FC = () => {
              addToast("Esta aula já foi atualizada ou cancelada pelo aluno.", 'error');
              closeLessonModal();
              // Reload appointments to get fresh state
-             fetchAppointments(viewDate);
+             fetchAppointments();
         } else {
              addToast("Erro ao confirmar: " + err.message, 'error');
         }
@@ -616,7 +643,7 @@ export const InstructorAgenda: React.FC = () => {
         if (err.message === 'STATUS_CHANGED' || err.message.includes('Invalid status change')) {
             addToast("Esta aula já foi atualizada ou cancelada pelo aluno.", 'error');
             closeLessonModal();
-            fetchAppointments(viewDate);
+            fetchAppointments();
         } else {
             addToast("Erro ao recusar: " + err.message, 'error');
         }

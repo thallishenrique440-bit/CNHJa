@@ -169,7 +169,10 @@ GRANT ALL ON public.appointments TO service_role;
 ALTER TABLE public.instructors
 ADD COLUMN IF NOT EXISTS stripe_account_id text, -- ID da conta Express (acct_...)
 ADD COLUMN IF NOT EXISTS stripe_onboarding_completed boolean DEFAULT false, -- Se completou o fluxo
-ADD COLUMN IF NOT EXISTS payouts_enabled boolean DEFAULT false; -- Se a Stripe liberou recebimentos
+ADD COLUMN IF NOT EXISTS payouts_enabled boolean DEFAULT false, -- Se a Stripe liberou recebimentos
+ADD COLUMN IF NOT EXISTS meeting_point_lat float8,
+ADD COLUMN IF NOT EXISTS meeting_point_lng float8,
+ADD COLUMN IF NOT EXISTS meeting_point_place_id text;
 
 -- 2. Atualizar tabela APPOINTMENTS para Destination Charges
 ALTER TABLE public.appointments
@@ -358,3 +361,13 @@ grant all on public.instructor_discounts to authenticated;
 
 ALTER TABLE public.instructors
 ADD COLUMN IF NOT EXISTS work_saturday_afternoon boolean DEFAULT false;
+
+-- ==============================================================================
+-- MIGRATION: TIP SYSTEM (CAIXINHA) INTEGRITY
+-- ==============================================================================
+
+-- 1. Índice Único para Caixinhas (Garantir 1 por aula)
+-- Impede que chamadas simultâneas ou erros de UI gerem cobranças duplicadas para a mesma aula.
+CREATE UNIQUE INDEX IF NOT EXISTS unique_tip_per_appointment 
+ON public.transactions (appointment_id) 
+WHERE type = 'tip' AND status = 'completed';

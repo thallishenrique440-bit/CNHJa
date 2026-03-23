@@ -244,7 +244,8 @@ Deno.serve(async (req: Request) => {
       // ======================================================================
       case "payment_intent.succeeded": {
         const paymentIntent = event.data.object;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const metadata = paymentIntent.metadata || {};
+        const type = metadata.type;
         const paymentIntentId = paymentIntent.id;
 
         let transferId = null;
@@ -264,45 +265,154 @@ Deno.serve(async (req: Request) => {
           }
         }
 
-        if (purchaseId) {
-          console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
+        if (type === 'tip') {
+          // ======================================================================
+          // FLUXO DE CAIXINHA (TIP)
+          // ======================================================================
+          const studentId = metadata.student_id;
+          const instructorId = metadata.instructor_id;
+          const appointmentId = metadata.appointment_id;
+          const amount = paymentIntent.amount;
+          const formattedAmount = (amount / 100).toFixed(2).replace('.', ',');
 
-          // 1. Update Appointments -> confirmed / captured
-          // Prevent overwriting 'completed' status (late webhook) or redundant updates
-          await supabaseAdmin
-            .from("appointments")
-            .update({
-              status: "confirmed",
-              payment_status: "captured"
-            })
-            .eq("purchase_id", purchaseId)
-            .neq("status", "completed")
-            .neq("status", "confirmed");
+          console.log(`🎁 TIP START | PI: ${paymentIntentId} | Apt: ${appointmentId} | Amount: R$ ${formattedAmount}`);
 
-          // 2. Update Transaction -> completed + transfer_id
-          const txUpdatePayload: any = {
-            status: "completed",
-            description: `Pagamento Confirmado (Capturado)`
-          };
-          if (transferId) {
-            txUpdatePayload.stripe_transfer_id = transferId;
+          // 1. Validação de Segurança Básica
+          if (!studentId || !instructorId || !appointmentId) {
+            console.error(`❌ TIP BLOCKED: Missing required metadata. PI: ${paymentIntentId}`);
+            break;
           }
 
-          await supabaseAdmin
-            .from("transactions")
-            .update(txUpdatePayload)
-            .eq("stripe_payment_intent_id", paymentIntentId);
+          // 2. Validação de Valor Mínimo (R$ 1,00)
+          if (!amount || amount < 100) {
+            console.error(`❌ TIP BLOCKED: Invalid amount ${amount}. PI: ${paymentIntentId}`);
+            break;
+          }
 
-          // 3. Notify Student
-          const studentId = paymentIntent.metadata?.student_id;
-          if (studentId) {
-             await supabaseAdmin.from("notifications").insert({
-              user_id: studentId,
-              title: "Aula Confirmada!",
-              message: "O instrutor aceitou sua solicitação. Bom treino!",
-              type: "booking_accepted",
-              metadata: { purchase_id: purchaseId }
+          // 3. Idempotência Técnica: Verificar se já existe transação para este PI
+          const { data: existingTxByPI } = await supabaseAdmin
+            .from("transactions")
+            .select("id")
+            .eq("stripe_payment_intent_id", paymentIntentId)
+            .maybeSingle();
+
+          if (existingTxByPI) {
+            console.log(`ℹ️ TIP BLOCKED (duplicate PI): PI ${paymentIntentId}`);
+            break;
+          }
+
+          // 4. Validação do Appointment e Regras de Negócio
+          const { data: apt, error: aptError } = await supabaseAdmin
+            .from("appointments")
+            .select("id, student_id, instructor_id, status")
+            .eq("id", appointmentId)
+            .single();
+
+          if (aptError || !apt) {
+            console.error(`❌ TIP BLOCKED: Appointment ${appointmentId} not found.`);
+            break;
+          }
+
+          // A. Validar se a aula está CONCLUÍDA (CRÍTICO)
+          if (apt.status !== 'completed') {
+            console.error(`❌ TIP BLOCKED: Appointment ${appointmentId} status is ${apt.status} (expected completed).`);
+            break;
+          }
+
+          // B. Validar se os IDs batem com a aula (Segurança contra spoofing)
+          if (apt.student_id !== studentId || apt.instructor_id !== instructorId) {
+            console.error(`❌ TIP BLOCKED: Ownership mismatch for Apt ${appointmentId}.`);
+            break;
+          }
+
+          // C. Verificar se já existe caixinha para esta aula (Regra: 1 por aula)
+          const { data: existingTipForApt } = await supabaseAdmin
+            .from("transactions")
+            .select("id")
+            .eq("appointment_id", appointmentId)
+            .eq("type", "tip")
+            .eq("status", "completed")
+            .maybeSingle();
+
+          if (existingTipForApt) {
+            console.warn(`⚠️ TIP BLOCKED: Tip already exists for Apt ${appointmentId}`);
+            break;
+          }
+
+          // 5. Inserir Transação de Caixinha
+          const { error: txError } = await supabaseAdmin
+            .from("transactions")
+            .insert({
+              student_id: studentId,
+              instructor_id: instructorId,
+              appointment_id: appointmentId,
+              type: "tip",
+              amount: amount,
+              status: "completed",
+              stripe_payment_intent_id: paymentIntentId,
+              stripe_transfer_id: transferId,
+              description: `Caixinha • Aula ${appointmentId.split('-')[0]}...`,
+              metadata: metadata
             });
+
+          if (txError) {
+            console.error(`❌ TIP ERROR: Failed to create transaction for PI ${paymentIntentId}:`, txError);
+          } else {
+            // 6. Notificar Instrutor
+            await supabaseAdmin.from("notifications").insert({
+              user_id: instructorId,
+              title: "Você recebeu uma caixinha! 🎁",
+              message: `Você recebeu R$ ${formattedAmount} de caixinha 🎁`,
+              type: "system",
+              metadata: { appointment_id: appointmentId }
+            });
+            console.log(`✅ TIP SUCCESS: PI ${paymentIntentId} | Apt ${appointmentId}`);
+          }
+        } else {
+          // ======================================================================
+          // FLUXO DE AULA (LESSON PAYMENT) - MANTIDO INTACTO
+          // ======================================================================
+          const purchaseId = metadata.purchase_id;
+
+          if (purchaseId) {
+            console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
+
+            // 1. Update Appointments -> confirmed / captured
+            await supabaseAdmin
+              .from("appointments")
+              .update({
+                status: "confirmed",
+                payment_status: "captured"
+              })
+              .eq("purchase_id", purchaseId)
+              .neq("status", "completed")
+              .neq("status", "confirmed");
+
+            // 2. Update Transaction -> completed + transfer_id
+            const txUpdatePayload: any = {
+              status: "completed",
+              description: `Pagamento Confirmado (Capturado)`
+            };
+            if (transferId) {
+              txUpdatePayload.stripe_transfer_id = transferId;
+            }
+
+            await supabaseAdmin
+              .from("transactions")
+              .update(txUpdatePayload)
+              .eq("stripe_payment_intent_id", paymentIntentId);
+
+            // 3. Notify Student
+            const studentId = metadata.student_id;
+            if (studentId) {
+               await supabaseAdmin.from("notifications").insert({
+                user_id: studentId,
+                title: "Aula Confirmada!",
+                message: "O instrutor aceitou sua solicitação. Bom treino!",
+                type: "booking_accepted",
+                metadata: { purchase_id: purchaseId }
+              });
+            }
           }
         }
         break;

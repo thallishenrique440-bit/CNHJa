@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
@@ -8,7 +10,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 
 // --- Types ---
-type LessonStatus = 'scheduled' | 'pending' | 'completed' | 'cancelled' | 'in_progress' | 'expired' | 'rejected';
+type LessonStatus = 'scheduled' | 'pending' | 'completed' | 'cancelled' | 'in_progress' | 'expired' | 'rejected' | 'confirmed';
 
 interface Lesson {
   id: string;
@@ -73,6 +75,94 @@ const isNightLesson = (time: string) => {
   return h >= 18;
 };
 
+// --- Stripe Initialization ---
+const stripeKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
+const stripePromise = stripeKey ? loadStripe(stripeKey) : null;
+
+// --- Tip Checkout Form ---
+const TipCheckoutForm = ({ 
+  clientSecret, 
+  onSuccess, 
+  onCancel, 
+  amount, 
+  isSubmitting 
+}: { 
+  clientSecret: string; 
+  onSuccess: () => void; 
+  onCancel: () => void;
+  amount: number;
+  isSubmitting: boolean;
+}) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const { addToast } = useToast();
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!stripe || !elements) return;
+
+    setErrorMessage(null);
+
+    try {
+      const { error, paymentIntent } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${window.location.origin}/#/student/lessons`,
+        },
+        redirect: 'if_required',
+      });
+
+      if (error) {
+        setErrorMessage(error.message || 'Erro ao processar pagamento.');
+        addToast(error.message || 'Erro ao processar pagamento.', 'error');
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        onSuccess();
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro interno.');
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <PaymentElement />
+      
+      {errorMessage && (
+        <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg">
+          {errorMessage}
+        </div>
+      )}
+
+      <div className="space-y-3 pt-2">
+        <Button 
+          type="submit" 
+          fullWidth 
+          variant="primary"
+          disabled={!stripe || isSubmitting}
+          className="shadow-lg shadow-blue-100"
+        >
+          {isSubmitting ? 'Processando...' : `Confirmar R$ ${amount.toFixed(2).replace('.', ',')}`}
+        </Button>
+        <p className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-bold">
+          Pagamento imediato
+        </p>
+
+        <Button 
+          fullWidth 
+          variant="outline" 
+          onClick={onCancel}
+          disabled={isSubmitting}
+          className="border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-700 shadow-none"
+        >
+          Pular caixinha
+        </Button>
+      </div>
+    </form>
+  );
+};
+
 export const StudentLessons: React.FC = () => {
   const navigate = useNavigate();
   const { session, serverTimeOffset } = useAuth();
@@ -97,9 +187,11 @@ export const StudentLessons: React.FC = () => {
   const [isCancelling, setIsCancelling] = useState(false);
 
   // Tip Flow State
-  const [selectedTip, setSelectedTip] = useState<number | null>(null);
+  const [selectedTip, setSelectedTip] = useState<number | null>(20); // Default to 20 as suggested
   const [customTip, setCustomTip] = useState('');
   const [isSubmittingTip, setIsSubmittingTip] = useState(false);
+  const [tipClientSecret, setTipClientSecret] = useState<string | null>(null);
+  const [tipGiven, setTipGiven] = useState(false);
 
   // Security Flow State
   const [isLocating, setIsLocating] = useState(false);
@@ -213,34 +305,21 @@ export const StudentLessons: React.FC = () => {
             const lessonEndDateTime = new Date(lessonStartDateTime);
             lessonEndDateTime.setMinutes(lessonEndDateTime.getMinutes() + 50);
 
-            let displayStatus: LessonStatus = 'pending';
+            let displayStatus: LessonStatus = apt.status as LessonStatus;
             
             const hasReview = apt.reviews && apt.reviews.length > 0;
 
-            if (apt.status === 'expired') {
-               displayStatus = 'expired';
-            } else if (apt.status === 'rejected') {
-               displayStatus = 'rejected';
-            } else if (apt.status === 'cancelled') {
-               displayStatus = 'cancelled';
-            } else if (apt.status === 'pending' || apt.status === 'pending_approval') {
+            if (apt.status === 'pending' || apt.status === 'pending_approval') {
+               const [year, month, day] = apt.date.split('-').map(Number);
+               const [hours, minutes] = apt.start_time.split(':').map(Number);
+               const lessonStartDateTime = new Date(year, month - 1, day, hours, minutes);
+               const now = new Date(Date.now() + serverTimeOffset);
+               
                if (now >= lessonStartDateTime) {
                   displayStatus = 'expired';
                } else {
                   displayStatus = 'pending';
                }
-            } else if (apt.status === 'completed') {
-               displayStatus = 'completed';
-            } else if (apt.status === 'scheduled' || apt.status === 'confirmed') {
-               if (now >= lessonEndDateTime) {
-                  displayStatus = 'completed';
-               } else if (now >= lessonStartDateTime && now < lessonEndDateTime) {
-                  displayStatus = 'in_progress';
-               } else {
-                  displayStatus = 'scheduled';
-               }
-            } else if (apt.status === 'in_progress') {
-                displayStatus = 'in_progress';
             }
 
             const instructorData = apt.instructors;
@@ -327,20 +406,45 @@ export const StudentLessons: React.FC = () => {
     setFlowStep('rating');
     setRating(0);
     setComment('');
-    setSelectedTip(null);
+    setSelectedTip(20); // Reset to 20
     setCustomTip('');
     setIsSubmittingTip(false);
+    setTipClientSecret(null);
   };
 
   const submitRating = () => {
-    setFlowStep('tip');
+    if (rating >= 4) {
+      setFlowStep('tip');
+    } else {
+      // If rating is low, skip tip and finish
+      completeLessonFlow(0);
+    }
   };
 
   const handleTipPayment = async (amount: number) => {
+    if (!finalizingLessonGroup || !session?.user || amount < 1) return;
+    
     setIsSubmittingTip(true);
-    // Simulate processing
-    await new Promise(r => setTimeout(r, 500));
-    completeLessonFlow(amount);
+    try {
+      // 1. Create PaymentIntent via Edge Function
+      const { data, error } = await supabase.functions.invoke('create-tip', {
+        body: {
+          appointment_id: finalizingLessonGroup.ids[finalizingLessonGroup.ids.length - 1],
+          amount: Math.round(amount * 100) // Convert to cents
+        }
+      });
+
+      if (error) throw error;
+      if (!data?.clientSecret) throw new Error('Falha ao gerar intenção de pagamento.');
+
+      // 2. Set clientSecret to show Stripe Elements
+      setTipClientSecret(data.clientSecret);
+    } catch (err: any) {
+      console.error("Error creating tip intent:", err);
+      addToast(err.message || "Erro ao iniciar pagamento da caixinha.", 'error');
+    } finally {
+      setIsSubmittingTip(false);
+    }
   };
 
   const handleSkipTip = () => {
@@ -350,6 +454,7 @@ export const StudentLessons: React.FC = () => {
   const completeLessonFlow = async (tipAmount: number) => {
     if (!finalizingLessonGroup || !session?.user) return;
     setIsSubmittingTip(true);
+    if (tipAmount > 0) setTipGiven(true);
     
     const lessonIds = finalizingLessonGroup.ids;
     // We attach the review/tip to the LAST lesson in the group for simplicity in this MVP
@@ -369,23 +474,16 @@ export const StudentLessons: React.FC = () => {
        
        if (reviewError) throw reviewError;
 
-       // 2. Create Tip Transaction (if applicable)
-       if (tipAmount > 0) {
-          const tipInCents = tipAmount * 100;
-          
-          const { error: tipError } = await supabase
-            .from('transactions')
-            .insert({
-               appointment_id: mainReferenceId,
-               student_id: session.user.id,
-               instructor_id: finalizingLessonGroup.instructorId,
-               type: 'tip',
-               amount: tipInCents,
-               status: 'completed'
-            });
-          
-          if (tipError) throw tipError;
-       }
+       // 1.5 Update Appointment Status to 'completed'
+       const { error: statusError } = await supabase
+         .from('appointments')
+         .update({ 
+           status: 'completed',
+           updated_at: new Date().toISOString()
+         })
+         .in('id', lessonIds);
+       
+       if (statusError) throw statusError;
 
        // 3. Update Local State (Optimistic UI)
        setLessons(prev => prev.map(l => 
@@ -482,6 +580,8 @@ export const StudentLessons: React.FC = () => {
     setFlowStep(null);
     setFinalizingLessonGroup(null);
     setIsSubmittingTip(false);
+    setTipClientSecret(null);
+    setTipGiven(false);
   };
 
   const handleSecurityClick = () => {
@@ -622,8 +722,10 @@ export const StudentLessons: React.FC = () => {
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando</span>;
       case 'in_progress': 
         return <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 animate-pulse">Em andamento</span>;
+      case 'confirmed':
+        return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando finalização</span>;
       case 'completed': 
-        return <span className="text-xs font-medium text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100">Concluída</span>;
+        return <span className="text-xs font-medium text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100">Aula concluída</span>;
       case 'expired':
         return <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-full border border-gray-200">Expirada</span>;
       case 'rejected':
@@ -794,14 +896,14 @@ export const StudentLessons: React.FC = () => {
                             </button>
                         )}
                         
-                        {/* Review Button */}
-                        {group.status === 'completed' && group.ids.includes(pendingReviewAptId || '') && (
+                        {/* Finalize Button */}
+                        {group.status === 'confirmed' && (
                             <Button 
-                            variant="outline" 
+                            variant="primary" 
                             onClick={() => startFinalization(group)}
-                            className="text-xs px-4 py-2 h-8 min-h-0 bg-white"
+                            className="text-xs px-4 py-2 h-8 min-h-0 shadow-sm"
                             >
-                            Avaliar {isMulti ? 'aulas' : 'aula'}
+                            Finalizar aula
                             </Button>
                         )}
 
@@ -908,74 +1010,124 @@ export const StudentLessons: React.FC = () => {
 
         {flowStep === 'tip' && (
             <div className="space-y-6">
-              <div className="text-center">
-                  <p className="text-sm text-gray-500 font-medium leading-relaxed">
-                    A caixinha é opcional e vai <strong className="text-gray-900">100% para o instrutor</strong>.
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    👉 Um pequeno gesto faz diferença 😊
-                  </p>
+              {/* Instructor Header */}
+              <div className="flex flex-col items-center text-center">
+                <div className="w-20 h-20 rounded-full bg-gray-100 border-2 border-white shadow-md overflow-hidden mb-3">
+                  {finalizingLessonGroup?.instructorPhoto ? (
+                    <img src={finalizingLessonGroup.instructorPhoto} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-3xl text-gray-400">👤</div>
+                  )}
+                </div>
+                <h3 className="text-lg font-bold text-gray-900 leading-tight">
+                  {finalizingLessonGroup?.instructorName}
+                </h3>
+                <p className="text-xl font-bold text-blue-600 mt-2">Gostou da aula?</p>
+                <p className="text-sm text-gray-500 mt-2 leading-relaxed px-4">
+                  A aula já foi concluída. Você pode enviar uma caixinha opcional. O valor será cobrado agora do seu cartão.
+                </p>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                  {[5, 10, 15].map((val) => (
-                  <button
-                      key={val}
-                      onClick={() => {
-                        setSelectedTip(val);
-                        setCustomTip('');
+              {!tipClientSecret ? (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[5, 10, 20].map((val) => (
+                      <button
+                        key={val}
+                        onClick={() => {
+                          setSelectedTip(val);
+                          setCustomTip('');
+                        }}
+                        className={`
+                          py-4 border rounded-2xl font-bold text-lg transition-all active:scale-95 flex flex-col items-center justify-center
+                          ${selectedTip === val && !customTip 
+                            ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/20' 
+                            : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                          }
+                          ${val === 20 && !selectedTip && !customTip ? 'ring-2 ring-blue-500/20 border-blue-200' : ''}
+                        `}
+                      >
+                        <span className="text-xs font-medium opacity-60 mb-0.5">R$</span>
+                        {val}
+                        {val === 20 && (
+                          <span className="absolute -top-2 bg-blue-600 text-white text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider">Sugestão</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <span className="text-gray-400 font-medium text-sm">R$</span>
+                    </div>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      placeholder="Outro valor"
+                      value={customTip}
+                      onChange={(e) => {
+                        setCustomTip(e.target.value);
+                        if (e.target.value) setSelectedTip(null);
                       }}
-                      className={`
-                        py-3 border rounded-xl font-bold text-lg transition-all active:scale-95
-                        ${selectedTip === val && !customTip 
-                          ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-500' 
-                          : val === 10 ? 'border-gray-300 text-gray-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                        }
-                      `}
-                  >
-                      R$ {val}
-                  </button>
-                  ))}
-              </div>
+                      className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all"
+                    />
+                  </div>
 
-              <div className="relative">
-                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <span className="text-gray-400 font-medium text-sm">R$</span>
-                 </div>
-                 <input
-                    type="number"
-                    inputMode="numeric"
-                    placeholder="Digite outro valor"
-                    value={customTip}
-                    onChange={(e) => {
-                       setCustomTip(e.target.value);
-                       if (e.target.value) setSelectedTip(null);
-                    }}
-                    className="w-full pl-11 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-                 />
-              </div>
+                  <div className="text-center space-y-1">
+                    <p className="text-sm font-semibold text-gray-800">100% do valor vai para o instrutor</p>
+                    <p className="text-[10px] text-gray-400">Descontadas apenas taxas do cartão</p>
+                  </div>
 
-              <div className="space-y-3 pt-2">
-                 <Button 
-                   fullWidth 
-                   variant="primary"
-                   onClick={() => handleTipPayment(customTip ? Number(customTip) : (selectedTip || 0))} 
-                   disabled={(!selectedTip && !customTip) || isSubmittingTip}
-                   className="shadow-lg shadow-blue-100"
-                 >
-                    {isSubmittingTip ? 'Processando...' : 'Enviar caixinha'}
-                 </Button>
+                  <div className="space-y-3 pt-2">
+                    <Button 
+                      fullWidth 
+                      variant="primary"
+                      onClick={() => handleTipPayment(customTip ? Number(customTip) : (selectedTip || 0))} 
+                      disabled={(!selectedTip && !customTip) || isSubmittingTip}
+                      className="shadow-lg shadow-blue-100 h-12 text-base"
+                    >
+                      {isSubmittingTip ? 'Iniciando...' : `Confirmar R$ ${(customTip ? Number(customTip) : (selectedTip || 0)).toFixed(2).replace('.', ',')}`}
+                    </Button>
+                    <p className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-bold">
+                      Pagamento imediato
+                    </p>
 
-                 <Button 
-                   fullWidth 
-                   variant="outline" 
-                   onClick={handleSkipTip}
-                   disabled={isSubmittingTip}
-                   className="border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-700 shadow-none"
-                 >
-                    Pular caixinha
-                 </Button>
-              </div>
+                    <Button 
+                      fullWidth 
+                      variant="outline" 
+                      onClick={handleSkipTip}
+                      disabled={isSubmittingTip}
+                      className="border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-700 shadow-none"
+                    >
+                      Pular caixinha
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="animate-fade-in">
+                  {stripePromise ? (
+                    <Elements 
+                      stripe={stripePromise} 
+                      options={{ 
+                        clientSecret: tipClientSecret,
+                        appearance: { theme: 'stripe', variables: { colorPrimary: '#2563eb' } }
+                      }}
+                    >
+                      <TipCheckoutForm 
+                        clientSecret={tipClientSecret}
+                        amount={customTip ? Number(customTip) : (selectedTip || 0)}
+                        isSubmitting={isSubmittingTip}
+                        onSuccess={() => completeLessonFlow(customTip ? Number(customTip) : (selectedTip || 0))}
+                        onCancel={closeFlow}
+                      />
+                    </Elements>
+                  ) : (
+                    <div className="p-4 text-center text-red-500 bg-red-50 rounded-xl">
+                      Erro ao carregar Stripe.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
         )}
 
@@ -985,8 +1137,14 @@ export const StudentLessons: React.FC = () => {
                 🎉
             </div>
             <div>
-                <h3 className="text-lg font-bold text-gray-900">Obrigado!</h3>
-                <p className="text-gray-500 mt-1">Sua avaliação foi enviada com sucesso.</p>
+                <h3 className="text-lg font-bold text-gray-900">
+                  {tipGiven ? 'Você é demais!' : 'Obrigado!'}
+                </h3>
+                <p className="text-gray-500 mt-1">
+                  {tipGiven 
+                    ? '🎉 Você fez o dia do seu instrutor melhor!' 
+                    : 'Sua avaliação foi enviada com sucesso.'}
+                </p>
             </div>
             <Button fullWidth onClick={closeFlow}>
                 Concluir
