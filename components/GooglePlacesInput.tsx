@@ -33,15 +33,16 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
       componentRestrictions: { country: "br" }, // Restrict to Brazil
     },
     debounce: 300,
-    defaultValue: value,
   });
 
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Sync external value to internal state
   useEffect(() => {
-    setValue(value, false);
-  }, [value, setValue]);
+    if (value !== inputValue) {
+      setValue(value, false);
+    }
+  }, [value, inputValue, setValue]);
 
   // Handle clicking outside to close suggestions
   useEffect(() => {
@@ -66,7 +67,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
     onChange(description);
 
     try {
-      const results = await getGeocode({ address: description });
+      const results = await getGeocode({ placeId: place_id });
       const { lat, lng } = await getLatLng(results[0]);
       onAddressSelect(description, lat, lng, place_id);
     } catch (error) {
