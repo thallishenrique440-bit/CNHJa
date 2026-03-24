@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { MapPin } from 'lucide-react';
-import { Loader } from "@googlemaps/js-api-loader";
+import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 
 interface GooglePlacesInputProps {
   label?: string;
@@ -26,14 +26,14 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   useEffect(() => {
     if (!inputRef.current) return;
 
-    const loader = new Loader({
+    (setOptions as any)({
       apiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
       version: "weekly",
     });
 
     let listener: google.maps.MapsEventListener | null = null;
 
-    (loader as any).importLibrary("places").then((library: any) => {
+    importLibrary("places").then((library: any) => {
       const { Autocomplete } = library as google.maps.PlacesLibrary;
       
       if (!inputRef.current || autocompleteRef.current) return;
