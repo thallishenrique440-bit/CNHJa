@@ -147,27 +147,48 @@ export const StudentInstructorProfile: React.FC = () => {
   const LOCAL_STORAGE_KEY = 'booking_selected_slots';
   const TTL_MS = 15 * 60 * 1000; // 15 minutes
 
-  const getPersistedSlots = () => {
+  interface PersistedBookingData {
+    slots: string[];
+    category: string | null;
+    date: string | null;
+  }
+
+  const getPersistedBookingData = (): PersistedBookingData => {
     try {
       const itemStr = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (!itemStr) return [];
+      if (!itemStr) return { slots: [], category: null, date: null };
       const item = JSON.parse(itemStr);
       const now = new Date();
       if (now.getTime() > item.expiry) {
         localStorage.removeItem(LOCAL_STORAGE_KEY);
-        return [];
+        return { slots: [], category: null, date: null };
       }
-      return item.value || [];
+      
+      const val = item.value;
+      // Backward compatibility: if val is an array, it's the old format (just slots)
+      if (Array.isArray(val)) {
+        return { slots: val, category: null, date: null };
+      }
+      
+      return {
+        slots: val?.slots || [],
+        category: val?.category || null,
+        date: val?.date || null
+      };
     } catch (e) {
-      return [];
+      return { slots: [], category: null, date: null };
     }
   };
 
-  const savePersistedSlots = (slots: string[]) => {
+  const savePersistedBookingData = (slots: string[], category: string | null, date: Date | null) => {
     try {
       const now = new Date();
       const item = {
-        value: slots,
+        value: {
+          slots,
+          category,
+          date: date ? date.toISOString() : null
+        },
         expiry: now.getTime() + TTL_MS,
       };
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(item));
@@ -180,19 +201,23 @@ export const StudentInstructorProfile: React.FC = () => {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
   };
 
+  const persistedData = useMemo(() => getPersistedBookingData(), []);
+
   // Agenda State
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [viewDate, setViewDate] = useState(getStartOfWeek(new Date()));
+  const [selectedDate, setSelectedDate] = useState(() => {
+    if (persistedData.date) {
+        const d = new Date(persistedData.date);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  });
+  const [viewDate, setViewDate] = useState(() => getStartOfWeek(selectedDate));
   
   // Selected Slots now stores composite keys: "YYYY-MM-DD|HH:MM"
-  const [selectedSlots, setSelectedSlots] = useState<string[]>(() => getPersistedSlots());
+  const [selectedSlots, setSelectedSlots] = useState<string[]>(persistedData.slots);
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
   const [isGPSModalOpen, setIsGPSModalOpen] = useState(false);
 
-  useEffect(() => {
-    savePersistedSlots(selectedSlots);
-  }, [selectedSlots]);
-  
   // Review State
   const [canReview, setCanReview] = useState(false);
   const [existingReview, setExistingReview] = useState<any>(null);
@@ -528,13 +553,17 @@ export const StudentInstructorProfile: React.FC = () => {
     return [instructor.category];
   }, [instructor]);
 
-  const [selectedLessonCategory, setSelectedLessonCategory] = useState<string | null>(null);
+  const [selectedLessonCategory, setSelectedLessonCategory] = useState<string | null>(persistedData.category);
 
   useEffect(() => {
-    if (availableCategories.length === 1) {
+    if (availableCategories.length === 1 && !selectedLessonCategory) {
         setSelectedLessonCategory(availableCategories[0]);
     }
-  }, [availableCategories]);
+  }, [availableCategories, selectedLessonCategory]);
+
+  useEffect(() => {
+    savePersistedBookingData(selectedSlots, selectedLessonCategory, selectedDate);
+  }, [selectedSlots, selectedLessonCategory, selectedDate]);
 
   // --- DYNAMIC PRICE DISPLAY ---
   const currentDisplayPrices = useMemo(() => {
@@ -1084,14 +1113,6 @@ export const StudentInstructorProfile: React.FC = () => {
                           </>
                         )}
                       </div>
-                      {instructor.discounts.length > 0 && (
-                        <div className="mt-1 inline-flex items-center px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-[10px] font-bold border border-green-100">
-                          <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                          </svg>
-                          Descontos progressivos
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1134,8 +1155,8 @@ export const StudentInstructorProfile: React.FC = () => {
               {/* 2. Chips (Category, Credential) */}
               <div className="flex flex-wrap gap-2">
                 {instructor.credential && instructor.credential !== 'N/A' && (
-                  <div className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 text-xs font-medium border border-green-200">
-                    <svg className="w-4 h-4 mr-1.5 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <div className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 rounded-lg bg-gray-50 text-gray-700 text-xs font-medium border border-gray-200">
+                    <svg className="w-4 h-4 mr-1.5 text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
                     Credencial DETRAN &bull; {instructor.credential}
@@ -1414,28 +1435,36 @@ export const StudentInstructorProfile: React.FC = () => {
              </div>
           ) : (
              <div className="space-y-3">
-                {instructor.discounts.map((rule) => (
-                   <div key={rule.id} className="bg-green-50 border border-green-100 rounded-xl p-4 flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                         <div className="bg-green-100 p-2 rounded-lg text-green-700">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                            </svg>
-                         </div>
-                         <div>
-                            <p className="text-green-900 font-bold text-sm">
-                               {rule.discount_percentage}% de Desconto
-                            </p>
-                            <p className="text-green-700 text-xs">
-                               Na compra de {rule.min_lessons} ou mais aulas
-                            </p>
-                         </div>
-                      </div>
-                      <div className="text-green-600 font-bold text-xs bg-white px-2 py-1 rounded-md border border-green-100 shadow-sm">
-                         Automático
-                      </div>
-                   </div>
-                ))}
+                {instructor.discounts.map((rule) => {
+                   const basePriceForDiscount = selectedLessonCategory ? currentDisplayPrices.day : startingPrice;
+                   const discountAmount = (basePriceForDiscount * rule.discount_percentage) / 100;
+                   
+                   return (
+                    <div key={rule.id} className="bg-green-50 border border-green-100 rounded-xl p-4 flex items-center justify-between">
+                       <div className="flex items-center space-x-3">
+                          <div className="bg-green-100 p-2 rounded-lg text-green-700">
+                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                             </svg>
+                          </div>
+                          <div>
+                             <p className="text-green-900 font-bold text-sm">
+                                {rule.discount_percentage}% de Desconto
+                             </p>
+                             <p className="text-green-700 text-xs">
+                                Na compra de {rule.min_lessons} ou mais aulas
+                             </p>
+                             <p className="text-green-600 font-semibold text-[11px] mt-0.5">
+                                {formatCurrency(discountAmount)} de economia por aula
+                             </p>
+                          </div>
+                       </div>
+                       <div className="text-green-600 font-bold text-xs bg-white px-2 py-1 rounded-md border border-green-100 shadow-sm">
+                          Automático
+                       </div>
+                    </div>
+                   );
+                })}
              </div>
           )}
         </div>

@@ -44,9 +44,10 @@ serve(async (req) => {
     }
 
     // 3. Check (DB): Validate Ownership & Status
+    // We fetch the appointment and its purchase_id to handle grouping
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, purchase_id')
       .eq('id', appointment_id)
       .single()
 
@@ -61,7 +62,36 @@ serve(async (req) => {
       )
     }
 
-    // Idempotency: If already approved, return success
+    // --- GROUPING LOGIC ---
+    // If this appointment belongs to a purchase group, we should approve ALL appointments in that group.
+    let appointmentsToApprove = [appointment];
+    if (appointment.purchase_id) {
+      const { data: groupAppointments, error: groupError } = await adminClient
+        .from('appointments')
+        .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, purchase_id')
+        .eq('purchase_id', appointment.purchase_id);
+      
+      if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
+      if (!groupAppointments || groupAppointments.length === 0) throw new Error('Group not found');
+
+      // VALIDATION: All must be pending_approval
+      const nonPending = groupAppointments.filter(a => a.status !== 'pending_approval');
+      if (nonPending.length > 0) {
+        console.warn(`Group ${appointment.purchase_id} has inconsistent statuses:`, nonPending.map(a => `${a.id}:${a.status}`));
+        throw new Error('Este combo não pode mais ser aceito pois um ou mais horários foram alterados ou já processados.');
+      }
+
+      // VALIDATION: All must share the same PaymentIntent
+      const piIds = new Set(groupAppointments.map(a => a.payment_intent_id));
+      if (piIds.size > 1) {
+        console.error('CRITICAL: Group has multiple PaymentIntents:', Array.from(piIds));
+        throw new Error('Erro de integridade: O combo possui múltiplos IDs de pagamento.');
+      }
+
+      appointmentsToApprove = groupAppointments;
+    }
+
+    // Idempotency: If the main appointment is already approved, return success
     if (appointment.status === 'confirmed' && appointment.payment_status === 'captured') {
       return new Response(
         JSON.stringify({ message: 'Appointment already approved', appointment }),
@@ -77,48 +107,60 @@ serve(async (req) => {
       throw new Error('Critical: Appointment has no PaymentIntent ID')
     }
 
-    // Check if the lesson start time has already passed
-    let lessonStartUTC: Date;
-    if (appointment.start_time_utc) {
-      lessonStartUTC = new Date(appointment.start_time_utc);
-    } else {
-      // Fallback for older records
-      const [year, month, day] = appointment.date.split('-').map(Number)
-      const [hours, minutes] = appointment.start_time.split(':').map(Number)
-      lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hours + 3, minutes))
-    }
-    const nowUTC = new Date()
-
-    if (nowUTC >= lessonStartUTC) {
-      console.log(`Lesson ${appointment.id} has already started. Auto-expiring...`)
-      
-      // 1. Cancel Stripe PaymentIntent
-      try {
-        await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
-          idempotencyKey: `auto_expire_start_${appointment.id}`
-        })
-      } catch (stripeError: any) {
-        if (stripeError.code !== 'payment_intent_unexpected_state') {
-          console.error('Failed to cancel Stripe PaymentIntent during auto-expiration:', stripeError)
-        }
+    // Check if ANY lesson in the group has already started
+    for (const apt of appointmentsToApprove) {
+      if (!apt.start_time_utc) {
+        console.error(`CRITICAL: Appointment ${apt.id} missing start_time_utc`);
+        throw new Error('Erro de dados: Horário UTC não encontrado para uma das aulas.');
       }
 
-      // 2. Update DB
-      await adminClient
-        .from('appointments')
-        .update({
-          status: 'expired',
-          payment_status: 'released',
-          cancelled_reason: 'auto_expired_start_time',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', appointment.id)
+      const lessonStartUTC = new Date(apt.start_time_utc);
+      const nowUTC = new Date()
 
-      return new Response(
-        JSON.stringify({ error: 'Esta aula já expirou e não pode mais ser aceita.', code: 'AUTH_EXPIRED' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+      if (nowUTC >= lessonStartUTC) {
+        console.log(JSON.stringify({
+          event: "auto_expire_group",
+          purchase_id: appointment.purchase_id,
+          appointment_id: apt.id,
+          reason: "start_time_passed"
+        }));
+        
+        // 1. Cancel Stripe PaymentIntent
+        try {
+          await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
+            idempotencyKey: `auto_expire_group_${appointment.purchase_id || appointment.id}`
+          })
+        } catch (stripeError: any) {
+          if (stripeError.code !== 'payment_intent_unexpected_state') {
+            console.error('Failed to cancel Stripe PaymentIntent during auto-expiration:', stripeError)
+          }
+        }
+
+        // 2. Update DB for ALL pending appointments in the group
+        const idsToExpire = appointmentsToApprove.map(a => a.id);
+        await adminClient
+          .from('appointments')
+          .update({
+            status: 'expired',
+            payment_status: 'released',
+            cancelled_reason: 'auto_expired_start_time',
+            updated_at: new Date().toISOString()
+          })
+          .in('id', idsToExpire)
+
+        return new Response(
+          JSON.stringify({ error: 'Uma ou mais aulas deste combo já expiraram e não podem mais ser aceitas.', code: 'AUTH_EXPIRED' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
     }
+
+    console.log(JSON.stringify({
+      event: "approve_group_start",
+      purchase_id: appointment.purchase_id,
+      group_size: appointmentsToApprove.length,
+      payment_intent_id: appointment.payment_intent_id
+    }));
 
     // 4. Act (Stripe): Capture Funds
     let capturedIntent
@@ -126,7 +168,7 @@ serve(async (req) => {
       capturedIntent = await stripe.paymentIntents.capture(
         appointment.payment_intent_id,
         {
-          idempotencyKey: `capture_${appointment.id}`,
+          idempotencyKey: `capture_group_${appointment.purchase_id || appointment.id}`,
         }
       )
     } catch (stripeError: any) {
@@ -141,16 +183,17 @@ serve(async (req) => {
           capturedIntent = retrievedIntent
           console.log('PaymentIntent was already succeeded. Proceeding.')
         } else if (retrievedIntent.status === 'canceled') {
-           // Auth expired. Fail safely.
+           // Auth expired. Fail safely for the whole group.
+           const idsToCancel = appointmentsToApprove.map(a => a.id);
            await adminClient.from('appointments').update({
              status: 'cancelled',
              payment_status: 'failed',
              cancelled_reason: 'auth_expired'
-           }).eq('id', appointment.id)
+           }).in('id', idsToCancel)
            
            return new Response(
             JSON.stringify({ 
-              error: 'Payment authorization expired. Appointment cancelled.',
+              error: 'Payment authorization expired. Appointments cancelled.',
               code: 'AUTH_EXPIRED'
             }),
             { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -164,40 +207,65 @@ serve(async (req) => {
       }
     }
 
-    // 5. Persist (DB): Update Status with Optimistic Locking
-    const { data: updatedAppointment, error: updateError } = await adminClient
+    // 5. Persist (DB): Update Status for ALL appointments in the group
+    const idsToConfirm = appointmentsToApprove.map(a => a.id);
+    const { data: updatedAppointments, error: updateError } = await adminClient
       .from('appointments')
       .update({
         status: 'confirmed',
         payment_status: 'captured',
         updated_at: new Date().toISOString()
       })
-      .eq('id', appointment.id)
-      .eq('status', 'pending_approval') // Optimistic Lock: Only update if still pending
+      .in('id', idsToConfirm)
+      .eq('status', 'pending_approval') // Optimistic Lock
       .select()
-      .single()
 
-    if (updateError || !updatedAppointment) {
-      // Update failed. Check if it was because of race condition (webhook beat us)
-      const { data: check } = await adminClient
+    if (updateError || !updatedAppointments || updatedAppointments.length !== idsToConfirm.length) {
+      // Update failed or was partial. Check if it was because of race condition (webhook beat us)
+      const { data: checkGroup } = await adminClient
         .from('appointments')
-        .select('*')
-        .eq('id', appointment.id)
-        .single()
+        .select('id, status, payment_status')
+        .in('id', idsToConfirm);
       
-      if (check?.status === 'confirmed' && check?.payment_status === 'captured') {
+      const allConfirmed = checkGroup?.every(a => a.status === 'confirmed' && a.payment_status === 'captured');
+      
+      if (allConfirmed) {
+        console.log(JSON.stringify({
+          event: "approve_group_sync_success",
+          purchase_id: appointment.purchase_id,
+          message: "Group already confirmed (likely race condition with webhook)"
+        }));
         return new Response(
-          JSON.stringify({ message: 'Booking approved successfully (synced)', appointment: check }),
+          JSON.stringify({ message: 'Booking approved successfully (synced)', count: idsToConfirm.length }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
 
-      console.error('CRITICAL: Payment captured but DB update failed:', updateError)
-      throw new Error('Database update failed after payment capture')
+      // If we are here, some appointments are NOT confirmed but payment WAS captured.
+      console.error(JSON.stringify({
+        event: "CRITICAL_PAYMENT_SYNC_ERROR",
+        purchase_id: appointment.purchase_id,
+        payment_intent_id: appointment.payment_intent_id,
+        error: updateError?.message || "Partial update or status mismatch",
+        expected_ids: idsToConfirm,
+        actual_status: checkGroup?.map(a => `${a.id}:${a.status}`)
+      }));
+
+      throw new Error('Falha crítica: O pagamento foi capturado mas o banco de dados não pôde ser atualizado totalmente. Nossa equipe foi notificada para reconciliação manual.');
     }
 
+    console.log(JSON.stringify({
+      event: "approve_group_success",
+      purchase_id: appointment.purchase_id,
+      count: updatedAppointments.length
+    }));
+
     return new Response(
-      JSON.stringify({ message: 'Booking approved successfully', appointment: updatedAppointment }),
+      JSON.stringify({ 
+        message: 'Booking group approved successfully', 
+        count: updatedAppointments.length,
+        appointments: updatedAppointments 
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 

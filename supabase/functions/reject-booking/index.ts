@@ -44,7 +44,7 @@ serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, purchase_id')
       .eq('id', appointment_id)
       .single()
 
@@ -59,6 +59,35 @@ serve(async (req) => {
       )
     }
 
+    // --- GROUPING LOGIC ---
+    // If this appointment belongs to a purchase group, we should reject ALL appointments in that group.
+    let appointmentsToReject = [appointment];
+    if (appointment.purchase_id) {
+      const { data: groupAppointments, error: groupError } = await adminClient
+        .from('appointments')
+        .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, purchase_id')
+        .eq('purchase_id', appointment.purchase_id);
+      
+      if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
+      if (!groupAppointments || groupAppointments.length === 0) throw new Error('Group not found');
+
+      // VALIDATION: All must be in a rejectable state
+      const invalidStatus = groupAppointments.filter(a => a.status !== 'pending_approval' && a.status !== 'pending');
+      if (invalidStatus.length > 0) {
+        console.warn(`Group ${appointment.purchase_id} has inconsistent statuses for rejection:`, invalidStatus.map(a => `${a.id}:${a.status}`));
+        throw new Error('Este combo não pode mais ser recusado pois um ou mais horários já foram processados.');
+      }
+
+      // VALIDATION: All must share the same PaymentIntent
+      const piIds = new Set(groupAppointments.map(a => a.payment_intent_id));
+      if (piIds.size > 1) {
+        console.error('CRITICAL: Group has multiple PaymentIntents:', Array.from(piIds));
+        throw new Error('Erro de integridade: O combo possui múltiplos IDs de pagamento.');
+      }
+
+      appointmentsToReject = groupAppointments;
+    }
+
     // Idempotency: If already rejected, return success
     if (appointment.status === 'cancelled' && appointment.cancelled_reason === 'instructor_rejected') {
       return new Response(
@@ -71,13 +100,20 @@ serve(async (req) => {
       throw new Error(`Invalid status change: Cannot reject appointment with status '${appointment.status}'`)
     }
 
+    console.log(JSON.stringify({
+      event: "reject_group_start",
+      purchase_id: appointment.purchase_id,
+      group_size: appointmentsToReject.length,
+      payment_intent_id: appointment.payment_intent_id
+    }));
+
     // 4. Act (Stripe): Cancel Payment Intent (if exists)
     if (appointment.payment_intent_id) {
       try {
         await stripe.paymentIntents.cancel(
           appointment.payment_intent_id,
           {
-            idempotencyKey: `cancel_${appointment.id}`,
+            idempotencyKey: `cancel_group_${appointment.purchase_id || appointment.id}`,
           }
         )
       } catch (stripeError: any) {
@@ -104,8 +140,9 @@ serve(async (req) => {
       console.log('No PaymentIntent ID found. Skipping Stripe cancellation.')
     }
 
-    // 5. Persist (DB): Update Status with Optimistic Locking
-    const { data: updatedAppointment, error: updateError } = await adminClient
+    // 5. Persist (DB): Update Status for ALL appointments in the group
+    const idsToReject = appointmentsToReject.map(a => a.id);
+    const { data: updatedAppointments, error: updateError } = await adminClient
       .from('appointments')
       .update({
         status: 'cancelled',
@@ -113,32 +150,55 @@ serve(async (req) => {
         cancelled_reason: 'instructor_rejected',
         updated_at: new Date().toISOString()
       })
-      .eq('id', appointment.id)
+      .in('id', idsToReject)
       .in('status', ['pending_approval', 'pending']) // Optimistic Lock
       .select()
-      .single()
 
-    if (updateError || !updatedAppointment) {
+    if (updateError || !updatedAppointments || updatedAppointments.length !== idsToReject.length) {
        // Check for sync
-       const { data: check } = await adminClient
+       const { data: checkGroup } = await adminClient
         .from('appointments')
-        .select('*')
-        .eq('id', appointment.id)
-        .single()
+        .select('id, status, cancelled_reason')
+        .in('id', idsToReject);
       
-      if (check?.status === 'cancelled' && check?.cancelled_reason === 'instructor_rejected') {
+      const allCancelled = checkGroup?.every(a => a.status === 'cancelled' && a.cancelled_reason === 'instructor_rejected');
+      
+      if (allCancelled) {
+        console.log(JSON.stringify({
+          event: "reject_group_sync_success",
+          purchase_id: appointment.purchase_id,
+          message: "Group already cancelled"
+        }));
         return new Response(
-          JSON.stringify({ message: 'Booking rejected successfully (synced)', appointment: check }),
+          JSON.stringify({ message: 'Booking rejected successfully (synced)', count: idsToReject.length }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
 
-      console.error('CRITICAL: Payment canceled but DB update failed:', updateError)
-      throw new Error('Database update failed after payment cancellation')
+      console.error(JSON.stringify({
+        event: "CRITICAL_REJECT_SYNC_ERROR",
+        purchase_id: appointment.purchase_id,
+        payment_intent_id: appointment.payment_intent_id,
+        error: updateError?.message || "Partial update or status mismatch",
+        expected_ids: idsToReject,
+        actual_status: checkGroup?.map(a => `${a.id}:${a.status}`)
+      }));
+
+      throw new Error('Falha crítica: O pagamento foi cancelado mas o banco de dados não pôde ser atualizado totalmente. Nossa equipe foi notificada para reconciliação manual.');
     }
 
+    console.log(JSON.stringify({
+      event: "reject_group_success",
+      purchase_id: appointment.purchase_id,
+      count: updatedAppointments.length
+    }));
+
     return new Response(
-      JSON.stringify({ message: 'Booking rejected successfully', appointment: updatedAppointment }),
+      JSON.stringify({ 
+        message: 'Booking group rejected successfully', 
+        count: updatedAppointments.length,
+        appointments: updatedAppointments 
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 

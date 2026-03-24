@@ -29,6 +29,7 @@ interface Lesson {
   dateStr?: string;
   timeStr?: string;
   isReserved?: boolean; // NEW FIELD
+  purchaseId?: string; // NEW FIELD FOR GROUPING
 }
 
 interface LunchConfig {
@@ -128,6 +129,7 @@ export const InstructorAgenda: React.FC = () => {
 
   // Modal State
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
+  const [groupLessons, setGroupLessons] = useState<Lesson[]>([]); // NEW STATE FOR COMBO
   const [selectedDisplayStatus, setSelectedDisplayStatus] = useState<DisplayStatus | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
 
@@ -266,6 +268,7 @@ export const InstructorAgenda: React.FC = () => {
                 status,
                 category,
                 price,
+                purchase_id,
                 profiles:student_id (
                     full_name,
                     avatar_url,
@@ -328,7 +331,8 @@ export const InstructorAgenda: React.FC = () => {
                         price: apt.price,
                         dateStr: apt.date,
                         timeStr: timeKey,
-                        isReserved: isReserved
+                        isReserved: isReserved,
+                        purchaseId: apt.purchase_id
                     };
                 }
             });
@@ -486,10 +490,36 @@ export const InstructorAgenda: React.FC = () => {
     }
   };
 
-  const openLessonModal = (lesson: Lesson) => {
+  const openLessonModal = async (lesson: Lesson) => {
     setSelectedLesson(lesson);
     setViewState('details');
     setCancelReason('');
+    setGroupLessons([]);
+
+    // If it's a pending lesson and has a purchaseId, fetch the whole group
+    if (lesson.status === 'pending' && lesson.purchaseId) {
+        try {
+            const { data, error } = await supabase
+                .from('appointments')
+                .select('id, date, start_time, status, price')
+                .eq('purchase_id', lesson.purchaseId)
+                .order('date', { ascending: true })
+                .order('start_time', { ascending: true });
+            
+            if (!error && data) {
+                const mapped: Lesson[] = data.map(apt => ({
+                    id: apt.id,
+                    status: apt.status as LessonStatus,
+                    dateStr: apt.date,
+                    timeStr: apt.start_time.substring(0, 5),
+                    price: apt.price
+                }));
+                setGroupLessons(mapped);
+            }
+        } catch (err) {
+            console.error("Error fetching group lessons:", err);
+        }
+    }
   };
 
   const closeLessonModal = () => {
@@ -1060,7 +1090,7 @@ export const InstructorAgenda: React.FC = () => {
         title={
             viewState === 'cancel_success' ? "Aula cancelada!" :
             viewState === 'cancel_form' ? "Cancelar aula" :
-            selectedLesson?.status === 'pending' ? "Solicitação de aula" : 
+            selectedLesson?.status === 'pending' ? (groupLessons.length > 1 ? "Solicitação de Combo" : "Solicitação de aula") : 
             "Detalhes da aula"
         }
         footer={
@@ -1098,9 +1128,16 @@ export const InstructorAgenda: React.FC = () => {
               }
 
               return (
-                 <div className="flex space-x-3 w-full">
-                    <Button variant="outline" fullWidth onClick={handleRejectLesson} disabled={isActionLoading} className="border-red-200 text-red-600 hover:bg-red-50">{isActionLoading ? '...' : 'Recusar'}</Button>
-                    <Button fullWidth onClick={handleConfirmLesson} disabled={isActionLoading}>{isActionLoading ? 'Processando...' : 'Aceitar e Confirmar'}</Button>
+                 <div className="flex flex-col space-y-3 w-full">
+                    <div className="flex space-x-3 w-full">
+                        <Button variant="outline" fullWidth onClick={handleRejectLesson} disabled={isActionLoading} className="border-red-200 text-red-600 hover:bg-red-50">{isActionLoading ? '...' : groupLessons.length > 1 ? 'Recusar Combo' : 'Recusar'}</Button>
+                        <Button fullWidth onClick={handleConfirmLesson} disabled={isActionLoading}>{isActionLoading ? 'Processando...' : groupLessons.length > 1 ? 'Aceitar Combo' : 'Aceitar e Confirmar'}</Button>
+                    </div>
+                    {groupLessons.length > 1 && (
+                        <p className="text-[10px] text-gray-400 text-center italic">
+                            * Ao aceitar ou recusar, a ação será aplicada a todas as {groupLessons.length} aulas do combo.
+                        </p>
+                    )}
                  </div>
               );
           })() : (
@@ -1187,14 +1224,44 @@ export const InstructorAgenda: React.FC = () => {
                         <h2 className="text-lg font-bold text-gray-900 leading-tight mb-1">{selectedLesson.studentName || 'Horário Selecionado'}</h2>
                         {selectedLesson.cnhCategory && <span className="text-xs font-bold text-blue-600 uppercase tracking-wide mb-4">Categoria {selectedLesson.cnhCategory}</span>}
 
+                        {/* COMBO DISPLAY */}
+                        {selectedLesson.status === 'pending' && groupLessons.length > 1 && (
+                            <div className="w-full mb-4 bg-indigo-50 rounded-xl p-3 border border-indigo-100">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Aulas neste combo ({groupLessons.length})</span>
+                                    <span className="text-[10px] font-bold text-indigo-500 bg-white px-1.5 py-0.5 rounded border border-indigo-100">Decisão Única</span>
+                                </div>
+                                <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                                    {groupLessons.map((gl, idx) => (
+                                        <div key={gl.id} className="flex items-center justify-between text-xs py-1.5 border-b border-indigo-100/50 last:border-0">
+                                            <div className="flex items-center space-x-2">
+                                                <span className="text-indigo-400">📅</span>
+                                                <span className="font-medium text-gray-700">{formatDateFull(gl.dateStr!)} • {gl.timeStr}</span>
+                                            </div>
+                                            {gl.id === selectedLesson.id && (
+                                                <span className="text-[9px] font-bold text-indigo-500 bg-indigo-100 px-1 rounded">Este slot</span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="mt-3 pt-2 border-t border-indigo-100 flex justify-between items-center">
+                                    <span className="text-[10px] font-bold text-gray-500 uppercase">Total do Combo:</span>
+                                    <span className="text-sm font-bold text-indigo-700">
+                                        {formatCurrency(groupLessons.reduce((acc, curr) => acc + (curr.price || 0), 0))}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="w-full space-y-4 text-left">
                         {selectedLesson.status !== 'free' && selectedLesson.status !== 'blocked' ? (
                             <>
-                            <div className="flex items-center justify-center space-x-2 bg-gray-50 rounded-lg py-2 border border-gray-100">
-                                <span className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Valor:</span>
-                                <span className="text-sm font-bold text-green-600">{formatCurrency(selectedLesson.price || 0)}</span>
-                            </div>
-                            
+                            {!(selectedLesson.status === 'pending' && groupLessons.length > 1) && (
+                                <div className="flex items-center justify-center space-x-2 bg-gray-50 rounded-lg py-2 border border-gray-100">
+                                    <span className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Valor:</span>
+                                    <span className="text-sm font-bold text-green-600">{formatCurrency(selectedLesson.price || 0)}</span>
+                                </div>
+                            )}
                             {/* Phone Display */}
                             <div className="flex flex-col items-center bg-blue-50/50 rounded-lg p-3 border border-blue-100">
                                 <span className="text-[10px] text-blue-800 uppercase font-bold tracking-wider mb-1">WhatsApp do Aluno</span>
