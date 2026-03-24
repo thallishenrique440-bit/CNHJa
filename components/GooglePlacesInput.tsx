@@ -57,11 +57,16 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
 
   // Sync external value to internal input state
   useEffect(() => {
-    if (inputRef.current && value !== inputRef.current.value) {
-      inputRef.current.value = value;
-    }
-    if (value) {
-      isPlaceSelectedRef.current = true;
+    if (!inputRef.current) return;
+
+    // Only sync if the input is NOT in focus
+    if (document.activeElement !== inputRef.current) {
+      if (value !== inputRef.current.value) {
+        inputRef.current.value = value;
+      }
+      if (value) {
+        isPlaceSelectedRef.current = true;
+      }
     }
   }, [value]);
 
