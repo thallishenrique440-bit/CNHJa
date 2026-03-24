@@ -1,9 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import usePlacesAutocomplete, {
-  getGeocode,
-  getLatLng,
-} from 'use-places-autocomplete';
-import { MapPin, Loader2 } from 'lucide-react';
+import { MapPin } from 'lucide-react';
 
 interface GooglePlacesInputProps {
   label?: string;
@@ -22,64 +18,55 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   placeholder = "Digite o ponto de encontro",
   className = ""
 }) => {
-  const {
-    ready,
-    value: inputValue,
-    suggestions: { status, data },
-    setValue,
-    clearSuggestions,
-  } = usePlacesAutocomplete({
-    requestOptions: {
-      componentRestrictions: { country: "br" }, // Restrict to Brazil
-    },
-    debounce: 300,
-  });
+  const inputRef = useRef<HTMLInputElement>(null);
+  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const isPlaceSelectedRef = useRef(false);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isTypingRef = useRef(false);
-
-  // Sync external value to internal state
   useEffect(() => {
-    if (!isTypingRef.current && value !== inputValue) {
-      setValue(value, false);
-    }
-  }, [value, inputValue, setValue]);
+    if (!inputRef.current || !window.google || autocompleteRef.current) return;
 
-  // Handle clicking outside to close suggestions
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        clearSuggestions();
+    // Initialize the autocomplete
+    autocompleteRef.current = new google.maps.places.Autocomplete(inputRef.current, {
+      componentRestrictions: { country: "br" },
+      fields: ["formatted_address", "geometry", "place_id"],
+    });
+
+    // Listener for place selection
+    const listener = autocompleteRef.current.addListener("place_changed", () => {
+      const place = autocompleteRef.current?.getPlace();
+
+      if (!place || !place.geometry || !place.geometry.location) return;
+
+      const address = place.formatted_address || "";
+      const lat = place.geometry.location.lat();
+      const lng = place.geometry.location.lng();
+      const placeId = place.place_id || "";
+
+      isPlaceSelectedRef.current = true;
+      onAddressSelect(address, lat, lng, placeId);
+      onChange(address);
+    });
+
+    // Cleanup listener on unmount
+    return () => {
+      if (listener) {
+        google.maps.event.removeListener(listener);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [clearSuggestions]);
+  }, []); // Run only once
 
-  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    isTypingRef.current = true;
-    setValue(e.target.value);
-    onChange(e.target.value);
-  };
-
-  const handleSelect = async (suggestion: google.maps.places.AutocompletePrediction) => {
-    isTypingRef.current = false;
-    const { description, place_id } = suggestion;
-    setValue(description, false);
-    clearSuggestions();
-    onChange(description);
-
-    try {
-      const results = await getGeocode({ placeId: place_id });
-      const { lat, lng } = await getLatLng(results[0]);
-      onAddressSelect(description, lat, lng, place_id);
-    } catch (error) {
-      console.error("Error fetching geocode:", error);
+  // Sync external value to internal input state
+  useEffect(() => {
+    if (inputRef.current && value !== inputRef.current.value) {
+      inputRef.current.value = value;
     }
-  };
+    if (value) {
+      isPlaceSelectedRef.current = true;
+    }
+  }, [value]);
 
   return (
-    <div className={`flex flex-col space-y-2 relative ${className}`} ref={containerRef}>
+    <div className={`flex flex-col space-y-2 relative ${className}`}>
       {label && (
         <label className="text-sm font-semibold text-gray-700 ml-1">
           {label}
@@ -87,41 +74,24 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
       )}
       <div className="relative">
         <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
-          {!ready ? <Loader2 className="w-5 h-5 animate-spin" /> : <MapPin className="w-5 h-5" />}
+          <MapPin className="w-5 h-5" />
         </div>
         <input
-          value={inputValue}
-          onChange={handleInput}
-          onBlur={() => {
-            isTypingRef.current = false;
+          ref={inputRef}
+          defaultValue={value}
+          onChange={(e) => {
+            isPlaceSelectedRef.current = false;
+            onChange(e.target.value);
           }}
-          disabled={!ready}
+          onBlur={() => {
+            if (!isPlaceSelectedRef.current) {
+              onAddressSelect("", 0, 0, "");
+            }
+          }}
           placeholder={placeholder}
           className="w-full pl-12 pr-4 py-3.5 rounded-xl bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all disabled:bg-gray-50 disabled:cursor-not-allowed"
         />
       </div>
-
-      {status === "OK" && (
-        <ul className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl overflow-hidden max-h-60 overflow-y-auto">
-          {data.map((suggestion) => (
-            <li
-              key={suggestion.place_id}
-              onClick={() => handleSelect(suggestion)}
-              className="px-4 py-3 hover:bg-blue-50 cursor-pointer flex items-start space-x-3 transition-colors border-b border-gray-50 last:border-0"
-            >
-              <MapPin className="w-4 h-4 text-gray-400 mt-1 flex-shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-sm font-medium text-gray-900">
-                  {suggestion.structured_formatting.main_text}
-                </span>
-                <span className="text-xs text-gray-500">
-                  {suggestion.structured_formatting.secondary_text}
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 };
