@@ -7,12 +7,46 @@ import { useAuth } from '../../contexts/AuthContext';
 interface Transaction {
   id: string;
   created_at: string;
+  event_date: string;
   type: 'lesson_payment' | 'tip' | 'refund' | 'platform_fee';
+  amount: number; // legacy
+  gross_amount: number;
+  platform_fee: number;
+  net_amount: number;
+  status: string;
+  instructorName: string;
+  appointment_id?: string;
+}
+
+interface Appointment {
+  id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  status: 'pending' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired';
+  price: number;
+  instructors: {
+    profiles: {
+      full_name: string;
+    };
+  };
+}
+
+interface HistoryItem {
+  id: string;
+  timestamp: string; // display timestamp
+  sortDate: string;  // ISO string for sorting
+  type: 'lesson' | 'tip' | 'refund';
+  isFinancial: boolean;
   amount: number;
+  grossAmount?: number;
+  platformFee?: number;
+  netAmount?: number;
   status: string;
   instructorName: string;
   appointmentDate?: string;
   appointmentTime?: string;
+  isPast?: boolean;
 }
 
 interface FinanceSummary {
@@ -26,7 +60,7 @@ export const StudentFinance: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [summary, setSummary] = useState<FinanceSummary>({
     totalSpent: 0,
     classesDone: 0,
@@ -77,79 +111,144 @@ export const StudentFinance: React.FC = () => {
       setLoading(true);
       setError(null);
       try {
-        // 1. Fetch Transactions with Appointment details
+        const userId = session.user.id;
+        const now = new Date();
+
+        // 1. Fetch Transactions
         const { data: transData, error: transError } = await supabase
           .from('transactions')
           .select(`
             id,
             created_at,
+            event_date,
             type,
             amount,
+            gross_amount,
+            platform_fee,
+            net_amount,
             status,
+            appointment_id,
             instructors (
               profiles ( full_name )
-            ),
-            appointments (
-              date,
-              start_time
             )
           `)
-          .eq('student_id', session.user.id)
-          .order('created_at', { ascending: false });
+          .eq('student_id', userId)
+          .order('event_date', { ascending: false });
 
         if (transError) throw transError;
 
-        // 2. Fetch Appointments Stats
+        // 2. Fetch Appointments (Confirmed and Completed)
         const { data: apptData, error: apptError } = await supabase
           .from('appointments')
-          .select('status')
-          .eq('student_id', session.user.id);
+          .select(`
+            id,
+            date,
+            start_time,
+            end_time,
+            status,
+            price,
+            instructors (
+              profiles ( full_name )
+            )
+          `)
+          .eq('student_id', userId)
+          .in('status', ['confirmed', 'completed'])
+          .order('date', { ascending: false });
 
         if (apptError) throw apptError;
 
-        // --- Process Transactions ---
+        const typedTrans = (transData || []).map((t: any) => ({
+          ...t,
+          instructorName: t.instructors?.profiles?.full_name || 'Sistema'
+        })) as Transaction[];
+
+        const typedAppts = (apptData || []).map((a: any) => ({
+          ...a,
+          instructorName: a.instructors?.profiles?.full_name || 'Instrutor'
+        })) as any[];
+
+        // --- Process Financial Summary ---
         let totalSpent = 0;
-        const mappedTransactions: Transaction[] = [];
+        typedTrans.forEach(t => {
+          if (t.status === 'completed') {
+            // For students, we care about gross_amount
+            // Now refunds are already negative in the database, so we just add them
+            const val = t.gross_amount;
+            totalSpent += val;
+          }
+        });
 
-        if (transData) {
-          transData.forEach((t: any) => {
-            // Rule 1: Total Invested Calculation
-            if (t.status === 'completed') {
-              if (t.type === 'refund') {
-                totalSpent -= t.amount;
-              } else {
-                totalSpent += t.amount;
-              }
-            }
-
-            mappedTransactions.push({
-              id: t.id,
-              created_at: t.created_at,
-              type: t.type,
-              amount: t.amount,
-              status: t.status,
-              instructorName: t.instructors?.profiles?.full_name || 'Sistema',
-              appointmentDate: t.appointments?.date,
-              appointmentTime: t.appointments?.start_time
-            });
-          });
-        }
-
-        // --- Process Appointments ---
+        // --- Process Appointment Stats ---
         let done = 0;
         let scheduled = 0;
-        if (apptData) {
-          apptData.forEach((a: any) => {
-            // Rule 3: Class Counters
-            if (a.status === 'completed') {
-              done++;
-            } else if (['pending', 'scheduled', 'confirmed', 'in_progress'].includes(a.status)) {
+        typedAppts.forEach(a => {
+          if (a.status === 'completed') {
+            done++;
+          } else if (a.status === 'confirmed') {
+            // Check if it's future
+            const [hours, minutes] = a.start_time.split(':').map(Number);
+            const apptStartDate = new Date(a.date);
+            apptStartDate.setHours(hours, minutes, 0, 0);
+            
+            if (apptStartDate > now) {
               scheduled++;
             }
-          });
-        }
+          }
+        });
 
-        setTransactions(mappedTransactions);
+        // --- Build Hybrid History ---
+        const items: HistoryItem[] = [];
+
+        // Add Transactions
+        typedTrans.forEach(t => {
+          const logicalDate = t.event_date || t.created_at;
+          items.push({
+            id: t.id,
+            timestamp: logicalDate,
+            sortDate: logicalDate,
+            type: t.type === 'lesson_payment' ? 'lesson' : (t.type === 'tip' ? 'tip' : 'refund'),
+            isFinancial: true,
+            amount: t.amount,
+            grossAmount: t.gross_amount,
+            platformFee: t.platform_fee,
+            netAmount: t.net_amount,
+            status: t.status,
+            instructorName: t.instructorName
+          });
+        });
+
+        // Add Confirmed Appointments (not yet paid)
+        const paidApptIds = new Set(typedTrans.filter(t => t.type === 'lesson_payment').map(t => t.appointment_id));
+        
+        typedAppts.forEach(a => {
+          if (a.status === 'confirmed' && !paidApptIds.has(a.id)) {
+            const [hours, minutes] = a.end_time.split(':').map(Number);
+            const apptEndDate = new Date(a.date);
+            apptEndDate.setHours(hours, minutes, 0, 0);
+            const isPast = apptEndDate < now;
+
+            const logicalDate = `${a.date}T${a.start_time}`;
+
+            items.push({
+              id: a.id,
+              timestamp: logicalDate,
+              sortDate: logicalDate,
+              type: 'lesson',
+              isFinancial: false,
+              amount: a.price,
+              status: a.status,
+              instructorName: a.instructorName,
+              appointmentDate: a.date,
+              appointmentTime: a.start_time,
+              isPast
+            });
+          }
+        });
+
+        // Sort by sortDate descending
+        items.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
+        
+        setHistoryItems(items);
         setSummary({
           totalSpent,
           classesDone: done,
@@ -222,49 +321,69 @@ export const StudentFinance: React.FC = () => {
                  <div key={i} className="bg-white p-4 rounded-2xl border border-gray-100 h-16 animate-pulse"></div>
                ))}
              </div>
-          ) : transactions.length === 0 ? (
+          ) : historyItems.length === 0 ? (
              <div className="text-center py-10 bg-white rounded-2xl border border-gray-100 border-dashed">
-                <p className="text-gray-400 text-sm">Nenhuma transação encontrada.</p>
+                <p className="text-gray-400 text-sm">Nenhuma atividade encontrada.</p>
              </div>
           ) : (
             <div className="space-y-3">
-              {transactions.map((t) => {
-                const isRefund = t.type === 'refund';
-                const isPending = ['pending', 'processing'].includes(t.status);
+              {historyItems.map((item) => {
+                const isRefund = item.type === 'refund';
+                const isTip = item.type === 'tip';
+                const isLesson = item.type === 'lesson';
+                const isPending = ['pending', 'processing'].includes(item.status);
+                
+                // Visual indicators
+                const getIndicatorColor = () => {
+                  if (isRefund) return 'border-red-500';
+                  if (isTip) return 'border-amber-400';
+                  if (!item.isFinancial) return 'border-blue-400 border-dashed';
+                  return 'border-green-500';
+                };
                 
                 return (
-                  <div key={t.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+                  <div key={item.id} className={`bg-white p-4 rounded-2xl shadow-sm border border-gray-100 border-l-4 ${getIndicatorColor()} flex items-center justify-between transition-all hover:bg-gray-50`}>
                     <div className="flex items-center space-x-4">
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${
-                        isRefund ? 'bg-green-50 text-green-600' : 
-                        t.type === 'tip' ? 'bg-yellow-50 text-yellow-600' : 
-                        'bg-gray-50 text-gray-600'
+                        isRefund ? 'bg-red-50 text-red-600' : 
+                        isTip ? 'bg-yellow-50 text-yellow-600' : 
+                        'bg-blue-50 text-blue-600'
                       }`}>
-                        {getIcon(t.type)}
+                        {getIcon(item.type)}
                       </div>
                       <div>
-                        <h3 className="font-semibold text-gray-900 text-sm leading-tight">{getLabel(t.type)}</h3>
+                        <h3 className="font-semibold text-gray-900 text-sm leading-tight">{getLabel(item.type)}</h3>
                         <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
-                          {t.instructorName}
-                          {t.appointmentDate && t.appointmentTime && (
-                            <span className="text-gray-400"> • {formatAppointmentDate(t.appointmentDate, t.appointmentTime)}</span>
+                          {item.instructorName}
+                          {item.appointmentDate && item.appointmentTime && (
+                            <span className="text-gray-400"> • {formatAppointmentDate(item.appointmentDate, item.appointmentTime)}</span>
                           )}
                         </p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(t.created_at)}</p>
+                        {!item.isFinancial && isLesson && (
+                            <p className={`text-[9px] font-bold uppercase mt-1 ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
+                                {item.isPast ? 'Realizada (Processando)' : 'Agendada'}
+                            </p>
+                        )}
+                        <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(item.sortDate)}</p>
                       </div>
                     </div>
                     <div className="text-right">
-                      <span className={`block font-bold text-sm ${isRefund ? 'text-green-600' : 'text-gray-900'}`}>
-                        {isRefund ? '+' : ''}{formatCurrency(t.amount)}
+                      <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-gray-900'}`}>
+                        {isRefund ? '-' : ''}{formatCurrency(Math.abs(item.amount))}
                       </span>
                       {isPending && (
                           <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">
                               Pendente
                           </span>
                       )}
-                      {t.status === 'failed' && (
+                      {item.status === 'failed' && (
                           <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
                               Falhou
+                          </span>
+                      )}
+                      {item.isFinancial && item.status === 'completed' && (
+                          <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
+                              Pago
                           </span>
                       )}
                     </div>

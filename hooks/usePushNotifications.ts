@@ -50,6 +50,7 @@ export function usePushNotifications() {
       });
 
       if (currentToken) {
+        console.log('FCM Token generated successfully:', currentToken);
         setToken(currentToken);
         
         // Salva no Supabase usando a RPC segura (bypassa RLS de conflito de device)
@@ -63,9 +64,15 @@ export function usePushNotifications() {
         }
         
         return currentToken;
+      } else {
+        console.warn('getToken returned null but no error was thrown.');
       }
     } catch (error) {
       console.error('Error fetching/saving token:', error);
+      if (error instanceof Error) {
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+      }
     }
     return null;
   }, [user]);

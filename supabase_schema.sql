@@ -97,9 +97,54 @@ create table if not exists public.transactions (
   instructor_id uuid not null references public.instructors(id),
   
   type text not null check (type in ('lesson_payment', 'tip', 'refund', 'platform_fee')),
-  amount integer not null, -- stored in cents
-  status text not null default 'completed' check (status in ('pending', 'completed', 'failed'))
+  amount integer not null, -- stored in cents (legacy/display)
+  gross_amount integer,    -- total paid by student
+  platform_fee integer,    -- amount kept by platform
+  net_amount integer,      -- amount to be paid to instructor
+  status text not null default 'completed' check (status in ('pending', 'completed', 'failed')),
+  event_date timestamptz   -- logical date of the event for sorting
 );
+
+-- Documentation: Financial Ledger Standards
+-- 1. All amounts are stored in CENTS (integer).
+-- 2. 'lesson_payment' and 'tip' types are POSITIVE (inflow).
+-- 3. 'refund' type MUST be NEGATIVE (outflow) for gross_amount, platform_fee, and net_amount.
+-- 4. 'platform_fee' is the amount kept by the platform (usually 10% of gross).
+-- 5. 'net_amount' is the amount destined for the instructor (gross - fee).
+
+-- Migration for existing transactions (ensure refunds are negative)
+update public.transactions
+set 
+  amount = -abs(amount),
+  gross_amount = -abs(gross_amount),
+  platform_fee = -abs(platform_fee),
+  net_amount = -abs(net_amount)
+where type = 'refund';
+
+-- Migration for existing transactions (ensure non-refunds are positive)
+update public.transactions
+set 
+  amount = abs(amount),
+  gross_amount = abs(gross_amount),
+  platform_fee = abs(platform_fee),
+  net_amount = abs(net_amount)
+where type != 'refund';
+
+-- Migration for existing transactions (populate new fields if null)
+update public.transactions
+set 
+  gross_amount = amount,
+  platform_fee = case when type = 'lesson_payment' then floor(amount * 0.1) else 0 end,
+  net_amount = case when type = 'lesson_payment' then amount - floor(amount * 0.1) else amount end,
+  event_date = created_at
+where gross_amount is null;
+
+-- Make columns required after migration (except maybe for very old data if we want to be safe, but here we can)
+alter table public.transactions 
+  alter column gross_amount set not null,
+  alter column platform_fee set not null,
+  alter column net_amount set not null,
+  alter column event_date set not null;
 
 -- Enable RLS for transactions
 alter table public.transactions enable row level security;
@@ -371,3 +416,9 @@ ADD COLUMN IF NOT EXISTS work_saturday_afternoon boolean DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS unique_tip_per_appointment 
 ON public.transactions (appointment_id) 
 WHERE type = 'tip' AND status = 'completed';
+
+-- 2. Índice Único para Pagamentos de Aula (Garantir 1 por aula)
+-- Impede que o processo de conclusão de aulas ou erros de UI gerem pagamentos duplicados.
+CREATE UNIQUE INDEX IF NOT EXISTS unique_lesson_payment_per_appointment 
+ON public.transactions (appointment_id) 
+WHERE type = 'lesson_payment' AND status = 'completed';

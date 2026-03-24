@@ -58,14 +58,22 @@ export default async function handler(req: any, res: any) {
         bookingsToComplete.push(booking);
         appointmentIds.push(booking.id);
         
+        const gross = booking.price;
+        const fee = Math.floor(gross * 0.1); // 10% platform fee
+        const net = gross - fee;
+
         transactionPayloads.push({
             appointment_id: booking.id,
             student_id: booking.student_id,
             instructor_id: booking.instructor_id,
             type: 'lesson_payment',
-            amount: booking.price,
+            amount: gross, // legacy/display
+            gross_amount: gross,
+            platform_fee: fee,
+            net_amount: net,
             status: 'completed',
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            event_date: `${booking.date}T${booking.start_time}`
         });
     }
 

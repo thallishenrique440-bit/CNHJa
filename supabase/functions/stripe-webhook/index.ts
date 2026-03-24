@@ -557,6 +557,23 @@ Deno.serve(async (req: Request) => {
         break;
       }
 
+      // ======================================================================
+      // Refund Handling (Standard: Negative Values)
+      // ======================================================================
+      case "charge.refunded": {
+        const charge = event.data.object;
+        const refund = charge.refunds.data[0]; // Get the latest refund
+        
+        if (refund && refund.status === 'succeeded') {
+          console.log(`↩️ Processing refund for charge ${charge.id}`);
+          // Note: When implementing refund creation, ensure amounts are NEGATIVE
+          // gross_amount = -refund.amount
+          // platform_fee = -Math.floor(refund.amount * 0.1)
+          // net_amount = gross_amount - platform_fee
+        }
+        break;
+      }
+
       default:
         if (event.type.startsWith('payment_intent.')) {
             console.log(`ℹ️ Unhandled PaymentIntent event: ${event.type} [ID: ${event.id}]`);

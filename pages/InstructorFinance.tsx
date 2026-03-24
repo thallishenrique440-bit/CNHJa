@@ -10,12 +10,47 @@ import { useToast } from '../contexts/ToastContext';
 interface Transaction {
   id: string;
   created_at: string;
+  event_date: string;
   type: 'lesson_payment' | 'tip' | 'refund' | 'platform_fee';
-  amount: number; // in cents
+  amount: number; // legacy
+  gross_amount: number;
+  platform_fee: number;
+  net_amount: number;
   status: 'pending' | 'completed' | 'failed';
+  appointment_id?: string;
   profiles: {
     full_name: string;
   };
+}
+
+interface Appointment {
+  id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  status: 'pending' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired';
+  price: number;
+  profiles: {
+    full_name: string;
+  };
+}
+
+interface HistoryItem {
+  id: string;
+  timestamp: string; // display timestamp
+  sortDate: string;  // ISO string for sorting
+  type: 'lesson' | 'tip' | 'refund';
+  isFinancial: boolean; // true if it's a completed transaction
+  amount: number;
+  grossAmount?: number;
+  platformFee?: number;
+  netAmount?: number;
+  status: string;
+  studentName: string;
+  appointmentStatus?: string;
+  appointmentDate?: string;
+  appointmentTime?: string;
+  isPast?: boolean;
 }
 
 // Updated Status Types for better UX
@@ -29,7 +64,7 @@ export const InstructorFinance: React.FC = () => {
   const [syncing, setSyncing] = useState(false);
   
   // Data State
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   
   // Financial Metrics
   const [totalRevenue, setTotalRevenue] = useState(0);
@@ -74,17 +109,13 @@ export const InstructorFinance: React.FC = () => {
 
         if (instructorError) throw instructorError;
 
-        // --- FIXED LOGIC ---
         if (!instructorData.stripe_account_id) {
             setStripeStatus('none');
         } else if (instructorData.payouts_enabled === true) {
-            // Priority 1: Check explicitly for boolean true
             setStripeStatus('active');
         } else if (instructorData.stripe_onboarding_completed === true) {
-            // Priority 2: Onboarding done, but payouts not yet enabled (Bank verification)
             setStripeStatus('processing');
         } else {
-            // Priority 3: Account exists but onboarding incomplete
             setStripeStatus('pending');
         }
 
@@ -94,57 +125,145 @@ export const InstructorFinance: React.FC = () => {
             .select(`
                 id,
                 created_at,
+                event_date,
                 type,
                 amount,
+                gross_amount,
+                platform_fee,
+                net_amount,
                 status,
+                appointment_id,
                 profiles ( full_name )
             `)
             .eq('instructor_id', userId)
-            .order('created_at', { ascending: false });
+            .order('event_date', { ascending: false });
 
         if (transError) throw transError;
 
-        if (transData) {
-            const typedData = transData as any[];
-            setTransactions(typedData);
+        // 3. Fetch Confirmed Appointments (Scheduled)
+        const { data: apptData, error: apptError } = await supabase
+            .from('appointments')
+            .select(`
+                id,
+                date,
+                start_time,
+                end_time,
+                status,
+                price,
+                profiles ( full_name )
+            `)
+            .eq('instructor_id', userId)
+            .eq('status', 'confirmed')
+            .order('date', { ascending: false });
 
-            let totalRev = 0;
-            let monthRev = 0;
-            let totalTip = 0;
-            let monthTip = 0;
+        if (apptError) throw apptError;
 
-            const now = new Date();
-            const currentMonth = now.getMonth();
-            const currentYear = now.getFullYear();
+        const typedTrans = (transData || []).map((t: any) => ({
+            ...t,
+            profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles
+        })) as Transaction[];
 
-            typedData.forEach(t => {
-                if (t.status === 'completed') {
-                    const tDate = new Date(t.created_at);
-                    const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
-                    
-                    // Only count revenue types (lesson_payment, tip)
-                    if (t.type === 'lesson_payment' || t.type === 'tip') {
-                        totalRev += t.amount;
-                        if (isCurrentMonth) {
-                            monthRev += t.amount;
-                        }
+        const typedAppts = (apptData || []).map((a: any) => ({
+            ...a,
+            profiles: Array.isArray(a.profiles) ? a.profiles[0] : a.profiles
+        })) as Appointment[];
+
+        // --- Financial Calculations (Strictly from completed transactions) ---
+        let totalRev = 0;
+        let monthRev = 0;
+        let totalTip = 0;
+        let monthTip = 0;
+
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        typedTrans.forEach(t => {
+            if (t.status === 'completed') {
+                const tDate = new Date(t.event_date || t.created_at);
+                const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
+                
+                // For instructors, we care about net_amount
+                // Now refunds are already negative in the database, so we just add them
+                const val = t.net_amount;
+
+                if (t.type === 'lesson_payment') {
+                    totalRev += val;
+                    if (isCurrentMonth) monthRev += val;
+                } else if (t.type === 'tip') {
+                    totalRev += val;
+                    totalTip += val;
+                    if (isCurrentMonth) {
+                        monthRev += val;
+                        monthTip += val;
                     }
-
-                    // Count tips separately
-                    if (t.type === 'tip') {
-                        totalTip += t.amount;
-                        if (isCurrentMonth) {
-                            monthTip += t.amount;
-                        }
-                    }
+                } else if (t.type === 'refund') {
+                    // val is already negative, so adding it correctly subtracts from total
+                    totalRev += val;
+                    if (isCurrentMonth) monthRev += val;
                 }
-            });
+            }
+        });
 
-            setTotalRevenue(totalRev);
-            setMonthlyRevenue(monthRev);
-            setTotalTips(totalTip);
-            setMonthlyTips(monthTip);
-        }
+        setTotalRevenue(totalRev);
+        setMonthlyRevenue(monthRev);
+        setTotalTips(totalTip);
+        setMonthlyTips(monthTip);
+
+        // --- Build Hybrid History ---
+        const items: HistoryItem[] = [];
+
+        // Add Transactions
+        typedTrans.forEach(t => {
+            const logicalDate = t.event_date || t.created_at;
+            items.push({
+                id: t.id,
+                timestamp: logicalDate,
+                sortDate: logicalDate,
+                type: t.type === 'lesson_payment' ? 'lesson' : (t.type === 'tip' ? 'tip' : 'refund'),
+                isFinancial: true,
+                amount: t.amount,
+                grossAmount: t.gross_amount,
+                platformFee: t.platform_fee,
+                netAmount: t.net_amount,
+                status: t.status,
+                studentName: t.profiles?.full_name || 'Aluno'
+            });
+        });
+
+        // Add Confirmed Appointments (that don't have a completed transaction yet)
+        const completedApptIds = new Set(typedTrans.filter(t => t.type === 'lesson_payment').map(t => t.appointment_id));
+        
+        typedAppts.forEach(a => {
+            if (!completedApptIds.has(a.id)) {
+                // Check if it's past time (visual migration)
+                const [hours, minutes] = a.end_time.split(':').map(Number);
+                const apptEndDate = new Date(a.date);
+                apptEndDate.setHours(hours, minutes, 0, 0);
+                const isPast = apptEndDate < now;
+
+                const logicalDate = `${a.date}T${a.start_time}`;
+
+                items.push({
+                    id: a.id,
+                    timestamp: logicalDate,
+                    sortDate: logicalDate,
+                    type: 'lesson',
+                    isFinancial: false,
+                    amount: a.price,
+                    status: a.status,
+                    studentName: a.profiles?.full_name || 'Aluno',
+                    appointmentStatus: a.status,
+                    appointmentDate: a.date,
+                    appointmentTime: a.start_time,
+                    isPast
+                });
+            }
+        });
+
+        // Sort by sortDate descending
+        items.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
+        setHistoryItems(items);
 
     } catch (err) {
         console.error("Error loading finance data:", err);
@@ -362,47 +481,94 @@ export const InstructorFinance: React.FC = () => {
           
           {loading ? (
              <div className="text-center py-4 text-gray-400 text-xs">Carregando histórico...</div>
-          ) : transactions.length === 0 ? (
+          ) : historyItems.length === 0 ? (
              <div className="text-center py-8 bg-white rounded-xl border border-gray-100 text-gray-400 text-sm">
-                 Nenhuma transação encontrada.
+                 Nenhuma atividade encontrada.
              </div>
           ) : (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 overflow-hidden">
-                {transactions.map((t) => {
-                    const isTip = t.type === 'tip';
-                    const label = isTip ? 'Caixinha' : 'Aula';
-                    const studentName = t.profiles?.full_name || 'Aluno';
+                {historyItems.map((item) => {
+                    const isTip = item.type === 'tip';
+                    const isRefund = item.type === 'refund';
+                    const isLesson = item.type === 'lesson';
+                    
+                    let label = 'Aula';
+                    if (isTip) label = 'Caixinha';
+                    if (isRefund) label = 'Reembolso';
+
+                    const studentName = item.studentName;
                     const displayDesc = `${label} - ${studentName}`;
+
+                    // Visual indicators
+                    const getIndicatorColor = () => {
+                        if (isRefund) return 'border-red-500';
+                        if (isTip) return 'border-amber-400';
+                        if (!item.isFinancial) return 'border-blue-400 border-dashed';
+                        return 'border-green-500';
+                    };
+
+                    const getIcon = () => {
+                        if (isRefund) return '↩️';
+                        if (isTip) return '🎁';
+                        if (!item.isFinancial) return '📅';
+                        return '✅';
+                    };
 
                     return (
                         <div 
-                            key={t.id} 
-                            onClick={() => toggleExpand(t.id)}
-                            className="p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer"
+                            key={item.id} 
+                            onClick={() => toggleExpand(item.id)}
+                            className={`p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer border-l-4 ${getIndicatorColor()}`}
                         >
                             <div className="flex justify-between items-center w-full">
                                 <div className="flex flex-col space-y-1">
-                                    <span className="text-xs text-gray-400 font-medium">{formatDate(t.created_at)}</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs text-gray-400 font-medium">{formatDate(item.sortDate)}</span>
+                                        <span className="text-[10px] text-gray-300">•</span>
+                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">{getIcon()} {label}</span>
+                                    </div>
                                     <span className="text-sm font-semibold text-gray-800">
-                                    {displayDesc} {isTip && ' 🎁'}
+                                        {studentName}
                                     </span>
+                                    {!item.isFinancial && isLesson && (
+                                        <span className={`text-[10px] font-bold uppercase ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
+                                            {item.isPast ? 'Realizada (Processando)' : 'Agendada'}
+                                        </span>
+                                    )}
                                 </div>
                                 <div className="text-right">
-                                    <span className="block font-bold text-sm text-green-600">
-                                    + {formatCurrency(t.amount)}
+                                    <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
+                                        {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.isFinancial ? (item.netAmount || item.amount) : item.amount))}
                                     </span>
                                     <span className="text-[10px] text-gray-400 capitalize">
-                                        {t.status === 'completed' ? 'Processado' : t.status}
+                                        {item.isFinancial ? 'Disponível' : 'Confirmado'}
                                     </span>
                                 </div>
                             </div>
 
-                            {expandedId === t.id && (
-                            <div className="mt-3 pt-2 border-t border-gray-100 flex items-center animate-fade-in">
-                                <span className="text-xs text-gray-500 font-medium">
-                                🕒 {formatTime(t.created_at)} · ID: {t.id.slice(0, 8)}...
-                                </span>
-                            </div>
+                            {expandedId === item.id && (
+                                <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 animate-fade-in">
+                                    <div className="grid grid-cols-2 gap-y-2 text-[11px]">
+                                        <div className="text-gray-400">Horário:</div>
+                                        <div className="text-gray-700 font-medium text-right">{formatTime(item.sortDate)}</div>
+                                        
+                                        {item.isFinancial && item.grossAmount !== undefined && (
+                                            <>
+                                                <div className="text-gray-400">Valor Bruto:</div>
+                                                <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
+                                                
+                                                <div className="text-gray-400">Taxa Plataforma (10%):</div>
+                                                <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee || 0))}</div>
+                                                
+                                                <div className="text-gray-400 font-bold">Valor Líquido:</div>
+                                                <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
+                                            </>
+                                        )}
+
+                                        <div className="text-gray-400">ID:</div>
+                                        <div className="text-gray-500 text-right font-mono">{item.id.slice(0, 12)}...</div>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     );
