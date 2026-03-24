@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { MapPin } from 'lucide-react';
+import { Loader } from "@googlemaps/js-api-loader";
 
 interface GooglePlacesInputProps {
   label?: string;
@@ -23,34 +24,53 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   const isPlaceSelectedRef = useRef(false);
 
   useEffect(() => {
-    if (!inputRef.current || !window.google || autocompleteRef.current) return;
+    if (!inputRef.current) return;
 
-    // Initialize the autocomplete
-    autocompleteRef.current = new google.maps.places.Autocomplete(inputRef.current, {
-      componentRestrictions: { country: "br" },
-      fields: ["formatted_address", "geometry", "place_id"],
+    const loader = new Loader({
+      apiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
+      version: "weekly",
     });
 
-    // Listener for place selection
-    const listener = autocompleteRef.current.addListener("place_changed", () => {
-      const place = autocompleteRef.current?.getPlace();
+    let listener: google.maps.MapsEventListener | null = null;
 
-      if (!place || !place.geometry || !place.geometry.location) return;
+    (loader as any).importLibrary("places").then((library: any) => {
+      const { Autocomplete } = library as google.maps.PlacesLibrary;
+      
+      if (!inputRef.current || autocompleteRef.current) return;
 
-      const address = place.formatted_address || "";
-      const lat = place.geometry.location.lat();
-      const lng = place.geometry.location.lng();
-      const placeId = place.place_id || "";
+      // Initialize the autocomplete
+      autocompleteRef.current = new Autocomplete(inputRef.current, {
+        componentRestrictions: { country: "br" },
+        fields: ["formatted_address", "geometry", "place_id"],
+      });
 
-      isPlaceSelectedRef.current = true;
-      onAddressSelect(address, lat, lng, placeId);
-      onChange(address);
+      // Listener for place selection
+      listener = autocompleteRef.current.addListener("place_changed", () => {
+        const place = autocompleteRef.current?.getPlace();
+
+        if (!place || !place.geometry || !place.geometry.location) return;
+
+        const address = place.formatted_address || "";
+        const lat = place.geometry.location.lat();
+        const lng = place.geometry.location.lng();
+        const placeId = place.place_id || "";
+
+        isPlaceSelectedRef.current = true;
+        onAddressSelect(address, lat, lng, placeId);
+        onChange(address);
+      });
+    }).catch((err: any) => {
+      console.error("Error loading Google Maps API:", err);
     });
 
     // Cleanup listener on unmount
     return () => {
       if (listener) {
         google.maps.event.removeListener(listener);
+      }
+      if (autocompleteRef.current) {
+        google.maps.event.clearInstanceListeners(autocompleteRef.current);
+        autocompleteRef.current = null;
       }
     };
   }, []); // Run only once
