@@ -36,10 +36,11 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   });
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const isTypingRef = useRef(false);
 
   // Sync external value to internal state
   useEffect(() => {
-    if (value !== inputValue) {
+    if (!isTypingRef.current && value !== inputValue) {
       setValue(value, false);
     }
   }, [value, inputValue, setValue]);
@@ -56,11 +57,13 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   }, [clearSuggestions]);
 
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    isTypingRef.current = true;
     setValue(e.target.value);
     onChange(e.target.value);
   };
 
   const handleSelect = async (suggestion: google.maps.places.AutocompletePrediction) => {
+    isTypingRef.current = false;
     const { description, place_id } = suggestion;
     setValue(description, false);
     clearSuggestions();
@@ -89,6 +92,9 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
         <input
           value={inputValue}
           onChange={handleInput}
+          onBlur={() => {
+            isTypingRef.current = false;
+          }}
           disabled={!ready}
           placeholder={placeholder}
           className="w-full pl-12 pr-4 py-3.5 rounded-xl bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all disabled:bg-gray-50 disabled:cursor-not-allowed"
