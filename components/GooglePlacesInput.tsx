@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MapPin } from 'lucide-react';
 import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 
@@ -19,12 +19,12 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   placeholder = "Digite o ponto de encontro",
   className = ""
 }) => {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [inputElement, setInputElement] = useState<HTMLInputElement | null>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const isPlaceSelectedRef = useRef(false);
 
   useEffect(() => {
-    if (!inputRef.current) return;
+    if (!inputElement) return;
 
     (setOptions as any)({
       apiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
@@ -36,10 +36,10 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
     importLibrary("places").then((library: any) => {
       const { Autocomplete } = library as google.maps.PlacesLibrary;
       
-      if (!inputRef.current || autocompleteRef.current) return;
+      if (!inputElement || autocompleteRef.current) return;
 
       // Initialize the autocomplete
-      autocompleteRef.current = new Autocomplete(inputRef.current, {
+      autocompleteRef.current = new Autocomplete(inputElement, {
         componentRestrictions: { country: "br" },
         fields: ["formatted_address", "geometry", "place_id"],
       });
@@ -73,22 +73,22 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
         autocompleteRef.current = null;
       }
     };
-  }, []); // Run only once
+  }, [inputElement]); // Run when input element is available
 
   // Sync external value to internal input state
   useEffect(() => {
-    if (!inputRef.current) return;
+    if (!inputElement) return;
 
     // Only sync if the input is NOT in focus
-    if (document.activeElement !== inputRef.current) {
-      if (value !== inputRef.current.value) {
-        inputRef.current.value = value;
+    if (document.activeElement !== inputElement) {
+      if (value !== inputElement.value) {
+        inputElement.value = value;
       }
       if (value) {
         isPlaceSelectedRef.current = true;
       }
     }
-  }, [value]);
+  }, [value, inputElement]);
 
   return (
     <div className={`flex flex-col space-y-2 relative ${className}`}>
@@ -102,7 +102,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
           <MapPin className="w-5 h-5" />
         </div>
         <input
-          ref={inputRef}
+          ref={setInputElement}
           defaultValue={value}
           onChange={(e) => {
             isPlaceSelectedRef.current = false;
