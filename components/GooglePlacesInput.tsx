@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MapPin } from 'lucide-react';
-import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
+import { importLibrary } from "@googlemaps/js-api-loader";
 
 interface GooglePlacesInputProps {
   label?: string;
@@ -32,18 +32,10 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
       return;
     }
 
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
-    console.log('[GooglePlacesInput] Configurando Loader com API Key (prefixo):', apiKey.substring(0, 5) + '...');
-
-    (setOptions as any)({
-      apiKey: apiKey,
-      version: "weekly",
-    });
-
     let listener: google.maps.MapsEventListener | null = null;
 
     console.log('[GooglePlacesInput] Chamando importLibrary("places")...');
-    importLibrary("places").then((library: any) => {
+    (importLibrary as any)("places").then((library: any) => {
       console.log('[GooglePlacesInput] importLibrary resolvido com sucesso');
       const { Autocomplete } = library as google.maps.PlacesLibrary;
       

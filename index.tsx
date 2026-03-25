@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './lib/googleMaps';
 import App from './App';
 
 console.log('[App] Iniciando montagem do React...');
