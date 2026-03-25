@@ -8,9 +8,9 @@ if (!apiKey) {
   console.log("[GoogleMapsConfig] Initializing Google Maps with API Key (prefix):", apiKey.substring(0, 5) + "...");
 }
 
-(setOptions as any)({
-  apiKey: apiKey,
-  version: "weekly",
+setOptions({
+  key: apiKey,
+  v: "weekly",
 });
 
 export {};
