@@ -222,7 +222,8 @@ ADD COLUMN IF NOT EXISTS meeting_point_place_id text;
 -- 2. Atualizar tabela APPOINTMENTS para Destination Charges
 ALTER TABLE public.appointments
 ADD COLUMN IF NOT EXISTS payment_intent_id text, -- ID da transação na Stripe (pi_...)
-ADD COLUMN IF NOT EXISTS payment_status text DEFAULT 'pending';
+ADD COLUMN IF NOT EXISTS payment_status text DEFAULT 'pending',
+ADD COLUMN IF NOT EXISTS is_last_minute boolean DEFAULT false;
 
 -- Adicionar Constraint de status de pagamento
 DO $$

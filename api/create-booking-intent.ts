@@ -45,7 +45,7 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { lessons, studentId, instructorId, category } = req.body;
+  const { lessons, studentId, instructorId, category, ignoreTooClose } = req.body;
 
   if (!lessons || !lessons.length) {
     return res.status(400).json({ error: 'No lessons provided' });
@@ -146,7 +146,7 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ 
           error: 'Um ou mais horários selecionados já passaram.' 
         });
-      } else if (diffMinutes <= 10) {
+      } else if (diffMinutes <= 10 && !ignoreTooClose) {
         return res.status(409).json({ 
           errorCode: 'TOO_CLOSE',
           error: 'Horário muito próximo para agendamento automático.' 
@@ -193,19 +193,28 @@ export default async function handler(req: any, res: any) {
     }
 
     // 4. Create appointments in DB (awaiting_payment)
-    const appointmentsToInsert = lessons.map((lesson: any) => ({
-      instructor_id: instructorId,
-      student_id: studentId,
-      date: lesson.date,
-      start_time: lesson.startTime,
-      end_time: lesson.endTime,
-      category: category, // Store the category
-      status: 'awaiting_payment',
-      price: Math.round(finalPrice / lessons.length), // Distribute discounted price
-      group_id: groupId,
-      expires_at: expiresAt,
-      created_at: new Date().toISOString()
-    }));
+    const appointmentsToInsert = lessons.map((lesson: any) => {
+      // Check if it's last minute (within 10 mins)
+      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
+      const diffMs = lessonDateTime.getTime() - now.getTime();
+      const diffMinutes = diffMs / (1000 * 60);
+      const isLastMinute = diffMinutes <= 10;
+
+      return {
+        instructor_id: instructorId,
+        student_id: studentId,
+        date: lesson.date,
+        start_time: lesson.startTime,
+        end_time: lesson.endTime,
+        category: category, // Store the category
+        status: 'awaiting_payment',
+        price: Math.round(finalPrice / lessons.length), // Distribute discounted price
+        group_id: groupId,
+        expires_at: expiresAt,
+        created_at: new Date().toISOString(),
+        is_last_minute: isLastMinute
+      };
+    });
 
     const { data: appointments, error: dbError } = await supabase
       .from('appointments')
