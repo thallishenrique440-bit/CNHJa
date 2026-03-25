@@ -24,20 +24,35 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   const isPlaceSelectedRef = useRef(false);
 
   useEffect(() => {
-    if (!inputElement) return;
+    console.log('[GooglePlacesInput] useEffect disparado');
+    console.log('[GooglePlacesInput] Valor de inputElement:', inputElement);
+
+    if (!inputElement) {
+      console.log('[GooglePlacesInput] Abortando: inputElement ainda é nulo');
+      return;
+    }
+
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
+    console.log('[GooglePlacesInput] Configurando Loader com API Key (prefixo):', apiKey.substring(0, 5) + '...');
 
     (setOptions as any)({
-      apiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
+      apiKey: apiKey,
       version: "weekly",
     });
 
     let listener: google.maps.MapsEventListener | null = null;
 
+    console.log('[GooglePlacesInput] Chamando importLibrary("places")...');
     importLibrary("places").then((library: any) => {
+      console.log('[GooglePlacesInput] importLibrary resolvido com sucesso');
       const { Autocomplete } = library as google.maps.PlacesLibrary;
       
-      if (!inputElement || autocompleteRef.current) return;
+      if (!inputElement || autocompleteRef.current) {
+        console.log('[GooglePlacesInput] Abortando inicialização do Autocomplete: elemento ausente ou já inicializado');
+        return;
+      }
 
+      console.log('[GooglePlacesInput] Inicializando instância do Autocomplete no DOM');
       // Initialize the autocomplete
       autocompleteRef.current = new Autocomplete(inputElement, {
         componentRestrictions: { country: "br" },
@@ -47,6 +62,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
       // Listener for place selection
       listener = autocompleteRef.current.addListener("place_changed", () => {
         const place = autocompleteRef.current?.getPlace();
+        console.log('[GooglePlacesInput] Evento place_changed disparado:', place?.formatted_address);
 
         if (!place || !place.geometry || !place.geometry.location) return;
 
@@ -60,7 +76,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
         onChange(address);
       });
     }).catch((err: any) => {
-      console.error("Error loading Google Maps API:", err);
+      console.error("[GooglePlacesInput] Erro CRÍTICO no importLibrary:", err);
     });
 
     // Cleanup listener on unmount
