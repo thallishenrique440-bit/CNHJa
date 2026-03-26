@@ -1201,6 +1201,9 @@ export const StudentLessons: React.FC = () => {
                   <div className="text-center space-y-1">
                     <p className="text-sm font-semibold text-gray-800">100% do valor vai para o instrutor</p>
                     <p className="text-[10px] text-gray-400">Descontadas apenas taxas do cartão</p>
+                    <p className="text-[11px] text-blue-600 font-medium bg-blue-50 p-2 rounded-lg border border-blue-100 italic">
+                      "Ao enviar este valor, você confirma que a aula foi realizada com sucesso."
+                    </p>
                   </div>
 
                   <div className="space-y-3 pt-2">

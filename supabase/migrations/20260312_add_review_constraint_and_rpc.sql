@@ -29,7 +29,13 @@ BEGIN
   FROM public.appointments a
   JOIN public.profiles p ON a.instructor_id = p.id
   WHERE a.student_id = p_student_id
-    AND a.status = 'completed'
+    AND (
+      a.status = 'completed' 
+      OR (
+        a.status IN ('confirmed', 'scheduled') 
+        AND a.start_time_utc < (now() - interval '50 minutes')
+      )
+    )
     AND NOT EXISTS (
       SELECT 1 FROM public.reviews r 
       WHERE r.student_id = p_student_id 

@@ -73,8 +73,13 @@ Deno.serve(async (req: Request) => {
       throw new Error('Você não tem permissão para dar caixinha nesta aula.');
     }
 
-    if (apt.status !== 'completed') {
-      throw new Error('A caixinha só pode ser enviada para aulas concluídas.');
+    const isCompleted = apt.status === 'completed';
+    const isAwaitingCompletion = (apt.status === 'confirmed' || apt.status === 'scheduled') && 
+                                 apt.start_time_utc && 
+                                 (new Date(apt.start_time_utc).getTime() < Date.now() - (50 * 60 * 1000));
+
+    if (!isCompleted && !isAwaitingCompletion) {
+      throw new Error('A caixinha só pode ser enviada para aulas concluídas ou aguardando finalização.');
     }
 
     // 4.1 Validação de Prazo (24 horas após o início da aula)
