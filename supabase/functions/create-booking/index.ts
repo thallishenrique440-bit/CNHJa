@@ -241,7 +241,7 @@ Deno.serve(async (req: any) => {
     }
 
     let totalPrice = 0;
-    const purchaseId = crypto.randomUUID();
+    const groupId = crypto.randomUUID();
     // Expira em 30 min para dar tempo de pagar
     const reservationExpiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString(); 
 
@@ -290,7 +290,7 @@ Deno.serve(async (req: any) => {
          price: price, // Preço oficial do banco
          status: 'reserved', 
          expires_at: reservationExpiresAt,
-         purchase_id: purchaseId,
+         group_id: groupId,
          payment_status: 'pending'
        }
     });
@@ -351,19 +351,19 @@ Deno.serve(async (req: any) => {
           },
           
           metadata: {
-            purchase_id: String(purchaseId),
+            group_id: String(groupId),
             student_id: String(user.id),
             instructor_id: String(instructor_id)
           },
           
-        }, { idempotencyKey: purchaseId });
+        }, { idempotencyKey: groupId });
 
         // SUCESSO: Atualizar appointments com o ID do PaymentIntent
         // Isso é crucial para o webhook e funções de gestão
         await supabaseAdmin
             .from('appointments')
             .update({ payment_intent_id: paymentIntent.id })
-            .eq('purchase_id', purchaseId);
+            .eq('group_id', groupId);
 
     } catch (stripeError: any) {
         console.error("❌ Erro ao criar PaymentIntent:", stripeError);
@@ -376,14 +376,14 @@ Deno.serve(async (req: any) => {
                 payment_status: 'failed',
                 cancelled_reason: 'stripe_creation_failed'
             })
-            .eq('purchase_id', purchaseId);
+            .eq('group_id', groupId);
 
         throw new Error(`Erro no processamento do pagamento: ${stripeError.message}`);
     }
 
     return new Response(
       JSON.stringify({ 
-        purchaseId: purchaseId,
+        groupId: groupId,
         clientSecret: paymentIntent.client_secret,
       }),
       { 

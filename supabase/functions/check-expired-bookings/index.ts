@@ -59,7 +59,7 @@ serve(async (req) => {
 
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, status, purchase_id')
+      .select('id, payment_intent_id, status, group_id')
       .in('status', ['pending', 'pending_approval'])
       .lt('expires_at', now)
 
@@ -81,7 +81,7 @@ serve(async (req) => {
 
     // 2. Process each booking
     const results = await Promise.allSettled(expiredBookings.map(async (booking) => {
-      const { id, payment_intent_id, purchase_id } = booking
+      const { id, payment_intent_id, group_id } = booking
 
       if (!payment_intent_id) {
         console.error(`⚠️ Booking ${id} has no payment_intent_id. Skipping Stripe cancel.`)

@@ -29,7 +29,7 @@ interface Lesson {
   dateStr?: string;
   timeStr?: string;
   isReserved?: boolean; // NEW FIELD
-  purchaseId?: string; // NEW FIELD FOR GROUPING
+  groupId?: string; // NEW FIELD FOR GROUPING
 }
 
 interface LunchConfig {
@@ -268,7 +268,7 @@ export const InstructorAgenda: React.FC = () => {
                 status,
                 category,
                 price,
-                purchase_id,
+                group_id,
                 profiles:student_id (
                     full_name,
                     avatar_url,
@@ -332,7 +332,7 @@ export const InstructorAgenda: React.FC = () => {
                         dateStr: apt.date,
                         timeStr: timeKey,
                         isReserved: isReserved,
-                        purchaseId: apt.purchase_id
+                        groupId: apt.group_id
                     };
                 }
             });
@@ -496,13 +496,13 @@ export const InstructorAgenda: React.FC = () => {
     setCancelReason('');
     setGroupLessons([]);
 
-    // If it's a pending lesson and has a purchaseId, fetch the whole group
-    if (lesson.status === 'pending' && lesson.purchaseId) {
+    // If it's a pending lesson and has a groupId, fetch the whole group
+    if (lesson.status === 'pending' && lesson.groupId) {
         try {
             const { data, error } = await supabase
                 .from('appointments')
                 .select('id, date, start_time, status, price')
-                .eq('purchase_id', lesson.purchaseId)
+                .eq('group_id', lesson.groupId)
                 .order('date', { ascending: true })
                 .order('start_time', { ascending: true });
             

@@ -44,7 +44,7 @@ serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, purchase_id')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, group_id')
       .eq('id', appointment_id)
       .single()
 
@@ -62,19 +62,20 @@ serve(async (req) => {
     // --- GROUPING LOGIC ---
     // If this appointment belongs to a purchase group, we should reject ALL appointments in that group.
     let appointmentsToReject = [appointment];
-    if (appointment.purchase_id) {
+    if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, purchase_id')
-        .eq('purchase_id', appointment.purchase_id);
+        .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, group_id')
+        .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
       if (!groupAppointments || groupAppointments.length === 0) throw new Error('Group not found');
 
       // VALIDATION: All must be in a rejectable state
-      const invalidStatus = groupAppointments.filter(a => a.status !== 'pending_approval' && a.status !== 'pending');
+      const allowedStatuses = ['pending_approval', 'pending', 'awaiting_payment'];
+      const invalidStatus = groupAppointments.filter(a => !allowedStatuses.includes(a.status));
       if (invalidStatus.length > 0) {
-        console.warn(`Group ${appointment.purchase_id} has inconsistent statuses for rejection:`, invalidStatus.map(a => `${a.id}:${a.status}`));
+        console.warn(`Group ${appointment.group_id} has inconsistent statuses for rejection:`, invalidStatus.map(a => `${a.id}:${a.status}`));
         throw new Error('Este combo não pode mais ser recusado pois um ou mais horários já foram processados.');
       }
 
@@ -96,13 +97,15 @@ serve(async (req) => {
       )
     }
 
-    if (appointment.status !== 'pending_approval' && appointment.status !== 'pending') {
+    const allowedStatuses = ['pending_approval', 'pending', 'awaiting_payment'];
+    if (!allowedStatuses.includes(appointment.status)) {
       throw new Error(`Invalid status change: Cannot reject appointment with status '${appointment.status}'`)
     }
 
     console.log(JSON.stringify({
       event: "reject_group_start",
-      purchase_id: appointment.purchase_id,
+      group_id: appointment.group_id,
+      status: appointment.status,
       group_size: appointmentsToReject.length,
       payment_intent_id: appointment.payment_intent_id
     }));
@@ -113,7 +116,7 @@ serve(async (req) => {
         await stripe.paymentIntents.cancel(
           appointment.payment_intent_id,
           {
-            idempotencyKey: `cancel_group_${appointment.purchase_id || appointment.id}`,
+            idempotencyKey: `cancel_group_${appointment.group_id || appointment.id}`,
           }
         )
       } catch (stripeError: any) {
@@ -151,7 +154,7 @@ serve(async (req) => {
         updated_at: new Date().toISOString()
       })
       .in('id', idsToReject)
-      .in('status', ['pending_approval', 'pending']) // Optimistic Lock
+      .in('status', ['pending_approval', 'pending', 'awaiting_payment']) // Optimistic Lock
       .select()
 
     if (updateError || !updatedAppointments || updatedAppointments.length !== idsToReject.length) {
@@ -166,7 +169,7 @@ serve(async (req) => {
       if (allCancelled) {
         console.log(JSON.stringify({
           event: "reject_group_sync_success",
-          purchase_id: appointment.purchase_id,
+          group_id: appointment.group_id,
           message: "Group already cancelled"
         }));
         return new Response(
@@ -177,7 +180,7 @@ serve(async (req) => {
 
       console.error(JSON.stringify({
         event: "CRITICAL_REJECT_SYNC_ERROR",
-        purchase_id: appointment.purchase_id,
+        group_id: appointment.group_id,
         payment_intent_id: appointment.payment_intent_id,
         error: updateError?.message || "Partial update or status mismatch",
         expected_ids: idsToReject,
@@ -189,7 +192,7 @@ serve(async (req) => {
 
     console.log(JSON.stringify({
       event: "reject_group_success",
-      purchase_id: appointment.purchase_id,
+      group_id: appointment.group_id,
       count: updatedAppointments.length
     }));
 

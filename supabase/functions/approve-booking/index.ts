@@ -44,10 +44,10 @@ serve(async (req) => {
     }
 
     // 3. Check (DB): Validate Ownership & Status
-    // We fetch the appointment and its purchase_id to handle grouping
+    // We fetch the appointment and its group_id to handle grouping
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, purchase_id')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, group_id')
       .eq('id', appointment_id)
       .single()
 
@@ -65,19 +65,20 @@ serve(async (req) => {
     // --- GROUPING LOGIC ---
     // If this appointment belongs to a purchase group, we should approve ALL appointments in that group.
     let appointmentsToApprove = [appointment];
-    if (appointment.purchase_id) {
+    if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, purchase_id')
-        .eq('purchase_id', appointment.purchase_id);
+        .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, group_id')
+        .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
       if (!groupAppointments || groupAppointments.length === 0) throw new Error('Group not found');
 
-      // VALIDATION: All must be pending_approval
-      const nonPending = groupAppointments.filter(a => a.status !== 'pending_approval');
+      // VALIDATION: All must be in an approvable state
+      const allowedStatuses = ['pending_approval', 'pending', 'awaiting_payment'];
+      const nonPending = groupAppointments.filter(a => !allowedStatuses.includes(a.status));
       if (nonPending.length > 0) {
-        console.warn(`Group ${appointment.purchase_id} has inconsistent statuses:`, nonPending.map(a => `${a.id}:${a.status}`));
+        console.warn(`Group ${appointment.group_id} has inconsistent statuses:`, nonPending.map(a => `${a.id}:${a.status}`));
         throw new Error('Este combo não pode mais ser aceito pois um ou mais horários foram alterados ou já processados.');
       }
 
@@ -99,11 +100,18 @@ serve(async (req) => {
       )
     }
 
-    if (appointment.status !== 'pending_approval') {
+    const allowedStatuses = ['pending_approval', 'pending', 'awaiting_payment'];
+    if (!allowedStatuses.includes(appointment.status)) {
       throw new Error(`Invalid status change: Cannot approve appointment with status '${appointment.status}'`)
     }
 
     if (!appointment.payment_intent_id) {
+      console.error(JSON.stringify({
+        event: "approve_error_missing_pi",
+        appointment_id: appointment.id,
+        status: appointment.status,
+        group_id: appointment.group_id
+      }));
       throw new Error('Critical: Appointment has no PaymentIntent ID')
     }
 
@@ -120,7 +128,7 @@ serve(async (req) => {
       if (nowUTC >= lessonStartUTC) {
         console.log(JSON.stringify({
           event: "auto_expire_group",
-          purchase_id: appointment.purchase_id,
+          group_id: appointment.group_id,
           appointment_id: apt.id,
           reason: "start_time_passed"
         }));
@@ -128,7 +136,7 @@ serve(async (req) => {
         // 1. Cancel Stripe PaymentIntent
         try {
           await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
-            idempotencyKey: `auto_expire_group_${appointment.purchase_id || appointment.id}`
+            idempotencyKey: `auto_expire_group_${appointment.group_id || appointment.id}`
           })
         } catch (stripeError: any) {
           if (stripeError.code !== 'payment_intent_unexpected_state') {
@@ -157,7 +165,8 @@ serve(async (req) => {
 
     console.log(JSON.stringify({
       event: "approve_group_start",
-      purchase_id: appointment.purchase_id,
+      group_id: appointment.group_id,
+      status: appointment.status,
       group_size: appointmentsToApprove.length,
       payment_intent_id: appointment.payment_intent_id
     }));
@@ -168,7 +177,7 @@ serve(async (req) => {
       capturedIntent = await stripe.paymentIntents.capture(
         appointment.payment_intent_id,
         {
-          idempotencyKey: `capture_group_${appointment.purchase_id || appointment.id}`,
+          idempotencyKey: `capture_group_${appointment.group_id || appointment.id}`,
         }
       )
     } catch (stripeError: any) {
@@ -217,7 +226,7 @@ serve(async (req) => {
         updated_at: new Date().toISOString()
       })
       .in('id', idsToConfirm)
-      .eq('status', 'pending_approval') // Optimistic Lock
+      .in('status', ['pending_approval', 'pending', 'awaiting_payment']) // Optimistic Lock
       .select()
 
     if (updateError || !updatedAppointments || updatedAppointments.length !== idsToConfirm.length) {
@@ -232,7 +241,7 @@ serve(async (req) => {
       if (allConfirmed) {
         console.log(JSON.stringify({
           event: "approve_group_sync_success",
-          purchase_id: appointment.purchase_id,
+          group_id: appointment.group_id,
           message: "Group already confirmed (likely race condition with webhook)"
         }));
         return new Response(
@@ -244,7 +253,7 @@ serve(async (req) => {
       // If we are here, some appointments are NOT confirmed but payment WAS captured.
       console.error(JSON.stringify({
         event: "CRITICAL_PAYMENT_SYNC_ERROR",
-        purchase_id: appointment.purchase_id,
+        group_id: appointment.group_id,
         payment_intent_id: appointment.payment_intent_id,
         error: updateError?.message || "Partial update or status mismatch",
         expected_ids: idsToConfirm,
@@ -256,7 +265,7 @@ serve(async (req) => {
 
     console.log(JSON.stringify({
       event: "approve_group_success",
-      purchase_id: appointment.purchase_id,
+      group_id: appointment.group_id,
       count: updatedAppointments.length
     }));
 

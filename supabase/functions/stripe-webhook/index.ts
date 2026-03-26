@@ -96,7 +96,7 @@ Deno.serve(async (req: Request) => {
       // ======================================================================
       case "payment_intent.amount_capturable_updated": {
         const paymentIntent = event.data.object;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
         const paymentIntentId = paymentIntent.id;
         const instructorId = paymentIntent.metadata?.instructor_id;
         const studentId = paymentIntent.metadata?.student_id;
@@ -105,14 +105,14 @@ Deno.serve(async (req: Request) => {
         console.log(`🔍 Processing amount_capturable_updated for PI: ${paymentIntentId}`);
         console.log(`   Metadata:`, JSON.stringify(paymentIntent.metadata));
 
-        if (purchaseId) {
-           console.log(`🔒 Amount Capturable Updated (Auth) for Purchase ID: ${purchaseId}`);
+        if (groupId) {
+           console.log(`🔒 Amount Capturable Updated (Auth) for Group ID: ${groupId}`);
            
            // Fetch appointments to determine the start time
            const { data: apts } = await supabaseAdmin
              .from("appointments")
              .select("date, start_time, start_time_utc")
-             .eq("purchase_id", purchaseId);
+             .eq("group_id", groupId);
 
            let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
            if (apts && apts.length > 0) {
@@ -136,7 +136,7 @@ Deno.serve(async (req: Request) => {
                payment_intent_id: paymentIntentId,
                expires_at: expiresAt
              })
-             .eq("purchase_id", purchaseId)
+             .eq("group_id", groupId)
              .select(); // Select to verify update
 
            if (aptError) {
@@ -145,7 +145,7 @@ Deno.serve(async (req: Request) => {
            }
 
            if (!updatedData || updatedData.length === 0) {
-              console.warn(`⚠️ No appointments found/updated for purchase_id: ${purchaseId}`);
+              console.warn(`⚠️ No appointments found/updated for group_id: ${groupId}`);
            } else {
               console.log(`✅ Updated ${updatedData.length} appointments to pending_approval.`);
            }
@@ -167,7 +167,7 @@ Deno.serve(async (req: Request) => {
                  amount: amountTotal,
                  status: "pending", // Pending capture
                  stripe_payment_intent_id: paymentIntentId,
-                 description: `Reserva ${purchaseId} (Aguardando Aceite)`,
+                 description: `Reserva ${groupId} (Aguardando Aceite)`,
                  metadata: paymentIntent.metadata
                });
 
@@ -184,12 +184,12 @@ Deno.serve(async (req: Request) => {
                title: "Nova Solicitação de Aula",
                message: "Você tem uma nova solicitação de agendamento. Aceite em até 20 minutos.",
                type: "booking_request",
-               metadata: { purchase_id: purchaseId }
+               metadata: { group_id: groupId }
              });
              console.log(`🔔 Notification sent to instructor ${instructorId}`);
            }
         } else {
-            console.warn(`⚠️ Missing purchase_id in metadata. Trying to find by payment_intent_id: ${paymentIntentId}`);
+            console.warn(`⚠️ Missing group_id in metadata. Trying to find by payment_intent_id: ${paymentIntentId}`);
             
             // Fetch appointments to determine the start time
             const { data: apts } = await supabaseAdmin
@@ -372,10 +372,10 @@ Deno.serve(async (req: Request) => {
           // ======================================================================
           // FLUXO DE AULA (LESSON PAYMENT) - MANTIDO INTACTO
           // ======================================================================
-          const purchaseId = metadata.purchase_id;
+          const groupId = metadata.group_id || metadata.purchase_id;
 
-          if (purchaseId) {
-            console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
+          if (groupId) {
+            console.log(`✅ Payment Captured for Group ID: ${groupId}`);
 
             // 1. Update Appointments -> confirmed / captured
             await supabaseAdmin
@@ -384,7 +384,7 @@ Deno.serve(async (req: Request) => {
                 status: "confirmed",
                 payment_status: "captured"
               })
-              .eq("purchase_id", purchaseId)
+              .eq("group_id", groupId)
               .neq("status", "completed")
               .neq("status", "confirmed");
 
@@ -408,9 +408,9 @@ Deno.serve(async (req: Request) => {
                await supabaseAdmin.from("notifications").insert({
                 user_id: studentId,
                 title: "Aula Confirmada!",
-                message: "O instrutor aceitou sua solicitação. Bom treino!",
+                message: "O instructor aceitou sua solicitação. Bom treino!",
                 type: "booking_accepted",
-                metadata: { purchase_id: purchaseId }
+                metadata: { group_id: groupId }
               });
             }
           }
@@ -475,17 +475,17 @@ Deno.serve(async (req: Request) => {
       // ======================================================================
       case "payment_intent.canceled": {
         const paymentIntent = event.data.object;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
         const paymentIntentId = paymentIntent.id;
 
-        if (purchaseId) {
-          console.log(`🚫 Payment Canceled (Released) for Purchase ID: ${purchaseId}`);
+        if (groupId) {
+          console.log(`🚫 Payment Canceled (Released) for Group ID: ${groupId}`);
 
           // 1. Check current status to decide next state
           const { data: appointment } = await supabaseAdmin
              .from("appointments")
              .select("status")
-             .eq("purchase_id", purchaseId)
+             .eq("group_id", groupId)
              .maybeSingle();
 
           if (appointment) {
@@ -500,7 +500,7 @@ Deno.serve(async (req: Request) => {
              await supabaseAdmin
                 .from("appointments")
                 .update(updatePayload)
-                .eq("purchase_id", purchaseId);
+                .eq("group_id", groupId);
           }
 
           // 2. Update Transaction -> failed (Voided)
@@ -520,7 +520,7 @@ Deno.serve(async (req: Request) => {
               title: "Solicitação Cancelada",
               message: "O valor reservado foi liberado no seu cartão.",
               type: "payment_released",
-              metadata: { purchase_id: purchaseId }
+              metadata: { group_id: groupId }
             });
           }
         }
@@ -532,11 +532,11 @@ Deno.serve(async (req: Request) => {
       // ======================================================================
       case "payment_intent.payment_failed": {
         const paymentIntent = event.data.object;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
         const paymentIntentId = paymentIntent.id;
 
-        if (purchaseId) {
-          console.log(`❌ Payment Failed for Purchase ID: ${purchaseId}`);
+        if (groupId) {
+          console.log(`❌ Payment Failed for Group ID: ${groupId}`);
           
           await supabaseAdmin
             .from("appointments")
@@ -544,7 +544,7 @@ Deno.serve(async (req: Request) => {
                 status: "failed", 
                 payment_status: "failed" 
             })
-            .eq("purchase_id", purchaseId);
+            .eq("group_id", groupId);
 
           await supabaseAdmin
             .from("transactions")

@@ -20,7 +20,7 @@ serve(async (req) => {
     // These are the ones that might be stuck if the webhook failed or if status is desynced.
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, purchase_id, status')
+      .select('id, payment_intent_id, group_id, status')
       .in('status', ['reserved', 'pending_approval'])
       .not('payment_intent_id', 'is', null)
 
@@ -37,7 +37,7 @@ serve(async (req) => {
     }
 
     const results = await Promise.allSettled(stuckAppointments.map(async (apt) => {
-        const { id, payment_intent_id, purchase_id, status } = apt;
+        const { id, payment_intent_id, group_id, status } = apt;
 
         // Check Stripe Status
         const pi = await stripe.paymentIntents.retrieve(payment_intent_id);
@@ -75,7 +75,7 @@ serve(async (req) => {
                      amount: pi.amount,
                      status: "pending",
                      stripe_payment_intent_id: payment_intent_id,
-                     description: `Reserva ${purchase_id} (Recuperada)`,
+                     description: `Reserva ${group_id} (Recuperada)`,
                      metadata: pi.metadata
                  });
             }
@@ -87,7 +87,7 @@ serve(async (req) => {
                     .select("id")
                     .eq("user_id", pi.metadata.instructor_id)
                     .eq("type", "booking_request")
-                    .contains("metadata", { purchase_id: purchase_id })
+                    .contains("metadata", { group_id: group_id })
                     .maybeSingle();
 
                 if (!existingNotif) {
@@ -96,7 +96,7 @@ serve(async (req) => {
                         title: "Nova Solicitação de Aula (Sincronizada)",
                         message: "Uma solicitação pendente foi sincronizada. Aceite em até 20 minutos.",
                         type: "booking_request",
-                        metadata: { purchase_id: purchase_id }
+                        metadata: { group_id: group_id }
                     });
                 }
             }

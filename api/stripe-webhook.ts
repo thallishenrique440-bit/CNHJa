@@ -71,8 +71,7 @@ export default async function handler(req: any, res: any) {
 
       case 'payment_intent.succeeded': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
-        const groupId = paymentIntent.metadata?.group_id;
+        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
 
         if (groupId) {
           console.log(`✅ Payment Captured for Group ID: ${groupId}`);
@@ -88,39 +87,22 @@ export default async function handler(req: any, res: any) {
             .neq('status', 'confirmed');
 
           if (error) throw error;
-
-        } else if (purchaseId) {
-          console.log(`✅ Payment Captured for Purchase ID: ${purchaseId}`);
-
-          // Atualizar status para confirmed / captured
-          // Evitar sobrescrever status finalizados
-          const { error } = await supabaseAdmin
-            .from('appointments')
-            .update({
-              status: 'confirmed',
-              payment_status: 'captured',
-            })
-            .eq('purchase_id', purchaseId)
-            .neq('status', 'completed')
-            .neq('status', 'confirmed');
-
-          if (error) throw error;
         }
         break;
       }
 
       case 'payment_intent.canceled': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
 
-        if (purchaseId) {
-          console.log(`🚫 Payment Canceled for Purchase ID: ${purchaseId}`);
+        if (groupId) {
+          console.log(`🚫 Payment Canceled for Group ID: ${groupId}`);
 
           // Atualizar status para rejected / released se ainda estiver pendente
           const { data: appointment } = await supabaseAdmin
             .from('appointments')
             .select('status')
-            .eq('purchase_id', purchaseId)
+            .eq('group_id', groupId)
             .maybeSingle();
 
           if (appointment && appointment.status === 'pending_approval') {
@@ -130,7 +112,7 @@ export default async function handler(req: any, res: any) {
                 status: 'rejected',
                 payment_status: 'released',
               })
-              .eq('purchase_id', purchaseId);
+              .eq('group_id', groupId);
           }
         }
         break;
@@ -138,10 +120,10 @@ export default async function handler(req: any, res: any) {
 
       case 'payment_intent.payment_failed': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const purchaseId = paymentIntent.metadata?.purchase_id;
+        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
 
-        if (purchaseId) {
-          console.log(`❌ Payment Failed for Purchase ID: ${purchaseId}`);
+        if (groupId) {
+          console.log(`❌ Payment Failed for Group ID: ${groupId}`);
 
           await supabaseAdmin
             .from('appointments')
@@ -150,7 +132,7 @@ export default async function handler(req: any, res: any) {
               payment_status: 'failed',
               cancelled_reason: 'payment_failed'
             })
-            .eq('purchase_id', purchaseId);
+            .eq('group_id', groupId);
         }
         break;
       }
