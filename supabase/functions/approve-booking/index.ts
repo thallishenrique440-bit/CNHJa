@@ -117,12 +117,19 @@ serve(async (req) => {
 
     // Check if ANY lesson in the group has already started
     for (const apt of appointmentsToApprove) {
-      if (!apt.start_time_utc) {
-        console.error(`CRITICAL: Appointment ${apt.id} missing start_time_utc`);
-        throw new Error('Erro de dados: Horário UTC não encontrado para uma das aulas.');
+      let lessonStartUTC;
+      
+      if (apt.start_time_utc) {
+        lessonStartUTC = new Date(apt.start_time_utc);
+      } else {
+        // Fallback: Calculate UTC from date and start_time (Brazil UTC-3)
+        console.warn(`⚠️ Appointment ${apt.id} missing start_time_utc. Calculating fallback.`);
+        const [year, month, day] = apt.date.split('-').map(Number);
+        const [hour, minute] = apt.start_time.split(':').map(Number);
+        // Add 3 hours to convert from Brazil (UTC-3) to UTC
+        lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hour + 3, minute));
       }
 
-      const lessonStartUTC = new Date(apt.start_time_utc);
       const nowUTC = new Date()
 
       if (nowUTC >= lessonStartUTC) {
