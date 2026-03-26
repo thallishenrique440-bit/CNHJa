@@ -22,8 +22,9 @@ interface Appointment {
   id: string;
   date: string;
   start_time: string;
+  start_time_utc?: string;
   end_time: string;
-  status: 'pending' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired';
+  status: 'pending' | 'pending_approval' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired' | 'reserved';
   price: number;
   instructors: {
     profiles: {
@@ -56,7 +57,7 @@ interface FinanceSummary {
 }
 
 export const StudentFinance: React.FC = () => {
-  const { session } = useAuth();
+  const { session, serverTimeOffset } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
@@ -112,7 +113,7 @@ export const StudentFinance: React.FC = () => {
       setError(null);
       try {
         const userId = session.user.id;
-        const now = new Date();
+        const now = new Date(Date.now() + serverTimeOffset);
 
         // 1. Fetch Transactions
         const { data: transData, error: transError } = await supabase
@@ -137,13 +138,14 @@ export const StudentFinance: React.FC = () => {
 
         if (transError) throw transError;
 
-        // 2. Fetch Appointments (Confirmed and Completed)
+        // 2. Fetch Appointments (Active and Completed)
         const { data: apptData, error: apptError } = await supabase
           .from('appointments')
           .select(`
             id,
             date,
             start_time,
+            start_time_utc,
             end_time,
             status,
             price,
@@ -152,7 +154,7 @@ export const StudentFinance: React.FC = () => {
             )
           `)
           .eq('student_id', userId)
-          .in('status', ['confirmed', 'completed'])
+          .in('status', ['confirmed', 'completed', 'pending', 'pending_approval', 'scheduled', 'reserved'])
           .order('date', { ascending: false });
 
         if (apptError) throw apptError;
@@ -184,13 +186,19 @@ export const StudentFinance: React.FC = () => {
         typedAppts.forEach(a => {
           if (a.status === 'completed') {
             done++;
-          } else if (a.status === 'confirmed') {
-            // Check if it's future
-            const [hours, minutes] = a.start_time.split(':').map(Number);
-            const apptStartDate = new Date(a.date);
-            apptStartDate.setHours(hours, minutes, 0, 0);
+          } else {
+            // Check if it's future using UTC (fallback to local if null)
+            let isFuture = false;
+            if (a.start_time_utc) {
+              isFuture = new Date(a.start_time_utc) > now;
+            } else {
+              const [hours, minutes] = a.start_time.split(':').map(Number);
+              const [y, m, d] = a.date.split('-').map(Number);
+              const apptStartDate = new Date(y, m - 1, d, hours, minutes);
+              isFuture = apptStartDate > now;
+            }
             
-            if (apptStartDate > now) {
+            if (isFuture) {
               scheduled++;
             }
           }
@@ -217,15 +225,22 @@ export const StudentFinance: React.FC = () => {
           });
         });
 
-        // Add Confirmed Appointments (not yet paid)
+        // Add Active Appointments (not yet paid or confirmed)
         const paidApptIds = new Set(typedTrans.filter(t => t.type === 'lesson_payment').map(t => t.appointment_id));
         
         typedAppts.forEach(a => {
-          if (a.status === 'confirmed' && !paidApptIds.has(a.id)) {
-            const [hours, minutes] = a.end_time.split(':').map(Number);
-            const apptEndDate = new Date(a.date);
-            apptEndDate.setHours(hours, minutes, 0, 0);
-            const isPast = apptEndDate < now;
+          if (a.status !== 'completed' && !paidApptIds.has(a.id)) {
+            let isPast = false;
+            if (a.start_time_utc) {
+              // Use start_time_utc + 50min for end time comparison
+              const apptEndDate = new Date(new Date(a.start_time_utc).getTime() + 50 * 60000);
+              isPast = apptEndDate < now;
+            } else {
+              const [hours, minutes] = (a.end_time || a.start_time).split(':').map(Number);
+              const [y, m, d] = a.date.split('-').map(Number);
+              const apptEndDate = new Date(y, m - 1, d, hours, minutes);
+              isPast = apptEndDate < now;
+            }
 
             const logicalDate = `${a.date}T${a.start_time}`;
 

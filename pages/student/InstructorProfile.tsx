@@ -6,6 +6,7 @@ import { RatingBadge } from '../../components/RatingBadge';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { getGoogleMapsUrl } from '../../src/utils/maps';
 
 // Define Interface for the State matches DB structure
 interface DiscountRule {
@@ -137,27 +138,6 @@ export const StudentInstructorProfile: React.FC = () => {
 
   const formatCurrency = (value: number) => {
     return (value / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  };
-
-  const getGoogleMapsUrl = () => {
-    if (!instructor) return '';
-    
-    const baseUrl = "https://www.google.com/maps/search/?api=1";
-    
-    // Priority 1: Lat/Lng + Place ID
-    if (instructor.meetingPointLat !== null && instructor.meetingPointLng !== null) {
-      const query = `${instructor.meetingPointLat},${instructor.meetingPointLng}`;
-      const placeId = instructor.meetingPointPlaceId ? `&query_place_id=${instructor.meetingPointPlaceId}` : '';
-      return `${baseUrl}&query=${query}${placeId}`;
-    }
-    
-    // Priority 2: Place ID (with text fallback for query)
-    if (instructor.meetingPointPlaceId) {
-      return `${baseUrl}&query=${encodeURIComponent(instructor.defaultLocation)}&query_place_id=${instructor.meetingPointPlaceId}`;
-    }
-    
-    // Fallback: Text
-    return `${baseUrl}&query=${encodeURIComponent(instructor.defaultLocation)}`;
   };
 
   // Helper to create consistent Date keys (YYYY-MM-DD)
@@ -1224,7 +1204,12 @@ export const StudentInstructorProfile: React.FC = () => {
                       <span className="text-sm text-gray-600 leading-snug">
                         Ponto de encontro: {' '}
                         <a 
-                          href={getGoogleMapsUrl()} 
+                          href={instructor ? getGoogleMapsUrl({
+                            address: instructor.defaultLocation,
+                            lat: instructor.meetingPointLat,
+                            lng: instructor.meetingPointLng,
+                            placeId: instructor.meetingPointPlaceId
+                          }) : '#'} 
                           target="_blank" 
                           rel="noopener noreferrer"
                           className="text-blue-600 hover:text-blue-700 underline decoration-blue-200 underline-offset-2 transition-colors"

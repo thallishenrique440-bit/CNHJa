@@ -9,6 +9,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getDerivedStatus, LessonDisplayStatus } from '../../lib/lessonStatus';
+import { getGoogleMapsUrl } from '../../src/utils/maps';
 
 // --- Types ---
 type LessonStatus = LessonDisplayStatus;
@@ -28,6 +29,9 @@ interface Lesson {
   dbStatus: string;
   price: number;
   location: string;
+  lat?: number | null;
+  lng?: number | null;
+  placeId?: string | null;
   lessonCategory: 'A' | 'B';
   isReviewed?: boolean; 
 }
@@ -44,6 +48,9 @@ interface DBAppointment {
   instructors: {
     whatsapp: string;
     meeting_point: string;
+    meeting_point_lat: number | null;
+    meeting_point_lng: number | null;
+    meeting_point_place_id: string | null;
     profiles: {
       full_name: string;
       avatar_url: string;
@@ -310,6 +317,9 @@ export const StudentLessons: React.FC = () => {
             instructors (
               whatsapp,
               meeting_point,
+              meeting_point_lat,
+              meeting_point_lng,
+              meeting_point_place_id,
               profiles (
                 full_name,
                 avatar_url,
@@ -376,6 +386,9 @@ export const StudentLessons: React.FC = () => {
                 instructorWhatsapp: instructorData?.whatsapp,
                 vehicleModel: vehicleModel,
                 location: instructorData?.meeting_point || 'Local a combinar',
+                lat: instructorData?.meeting_point_lat,
+                lng: instructorData?.meeting_point_lng,
+                placeId: instructorData?.meeting_point_place_id,
                 date: lessonDate,
                 dateStr: apt.date,
                 time: timeStr,
@@ -735,6 +748,9 @@ export const StudentLessons: React.FC = () => {
         status: daily[0].status,
         dbStatus: daily[0].dbStatus,
         location: daily[0].location,
+        lat: daily[0].lat,
+        lng: daily[0].lng,
+        placeId: daily[0].placeId,
         lessonCategory: daily[0].lessonCategory,
         isReviewed: daily[0].isReviewed
     };
@@ -773,6 +789,9 @@ export const StudentLessons: React.FC = () => {
                 status: next.status,
                 dbStatus: next.dbStatus,
                 location: next.location,
+                lat: next.lat,
+                lng: next.lng,
+                placeId: next.placeId,
                 lessonCategory: next.lessonCategory,
                 isReviewed: next.isReviewed
             };
@@ -941,13 +960,25 @@ export const StudentLessons: React.FC = () => {
 
                 {/* Bottom: Location & Actions */}
                 <div className="flex items-center justify-between pt-3 border-t border-gray-50">
-                    <div className="flex items-center text-xs text-gray-500 truncate pr-2">
-                      <svg className="w-4 h-4 mr-1.5 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <a 
+                      href={getGoogleMapsUrl({
+                        address: group.location,
+                        lat: group.lat,
+                        lng: group.lng,
+                        placeId: group.placeId
+                      })}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center text-xs text-blue-600 hover:text-blue-700 transition-colors truncate pr-2 group/location"
+                    >
+                      <svg className="w-4 h-4 mr-1.5 text-blue-400 flex-shrink-0 group-hover/location:text-blue-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                       </svg>
-                      <span className="truncate">{group.location}</span>
-                    </div>
+                      <span className="truncate underline decoration-blue-200 underline-offset-2 group-hover/location:decoration-blue-400 transition-colors">
+                        {group.location}
+                      </span>
+                    </a>
 
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0">
