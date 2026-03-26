@@ -7,11 +7,14 @@ import {
   Car, 
   MapPin, 
   Camera, 
-  Share2,
+  Eye,
   Check,
   ChevronRight,
   LogOut,
-  Navigation
+  Navigation,
+  Pencil,
+  Copy,
+  Instagram
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
@@ -87,6 +90,18 @@ export const InstructorProfile: React.FC = () => {
   const [meetingPointLat, setMeetingPointLat] = useState<number | null>(null);
   const [meetingPointLng, setMeetingPointLng] = useState<number | null>(null);
   const [meetingPointPlaceId, setMeetingPointPlaceId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const profileUrl = `${window.location.origin}/#/i/${publicId}`;
+  const whatsappMsg = encodeURIComponent(`Agenda sempre cheia? Compartilhe seu perfil no WhatsApp e Instagram para atrair mais alunos. Veja meus horários aqui: ${profileUrl}`);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(profileUrl).then(() => {
+      setCopied(true);
+      addToast("Link copiado com sucesso!", 'success');
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   // --- FETCH DATA ---
   useEffect(() => {
@@ -214,16 +229,6 @@ export const InstructorProfile: React.FC = () => {
 
     loadData();
   }, [session]);
-
-  const handleCopyProfileLink = () => {
-    if (!publicId) return;
-    const link = `${window.location.origin}/#/i/${publicId}`;
-    navigator.clipboard.writeText(link).then(() => {
-      addToast("Link do seu perfil copiado! Você pode compartilhar com seus alunos.", 'success');
-    }).catch(() => {
-      addToast("Erro ao copiar link.", 'error');
-    });
-  };
 
   const handleImageClick = () => {
     fileInputRef.current?.click();
@@ -411,6 +416,13 @@ export const InstructorProfile: React.FC = () => {
     navigate('/welcome');
   };
 
+  const handleViewAsStudent = () => {
+    if (!publicId) return;
+    navigate(`/student/instructor/${session?.user?.id}?preview=true`, { 
+      state: { fromInstructor: true } 
+    });
+  };
+
   const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
     <button 
       onClick={onChange}
@@ -434,7 +446,17 @@ export const InstructorProfile: React.FC = () => {
     <div className="min-h-screen bg-gray-50 flex flex-col pb-24 sm:max-w-md sm:mx-auto relative">
       
       {/* Header Minimalista */}
-      <div className="px-6 pt-8 pb-6 bg-white border-b border-gray-100">
+      <div className="px-6 pt-8 pb-6 bg-white border-b border-gray-100 relative">
+        <div className="absolute top-6 right-6">
+          <button 
+            onClick={handleViewAsStudent}
+            className="flex items-center space-x-1 text-blue-600 hover:text-blue-700 text-[11px] font-bold transition-colors"
+          >
+            <Eye className="w-3 h-3" />
+            <span className="underline decoration-blue-200 underline-offset-2">Ver como aluno</span>
+          </button>
+        </div>
+
         <div className="flex flex-col items-center space-y-4">
           <div className="relative group cursor-pointer" onClick={handleImageClick}>
             <div className="w-28 h-28 rounded-full border-4 border-white shadow-lg overflow-hidden bg-gray-100 flex items-center justify-center ring-1 ring-blue-100">
@@ -449,46 +471,65 @@ export const InstructorProfile: React.FC = () => {
             </div>
           </div>
           
-          <div className="w-full text-center px-4">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Seu nome completo"
-              className="w-full text-2xl font-bold text-gray-900 text-center bg-transparent border-none focus:ring-0 focus:outline-none placeholder-gray-300 cursor-text"
-            />
+          <div className="w-full text-center px-4 group relative">
+            <div className="flex items-center justify-center space-x-2">
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Seu nome completo"
+                className="w-full text-2xl font-bold text-gray-900 text-center bg-transparent border-none focus:ring-0 focus:outline-none placeholder-gray-300 cursor-text hover:bg-gray-50 rounded-lg transition-colors p-1"
+              />
+              <div className="transition-opacity absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none">
+                <Pencil className="w-4 h-4" />
+              </div>
+            </div>
             {publicId && (
               <div className="mt-1 flex items-center justify-center space-x-2">
                 <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">ID: {publicId}</span>
               </div>
             )}
           </div>
+
+          {/* Quick Sharing Actions */}
+          <div className="w-full pt-2">
+            <p className="text-[11px] text-gray-500 text-center mb-3 px-4 leading-relaxed">
+              Agenda sempre cheia? <br />
+              Compartilhe seu perfil no WhatsApp e Instagram para atrair mais alunos.
+            </p>
+            <div className="flex items-center justify-center space-x-3">
+              <a 
+                href={`https://wa.me/?text=${whatsappMsg}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-full bg-emerald-500/10 text-[11px] font-bold text-emerald-700 hover:bg-emerald-500/20 transition-all"
+              >
+                Enviar no WhatsApp
+              </a>
+              <button 
+                onClick={() => {
+                  handleCopy();
+                  addToast("Dica: Cole o link na Bio do seu Instagram!", 'info');
+                }}
+                className="px-3 py-1.5 rounded-full bg-fuchsia-500/10 text-[11px] font-bold text-fuchsia-700 hover:bg-fuchsia-500/20 transition-all"
+              >
+                Usar no Instagram
+              </button>
+              <button 
+                onClick={handleCopy}
+                className="px-3 py-1.5 rounded-full bg-slate-500/10 text-[11px] font-bold text-slate-700 hover:bg-slate-500/20 transition-all flex items-center space-x-1"
+              >
+                {copied ? <Check className="w-3 h-3" /> : null}
+                <span>Copiar link</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="flex-1 px-4 py-6 space-y-6 overflow-y-auto">
         
-        {/* Card de Divulgação */}
-        <section className="bg-blue-50 border border-blue-100 rounded-2xl p-5 shadow-sm">
-          <div className="flex items-start space-x-4">
-            <div className="bg-blue-600 p-2.5 rounded-xl shadow-blue-200 shadow-lg">
-              <Share2 className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-base font-bold text-blue-900">Divulgue seu perfil</h3>
-              <p className="text-sm text-blue-700 mt-1 leading-snug">
-                Compartilhe seu perfil no WhatsApp e redes sociais para atrair mais alunos
-              </p>
-              <button 
-                onClick={handleCopyProfileLink}
-                className="mt-4 w-full bg-white text-blue-600 font-bold py-2.5 rounded-xl shadow-sm border border-blue-200 hover:bg-blue-50 transition-all flex items-center justify-center space-x-2"
-              >
-                <Share2 className="w-4 h-4" />
-                <span>Compartilhar meu perfil</span>
-              </button>
-            </div>
-          </div>
-        </section>
+        {/* Card de Divulgação Refatorado removido e integrado no header */}
 
         {/* Seção: Contato */}
         <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">

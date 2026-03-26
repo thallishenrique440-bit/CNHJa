@@ -19,18 +19,22 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   placeholder = "Digite o ponto de encontro",
   className = ""
 }) => {
-  const [inputElement, setInputElement] = useState<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const isPlaceSelectedRef = useRef(false);
 
-  useEffect(() => {
-    console.log('[GooglePlacesInput] useEffect disparado');
-    console.log('[GooglePlacesInput] Valor de inputElement:', inputElement);
+  const setInputRef = (el: HTMLInputElement | null) => {
+    inputRef.current = el;
+    setIsMounted(!!el);
+  };
 
-    if (!inputElement) {
-      console.log('[GooglePlacesInput] Abortando: inputElement ainda é nulo');
+  useEffect(() => {
+    if (!isMounted || !inputRef.current) {
       return;
     }
+
+    const inputElement = inputRef.current;
 
     let listener: google.maps.MapsEventListener | null = null;
 
@@ -81,12 +85,13 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
         autocompleteRef.current = null;
       }
     };
-  }, [inputElement]); // Run when input element is available
+  }, [isMounted]); // Run when input element is available
 
   // Sync external value to internal input state
   useEffect(() => {
-    if (!inputElement) return;
+    if (!isMounted || !inputRef.current) return;
 
+    const inputElement = inputRef.current;
     // Only sync if the input is NOT in focus
     if (document.activeElement !== inputElement) {
       if (value !== inputElement.value) {
@@ -96,7 +101,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
         isPlaceSelectedRef.current = true;
       }
     }
-  }, [value, inputElement]);
+  }, [value, isMounted]);
 
   return (
     <div className={`flex flex-col space-y-2 relative ${className}`}>
@@ -110,7 +115,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
           <MapPin className="w-5 h-5" />
         </div>
         <input
-          ref={setInputElement}
+          ref={setInputRef}
           defaultValue={value}
           onChange={(e) => {
             isPlaceSelectedRef.current = false;

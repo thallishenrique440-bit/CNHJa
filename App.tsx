@@ -40,7 +40,7 @@ const LoadingScreen = () => (
   </div>
 );
 
-const AuthGuard: React.FC<{ allowedRole: string }> = ({ allowedRole }) => {
+const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) => {
   const { session, userRole, loading } = useAuth();
 
   if (loading) {
@@ -53,7 +53,7 @@ const AuthGuard: React.FC<{ allowedRole: string }> = ({ allowedRole }) => {
   }
 
   // 2. Authenticated but accessing wrong role area
-  if (userRole && userRole !== allowedRole) {
+  if (allowedRole !== 'any' && userRole && userRole !== allowedRole) {
     return <Navigate to={userRole === 'student' ? '/student/home' : '/instructor/agenda'} replace />;
   }
 
@@ -139,8 +139,14 @@ const AppRoutes: React.FC = () => {
               <Route path="/student/lessons" element={<StudentLessons />} />
               <Route path="/student/finance" element={<StudentFinance />} /> 
               <Route path="/student/profile" element={<StudentProfile />} />
-              <Route path="/student/instructor/:id" element={<StudentInstructorProfile />} />
               <Route path="/student/payment" element={<PaymentPage />} />
+           </Route>
+        </Route>
+
+        {/* SHARED ROUTES (Accessible by both roles) */}
+        <Route element={<AuthGuard allowedRole="any" />}>
+           <Route element={<ProfileGuard />}>
+              <Route path="/student/instructor/:id" element={<StudentInstructorProfile />} />
            </Route>
         </Route>
         

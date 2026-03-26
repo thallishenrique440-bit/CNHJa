@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
 import { RatingBadge } from '../../components/RatingBadge';
@@ -56,6 +56,7 @@ interface InstructorProfileData {
 export const StudentInstructorProfile: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { session } = useAuth();
   const { addToast } = useToast();
@@ -83,6 +84,12 @@ export const StudentInstructorProfile: React.FC = () => {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   // Note: isSuccess is handled by the redirect flow mostly, but kept for transient UI states if needed
   const [isSuccess, setIsSuccess] = useState(false);
+
+  // Preview Logic
+    const isPreview = searchParams.get('preview') === 'true';
+    const isOwner = session?.user?.id === id;
+    const showPreviewBanner = isPreview && isOwner;
+    const fromInstructor = location.state?.fromInstructor;
 
   useEffect(() => {
     const success = searchParams.get('success');
@@ -1051,7 +1058,33 @@ export const StudentInstructorProfile: React.FC = () => {
   return (
     <div className="min-h-screen bg-white flex flex-col pb-24 sm:max-w-md sm:mx-auto relative">
       
-      <div className="px-4 py-4 sticky top-0 bg-white/90 backdrop-blur-md z-20 border-b border-gray-100 flex items-center">
+      {/* Preview Banner */}
+      {showPreviewBanner && (
+        <div className="bg-blue-600 px-6 py-2.5 z-[40] sticky top-0 shadow-lg">
+          <div className="flex items-center justify-between text-white">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <span className="text-xs font-bold uppercase tracking-wider">Modo de Visualização</span>
+            </div>
+            {fromInstructor && (
+              <button 
+                onClick={() => navigate('/instructor/profile')}
+                className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-[10px] font-bold transition-colors"
+              >
+                Voltar para edição
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] text-blue-100 mt-0.5 font-medium">
+            Você está vendo seu perfil como aluno. Agendamentos desabilitados.
+          </p>
+        </div>
+      )}
+
+      <div className={`px-4 py-4 sticky ${showPreviewBanner ? 'top-[52px]' : 'top-0'} bg-white/90 backdrop-blur-md z-20 border-b border-gray-100 flex items-center transition-all duration-300`}>
         <button 
           onClick={() => navigate(-1)} 
           className="p-2 -ml-2 text-gray-600 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
@@ -1279,9 +1312,9 @@ export const StudentInstructorProfile: React.FC = () => {
         </div>
 
         {/* Divider before category selection */}
-        <div className="h-2 bg-gray-50 border-y border-gray-100"></div>
+        {!showPreviewBanner && <div className="h-2 bg-gray-50 border-y border-gray-100"></div>}
 
-        {availableCategories.length > 0 && (
+        {availableCategories.length > 0 && !showPreviewBanner && (
           <div className="px-6 pt-3 pb-1 animate-fade-in">
              <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-2">Categoria da aula</h2>
              
@@ -1318,128 +1351,130 @@ export const StudentInstructorProfile: React.FC = () => {
           </div>
         )}
 
-        <div className="px-6 pb-6 pt-4">
-           <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-1">Horários disponíveis</h2>
-           <div className="mb-4">
-             <p className="text-xs text-gray-500">
-               Selecione os horários desejados. Descontos progressivos são aplicados automaticamente.
-             </p>
-             <p className="text-xs text-gray-400 mt-1">
-               Em caso de dúvidas, você pode falar diretamente com o instrutor pelo WhatsApp.
-             </p>
-           </div>
-
-           <div className="flex items-center justify-between space-x-2 pb-4">
-              <button onClick={handlePrevRange} className="p-2 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-50 transition-colors">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-              </button>
-              <div className="flex-1 flex justify-between items-center space-x-1">
-                  {weekDays.map((date, index) => {
-                      const isSelected = date.toDateString() === selectedDate.toDateString();
-                      const today = new Date();
-                      today.setHours(0, 0, 0, 0);
-                      const isToday = today.toDateString() === date.toDateString();
-                      
-                      // Disable if date is past maxBookingDate OR if date is in the past (before today)
-                      const isDisabled = date > maxBookingDate || date < today;
-
-                      const dateString = getDateKey(date);
-                      const hasSelectedSlots = selectedSlots.some(slot => slot.startsWith(dateString + '|'));
-                      
-                      const showDot = hasSelectedSlots || isToday;
-                      let dotClass = '';
-                      if (hasSelectedSlots) {
-                        dotClass = isSelected ? 'bg-white' : 'bg-blue-600';
-                      } else if (isToday) {
-                        dotClass = isSelected ? 'bg-blue-300' : 'bg-gray-400';
-                      }
-
-                      return (
-                      <button
-                          key={index}
-                          onClick={() => !isDisabled && handleDayClick(date)}
-                          disabled={isDisabled}
-                          className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl flex-1 transition-all duration-200 
-                          ${isSelected ? 'bg-blue-600 text-white shadow-md transform scale-105' : isDisabled ? 'bg-gray-50 opacity-40 cursor-not-allowed' : 'bg-transparent text-gray-500 hover:bg-gray-50'}
-                          `}
-                      >
-                          <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : isDisabled ? 'text-gray-300' : 'text-gray-400'}`}>{getDayLabel(date)}</span>
-                          <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : isDisabled ? 'text-gray-300' : 'text-gray-700'}`}>{date.getDate()}</span>
-                          {showDot && (<div className={`w-1.5 h-1.5 rounded-full mt-1 ${dotClass}`}></div>)}
-                      </button>
-                      );
-                  })}
-              </div>
-              <button onClick={handleNextRange} className="p-2 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-50 transition-colors">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-              </button>
-           </div>
-
-           <div className="grid grid-cols-4 gap-2">
-              {timeSlots.map((time) => {
-                const isAvailable = isSlotAvailable(time);
-                const dateKey = getDateKey(selectedDate);
-                const slotKey = `${dateKey}|${time}`;
-                const isSelected = selectedSlots.includes(slotKey);
-                
-                // Determine if it's night
-                const hour = parseInt(time.split(':')[0]);
-                const isNight = hour >= 18;
-
-                // NEW: Check if time has passed for today
-                let isPastTime = false;
-                const today = new Date();
-                
-                // Robust comparison: Check if selectedDate is the same day as today
-                const isToday = selectedDate.getDate() === today.getDate() &&
-                                selectedDate.getMonth() === today.getMonth() &&
-                                selectedDate.getFullYear() === today.getFullYear();
-                
-                if (isToday) {
-                    const [h, m] = time.split(':').map(Number);
-                    const now = new Date();
-                    const slotDate = new Date();
-                    slotDate.setHours(h, m, 0, 0);
-                    
-                    if (slotDate < now) {
-                        isPastTime = true;
-                    }
-                }
-
-                const isDisabled = !isAvailable || isPastTime || (limits.isDailyLimitReached && !isSelected);
-
-                return (
-                  <button
-                    key={time}
-                    onClick={() => toggleSlot(time)}
-                    disabled={isDisabled}
-                    className={`
-                      py-2 rounded-lg text-sm font-medium transition-all duration-200 relative
-                      ${isSelected 
-                        ? 'bg-blue-600 text-white shadow-md transform scale-105 z-10' 
-                        : !isDisabled 
-                          ? 'bg-white text-gray-700 border border-gray-200 hover:border-blue-300 hover:bg-blue-50' 
-                          : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-transparent'
-                      }
-                    `}
-                  >
-                    {time}
-                    {isNight && !isDisabled && !isSelected && (
-                       <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-indigo-400 rounded-full"></span>
-                    )}
-                  </button>
-                );
-              })}
-           </div>
-           
-           {instructor.hasNightLessons && (
-             <div className="flex justify-end mt-2">
-                <span className="text-[10px] text-gray-400 flex items-center">
-                  <span className="w-2 h-2 bg-indigo-500 rounded-full mr-1"></span> Horário Noturno
-                </span>
+        {!showPreviewBanner && (
+          <div className="px-6 pb-6 pt-4">
+             <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-1">Horários disponíveis</h2>
+             <div className="mb-4">
+               <p className="text-xs text-gray-500">
+                 Selecione os horários desejados. Descontos progressivos são aplicados automaticamente.
+               </p>
+               <p className="text-xs text-gray-400 mt-1">
+                 Em caso de dúvidas, você pode falar diretamente com o instrutor pelo WhatsApp.
+               </p>
              </div>
-           )}
-        </div>
+
+             <div className="flex items-center justify-between space-x-2 pb-4">
+                <button onClick={handlePrevRange} className="p-2 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-50 transition-colors">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                </button>
+                <div className="flex-1 flex justify-between items-center space-x-1">
+                    {weekDays.map((date, index) => {
+                        const isSelected = date.toDateString() === selectedDate.toDateString();
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        const isToday = today.toDateString() === date.toDateString();
+                        
+                        // Disable if date is past maxBookingDate OR if date is in the past (before today)
+                        const isDisabled = date > maxBookingDate || date < today;
+
+                        const dateString = getDateKey(date);
+                        const hasSelectedSlots = selectedSlots.some(slot => slot.startsWith(dateString + '|'));
+                        
+                        const showDot = hasSelectedSlots || isToday;
+                        let dotClass = '';
+                        if (hasSelectedSlots) {
+                          dotClass = isSelected ? 'bg-white' : 'bg-blue-600';
+                        } else if (isToday) {
+                          dotClass = isSelected ? 'bg-blue-300' : 'bg-gray-400';
+                        }
+
+                        return (
+                        <button
+                            key={index}
+                            onClick={() => !isDisabled && handleDayClick(date)}
+                            disabled={isDisabled}
+                            className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl flex-1 transition-all duration-200 
+                            ${isSelected ? 'bg-blue-600 text-white shadow-md transform scale-105' : isDisabled ? 'bg-gray-50 opacity-40 cursor-not-allowed' : 'bg-transparent text-gray-500 hover:bg-gray-50'}
+                            `}
+                        >
+                            <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : isDisabled ? 'text-gray-300' : 'text-gray-400'}`}>{getDayLabel(date)}</span>
+                            <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : isDisabled ? 'text-gray-300' : 'text-gray-700'}`}>{date.getDate()}</span>
+                            {showDot && (<div className={`w-1.5 h-1.5 rounded-full mt-1 ${dotClass}`}></div>)}
+                        </button>
+                        );
+                    })}
+                </div>
+                <button onClick={handleNextRange} className="p-2 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-50 transition-colors">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                </button>
+             </div>
+
+             <div className="grid grid-cols-4 gap-2">
+                {timeSlots.map((time) => {
+                  const isAvailable = isSlotAvailable(time);
+                  const dateKey = getDateKey(selectedDate);
+                  const slotKey = `${dateKey}|${time}`;
+                  const isSelected = selectedSlots.includes(slotKey);
+                  
+                  // Determine if it's night
+                  const hour = parseInt(time.split(':')[0]);
+                  const isNight = hour >= 18;
+
+                  // NEW: Check if time has passed for today
+                  let isPastTime = false;
+                  const today = new Date();
+                  
+                  // Robust comparison: Check if selectedDate is the same day as today
+                  const isToday = selectedDate.getDate() === today.getDate() &&
+                                  selectedDate.getMonth() === today.getMonth() &&
+                                  selectedDate.getFullYear() === today.getFullYear();
+                  
+                  if (isToday) {
+                      const [h, m] = time.split(':').map(Number);
+                      const now = new Date();
+                      const slotDate = new Date();
+                      slotDate.setHours(h, m, 0, 0);
+                      
+                      if (slotDate < now) {
+                          isPastTime = true;
+                      }
+                  }
+
+                  const isDisabled = !isAvailable || isPastTime || (limits.isDailyLimitReached && !isSelected);
+
+                  return (
+                    <button
+                      key={time}
+                      onClick={() => toggleSlot(time)}
+                      disabled={isDisabled}
+                      className={`
+                        py-2 rounded-lg text-sm font-medium transition-all duration-200 relative
+                        ${isSelected 
+                          ? 'bg-blue-600 text-white shadow-md transform scale-105 z-10' 
+                          : !isDisabled 
+                            ? 'bg-white text-gray-700 border border-gray-200 hover:border-blue-300 hover:bg-blue-50' 
+                            : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-transparent'
+                        }
+                      `}
+                    >
+                      {time}
+                      {isNight && !isDisabled && !isSelected && (
+                         <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-indigo-400 rounded-full"></span>
+                      )}
+                    </button>
+                  );
+                })}
+             </div>
+             
+             {instructor.hasNightLessons && (
+               <div className="flex justify-end mt-2">
+                  <span className="text-[10px] text-gray-400 flex items-center">
+                    <span className="w-2 h-2 bg-indigo-500 rounded-full mr-1"></span> Horário Noturno
+                  </span>
+               </div>
+             )}
+          </div>
+        )}
 
         <div className="h-2 bg-gray-50"></div>
 
@@ -1519,11 +1554,11 @@ export const StudentInstructorProfile: React.FC = () => {
         </div>
         <Button 
           onClick={() => handleBook()} 
-          disabled={selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || isSuccess}
+          disabled={selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || isSuccess || showPreviewBanner}
           className={`shadow-lg transition-all duration-300 px-8 py-3 ${
             isSuccess 
               ? 'bg-green-600 hover:bg-green-700 border-transparent text-white shadow-green-200' 
-              : (selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment) 
+              : (selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || showPreviewBanner) 
                 ? 'bg-gray-300 cursor-not-allowed shadow-none' 
                 : 'shadow-blue-200 bg-blue-600'
           }`}
@@ -1537,9 +1572,11 @@ export const StudentInstructorProfile: React.FC = () => {
              </span>
           ) : isProcessingPayment 
             ? 'Processando...' 
-            : selectedSlots.length > 0 
-                  ? 'Pagar agora'
-                  : 'Agendar'
+            : showPreviewBanner
+              ? 'Preview'
+              : selectedSlots.length > 0 
+                ? 'Pagar agora'
+                : 'Agendar'
           }
         </Button>
       </div>
