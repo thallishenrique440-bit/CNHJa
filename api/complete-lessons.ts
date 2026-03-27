@@ -73,7 +73,7 @@ export default async function handler(req: any, res: any) {
             net_amount: net,
             status: 'completed',
             created_at: new Date().toISOString(),
-            event_date: `${booking.date}T${booking.start_time}`
+            event_date: `${booking.date}T${booking.start_time}:00-03:00`
         });
     }
 

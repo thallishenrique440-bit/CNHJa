@@ -425,7 +425,8 @@ ON public.transactions (appointment_id)
 WHERE type = 'lesson_payment' AND status = 'completed';
 
 -- 3. Create RPC to check for pending reviews
--- Returns the first completed or awaiting_confirmation appointment for an instructor that hasn't been reviewed yet
+-- Returns the first completed or past due appointment for an instructor that hasn't been reviewed yet
+-- UX Rule: If another appointment from the same purchase group was reviewed, don't prompt automatically
 CREATE OR REPLACE FUNCTION public.get_pending_review(p_student_id UUID)
 RETURNS TABLE (
   appointment_id UUID,
@@ -434,6 +435,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 BEGIN
   RETURN QUERY
@@ -444,19 +446,59 @@ BEGIN
   FROM public.appointments a
   JOIN public.profiles p ON a.instructor_id = p.id
   WHERE a.student_id = p_student_id
+    -- Status: Completed or past due (50 min margin)
     AND (
       a.status = 'completed' 
       OR (
         a.status IN ('confirmed', 'scheduled') 
-        AND a.start_time_utc < (now() - interval '50 minutes')
+        AND (a.date + a.start_time) < (now() - interval '50 minutes')
       )
     )
+    -- This specific appointment hasn't been reviewed
     AND NOT EXISTS (
       SELECT 1 FROM public.reviews r 
-      WHERE r.student_id = p_student_id 
-        AND r.instructor_id = a.instructor_id
+      WHERE r.appointment_id = a.id
     )
+    -- UX Rule: If purchase_id is set, check if ANY appointment in that group was reviewed
+    AND CASE 
+      WHEN a.purchase_id IS NULL THEN TRUE
+      ELSE NOT EXISTS (
+        SELECT 1 FROM public.reviews r2
+        JOIN public.appointments a2 ON r2.appointment_id = a2.id
+        WHERE a2.purchase_id = a.purchase_id
+          AND a2.student_id = p_student_id
+      )
+    END
   ORDER BY a.date DESC, a.start_time DESC
   LIMIT 1;
 END;
 $$;
+
+-- 5. RPC to auto-complete lessons that have passed
+-- Threshold: end_time + 3 hours < now
+-- Since we don't have end_time, we use (date + start_time) + 50 mins + 3 hours = 230 minutes
+CREATE OR REPLACE FUNCTION public.auto_complete_lessons()
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  updated_count integer;
+BEGIN
+  UPDATE public.appointments
+  SET 
+    status = 'completed',
+    updated_at = now()
+  WHERE 
+    status = 'confirmed' 
+    AND (date + start_time) < (now() - interval '230 minutes');
+    
+  GET DIAGNOSTICS updated_count = ROW_COUNT;
+  RETURN updated_count;
+END;
+$$;
+
+-- 6. Composite Index for performance
+CREATE INDEX IF NOT EXISTS idx_appointments_student_instructor_status_date 
+ON public.appointments (student_id, instructor_id, status, date DESC);

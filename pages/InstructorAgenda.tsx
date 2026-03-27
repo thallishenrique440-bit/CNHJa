@@ -546,14 +546,7 @@ export const InstructorAgenda: React.FC = () => {
               start_time: time,
               end_time: endTime,
               status: 'blocked',
-              price: 0,
-              start_time_utc: new Date(Date.UTC(
-                Number(dateStr.split('-')[0]), 
-                Number(dateStr.split('-')[1]) - 1, 
-                Number(dateStr.split('-')[2]), 
-                Number(time.split(':')[0]) + 3, 
-                Number(time.split(':')[1])
-              )).toISOString()
+              price: 0
             })
             .select()
             .single();

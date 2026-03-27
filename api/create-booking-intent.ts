@@ -200,17 +200,11 @@ export default async function handler(req: any, res: any) {
       const diffMinutes = diffMs / (1000 * 60);
       const isLastMinute = diffMinutes <= 10;
 
-      // Calculate start_time_utc (assuming Brazil UTC-3)
-      const [year, month, day] = lesson.date.split('-').map(Number);
-      const [hour, minute] = lesson.startTime.split(':').map(Number);
-      const start_time_utc = new Date(Date.UTC(year, month - 1, day, hour + 3, minute)).toISOString();
-
       return {
         instructor_id: instructorId,
         student_id: studentId,
         date: lesson.date,
         start_time: lesson.startTime,
-        start_time_utc: start_time_utc,
         end_time: lesson.endTime,
         category: category, // Store the category
         status: 'awaiting_payment',

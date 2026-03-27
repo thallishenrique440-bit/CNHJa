@@ -47,7 +47,7 @@ serve(async (req) => {
     // We fetch the appointment and its group_id to handle grouping
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, group_id')
+      .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, group_id')
       .eq('id', appointment_id)
       .single()
 
@@ -68,7 +68,7 @@ serve(async (req) => {
     if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, start_time_utc, group_id')
+        .select('id, status, instructor_id, payment_intent_id, payment_status, date, start_time, group_id')
         .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
@@ -117,22 +117,11 @@ serve(async (req) => {
 
     // Check if ANY lesson in the group has already started
     for (const apt of appointmentsToApprove) {
-      let lessonStartUTC;
-      
-      if (apt.start_time_utc) {
-        lessonStartUTC = new Date(apt.start_time_utc);
-      } else {
-        // Fallback: Calculate UTC from date and start_time (Brazil UTC-3)
-        console.warn(`⚠️ Appointment ${apt.id} missing start_time_utc. Calculating fallback.`);
-        const [year, month, day] = apt.date.split('-').map(Number);
-        const [hour, minute] = apt.start_time.split(':').map(Number);
-        // Add 3 hours to convert from Brazil (UTC-3) to UTC
-        lessonStartUTC = new Date(Date.UTC(year, month - 1, day, hour + 3, minute));
-      }
+      // Combine date and start_time to get a Date object with explicit Brazil offset (UTC-3)
+      const lessonStart = new Date(`${apt.date}T${apt.start_time}:00-03:00`);
+      const now = new Date();
 
-      const nowUTC = new Date()
-
-      if (nowUTC >= lessonStartUTC) {
+      if (now >= lessonStart) {
         console.log(JSON.stringify({
           event: "auto_expire_group",
           group_id: appointment.group_id,

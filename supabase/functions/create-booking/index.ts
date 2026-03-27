@@ -276,15 +276,11 @@ Deno.serve(async (req: any) => {
        d.setMinutes(d.getMinutes() + 50);
        const end_time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
-       // Assume Brazil time (UTC-3) for the lesson start time
-       const start_time_utc = new Date(Date.UTC(year, month - 1, day, hour + 3, minute)).toISOString();
-
        return {
          student_id: user.id,
          instructor_id: instructor_id,
          date: slot.date,
          start_time: slot.time,
-         start_time_utc: start_time_utc,
          end_time: end_time,
          category: requestedCategory, // Salva a categoria validada
          price: price, // Preço oficial do banco

@@ -22,7 +22,6 @@ interface Appointment {
   id: string;
   date: string;
   start_time: string;
-  start_time_utc?: string;
   end_time: string;
   status: 'pending' | 'pending_approval' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired' | 'reserved';
   price: number;
@@ -145,7 +144,6 @@ export const StudentFinance: React.FC = () => {
             id,
             date,
             start_time,
-            start_time_utc,
             end_time,
             status,
             price,
@@ -187,16 +185,11 @@ export const StudentFinance: React.FC = () => {
           if (a.status === 'completed') {
             done++;
           } else {
-            // Check if it's future using UTC (fallback to local if null)
-            let isFuture = false;
-            if (a.start_time_utc) {
-              isFuture = new Date(a.start_time_utc) > now;
-            } else {
-              const [hours, minutes] = a.start_time.split(':').map(Number);
-              const [y, m, d] = a.date.split('-').map(Number);
-              const apptStartDate = new Date(y, m - 1, d, hours, minutes);
-              isFuture = apptStartDate > now;
-            }
+            // Check if it's future using date and start_time
+            const [hours, minutes] = a.start_time.split(':').map(Number);
+            const [y, m, d] = a.date.split('-').map(Number);
+            const apptStartDate = new Date(y, m - 1, d, hours, minutes);
+            const isFuture = apptStartDate > now;
             
             if (isFuture) {
               scheduled++;
@@ -230,17 +223,10 @@ export const StudentFinance: React.FC = () => {
         
         typedAppts.forEach(a => {
           if (a.status !== 'completed' && !paidApptIds.has(a.id)) {
-            let isPast = false;
-            if (a.start_time_utc) {
-              // Use start_time_utc + 50min for end time comparison
-              const apptEndDate = new Date(new Date(a.start_time_utc).getTime() + 50 * 60000);
-              isPast = apptEndDate < now;
-            } else {
-              const [hours, minutes] = (a.end_time || a.start_time).split(':').map(Number);
-              const [y, m, d] = a.date.split('-').map(Number);
-              const apptEndDate = new Date(y, m - 1, d, hours, minutes);
-              isPast = apptEndDate < now;
-            }
+            const [hours, minutes] = (a.end_time || a.start_time).split(':').map(Number);
+            const [y, m, d] = a.date.split('-').map(Number);
+            const apptEndDate = new Date(y, m - 1, d, hours, minutes);
+            const isPast = apptEndDate < now;
 
             const logicalDate = `${a.date}T${a.start_time}`;
 

@@ -462,6 +462,13 @@ export const StudentLessons: React.FC = () => {
     setIsSubmittingTip(false);
     setTipClientSecret(null);
 
+    // If the lesson is already completed, it means the user clicked "Avaliar aula" manually
+    // In this case, we ALWAYS show the rating step, ignoring the recurrence rule.
+    if (group.status === 'completed') {
+      setFlowStep('rating');
+      return;
+    }
+
     // Determine if we should show the rating step
     try {
       // Check how many COMPLETED lessons this student has with this instructor
@@ -542,18 +549,20 @@ export const StudentLessons: React.FC = () => {
     const mainReferenceId = lessonIds[lessonIds.length - 1]; 
 
     try {
-       // 1. Create or Update Review
-       const { error: reviewError } = await supabase
-         .from('reviews')
-         .upsert({
-           appointment_id: mainReferenceId,
-           student_id: session.user.id,
-           instructor_id: finalizingLessonGroup.instructorId,
-           rating: rating,
-           comment: comment
-         }, { onConflict: 'student_id,instructor_id' });
-       
-       if (reviewError) throw reviewError;
+       // 1. Create or Update Review (ONLY if rating > 0)
+       if (rating > 0) {
+         const { error: reviewError } = await supabase
+           .from('reviews')
+           .upsert({
+             appointment_id: mainReferenceId,
+             student_id: session.user.id,
+             instructor_id: finalizingLessonGroup.instructorId,
+             rating: rating,
+             comment: comment
+           }, { onConflict: 'appointment_id' });
+         
+         if (reviewError) throw reviewError;
+       }
 
        // 1.5 Update Appointment Status to 'completed'
        const { error: statusError } = await supabase
@@ -569,7 +578,7 @@ export const StudentLessons: React.FC = () => {
        // 3. Update Local State (Optimistic UI)
        setLessons(prev => prev.map(l => 
           lessonIds.includes(l.id)
-             ? { ...l, isReviewed: true } 
+             ? { ...l, isReviewed: rating > 0, status: 'completed' as any } 
              : l
        ));
        
@@ -670,6 +679,8 @@ export const StudentLessons: React.FC = () => {
     setTipClientSecret(null);
     setTipGiven(false);
     setIsAutoModal(false);
+    setRating(0);
+    setComment('');
   };
 
   const handleSecurityClick = () => {

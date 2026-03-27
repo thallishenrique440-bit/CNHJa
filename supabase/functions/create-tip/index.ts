@@ -61,7 +61,7 @@ Deno.serve(async (req: Request) => {
     // - Está dentro do prazo (24h)?
     const { data: apt, error: aptError } = await supabaseAdmin
       .from('appointments')
-      .select('id, student_id, instructor_id, status, start_time_utc')
+      .select('id, student_id, instructor_id, status, date, start_time')
       .eq('id', appointment_id)
       .single();
 
@@ -74,23 +74,21 @@ Deno.serve(async (req: Request) => {
     }
 
     const isCompleted = apt.status === 'completed';
+    // Combine date and start_time to get a Date object with explicit Brazil offset (UTC-3)
+    const startTime = new Date(`${apt.date}T${apt.start_time}:00-03:00`);
     const isAwaitingCompletion = (apt.status === 'confirmed' || apt.status === 'scheduled') && 
-                                 apt.start_time_utc && 
-                                 (new Date(apt.start_time_utc).getTime() < Date.now() - (50 * 60 * 1000));
+                                 (startTime.getTime() < Date.now() - (50 * 60 * 1000));
 
     if (!isCompleted && !isAwaitingCompletion) {
       throw new Error('A caixinha só pode ser enviada para aulas concluídas ou aguardando finalização.');
     }
 
     // 4.1 Validação de Prazo (24 horas após o início da aula)
-    if (apt.start_time_utc) {
-      const startTime = new Date(apt.start_time_utc);
-      const now = new Date();
-      const diffInHours = (now.getTime() - startTime.getTime()) / (1000 * 60 * 60);
-      
-      if (diffInHours > 24) {
-        throw new Error('O prazo para enviar caixinha já expirou.');
-      }
+    const now = new Date();
+    const diffInHours = (now.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+    
+    if (diffInHours > 24) {
+      throw new Error('O prazo para enviar caixinha já expirou.');
     }
 
     // 5. Regra de Negócio: Verificar se já existe caixinha para esta aula

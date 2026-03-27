@@ -58,8 +58,11 @@ export function getDerivedStatus(
   const [startH, startM] = startParts;
   const [endH, endM] = endParts;
 
-  const start = new Date(year, month - 1, day, startH, startM);
-  const end = new Date(year, month - 1, day, endH, endM);
+  // Use explicit Brazil timezone offset (-03:00) for consistent interpretation
+  // across both frontend (browser) and backend (Edge Functions/UTC)
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const start = new Date(`${year}-${pad(month)}-${pad(day)}T${pad(startH)}:${pad(startM)}:00-03:00`);
+  const end = new Date(`${year}-${pad(month)}-${pad(day)}T${pad(endH)}:${pad(endM)}:00-03:00`);
 
   // Safety check for invalid dates
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
