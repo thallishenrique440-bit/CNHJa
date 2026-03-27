@@ -900,161 +900,121 @@ export const InstructorAgenda: React.FC = () => {
                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
              </div>
         ) : sortedSlots.map(({ slot, lesson, displayStatus, queueGroup }) => {
-          let cardClasses = "border";
-          let textClasses = "text-gray-900"; 
-          let statusLabel = "";
-          let statusIcon = null;
-          let subText = null;
+          const isCurrent = displayStatus === 'in_progress';
+          
+          const statusConfig: Record<string, { 
+            label: string, 
+            borderColor: string, 
+            bgColor: string, 
+            textColor: string, 
+            showDot?: boolean,
+            isDashed?: boolean
+          }> = {
+            pending: { 
+              label: "Solicitação Pendente", 
+              borderColor: "border-l-amber-400", 
+              bgColor: "bg-amber-50/30", 
+              textColor: "text-amber-700",
+              showDot: true 
+            },
+            past_pending: { 
+              label: "Pendente de Finalização", 
+              borderColor: "border-l-amber-500", 
+              bgColor: "bg-amber-50/50", 
+              textColor: "text-amber-800",
+              showDot: true 
+            },
+            confirmed: { 
+              label: "Confirmada", 
+              borderColor: "border-l-blue-500", 
+              bgColor: "bg-blue-50/30", 
+              textColor: "text-blue-700" 
+            },
+            in_progress: { 
+              label: "Em andamento", 
+              borderColor: "border-l-emerald-500", 
+              bgColor: "bg-emerald-50/40", 
+              textColor: "text-emerald-700" 
+            },
+            finished: { 
+              label: "Finalizada", 
+              borderColor: "border-l-gray-300", 
+              bgColor: "bg-white", 
+              textColor: "text-gray-500" 
+            },
+            cancelled_view: { 
+              label: "Cancelada", 
+              borderColor: "border-l-red-200", 
+              bgColor: "bg-gray-50/50", 
+              textColor: "text-gray-400" 
+            },
+            expired: { 
+              label: "Expirada", 
+              borderColor: "border-l-gray-300", 
+              bgColor: "bg-gray-50/50", 
+              textColor: "text-gray-400" 
+            },
+            free: { 
+              label: "Horário Livre", 
+              borderColor: "border-l-transparent", 
+              bgColor: "bg-white", 
+              textColor: "text-blue-600",
+              isDashed: true 
+            },
+            past_free: { 
+              label: "Não agendado", 
+              borderColor: "border-l-transparent", 
+              bgColor: "bg-white", 
+              textColor: "text-gray-300",
+              isDashed: true 
+            },
+            blocked: { 
+              label: "Bloqueado", 
+              borderColor: "border-l-gray-400", 
+              bgColor: "bg-gray-50/50", 
+              textColor: "text-gray-500" 
+            },
+            lunch: { 
+              label: "Almoço", 
+              borderColor: "border-l-gray-200", 
+              bgColor: "bg-gray-100/50", 
+              textColor: "text-gray-400" 
+            },
+            unavailable: { 
+              label: "Indisponível", 
+              borderColor: "border-l-gray-200", 
+              bgColor: "bg-gray-50/50", 
+              textColor: "text-gray-400" 
+            }
+          };
+
+          let config = statusConfig[displayStatus] || statusConfig.free;
+          
+          // Especial case for reserved slots
+          if (displayStatus === 'blocked' && lesson.isReserved) {
+            config = {
+              label: "Reservando...",
+              borderColor: "border-l-yellow-400",
+              bgColor: "bg-yellow-50/50",
+              textColor: "text-yellow-700",
+              showDot: true
+            };
+          }
 
           const showPastDivider = queueGroup === 2 && sortedSlots.find(s => s.queueGroup === 2)?.slot.start === slot.start;
-          
           const isNightStart = timeToMinutes(slot.start) >= timeToMinutes('18:00');
           const showNightDivider = isNightStart && 
                                    (queueGroup === 0 || queueGroup === 1) && 
                                    !sortedSlots.find(s => s.queueGroup === queueGroup && s.startMins < timeToMinutes(slot.start) && s.startMins >= timeToMinutes('18:00'));
-
-          switch (displayStatus) {
-            case 'pending':
-               cardClasses = "bg-yellow-50 border-yellow-200 border-l-4 border-l-yellow-400 shadow-sm cursor-pointer animate-fade-in";
-               textClasses = "text-[10px] font-bold text-yellow-700 uppercase tracking-wider mb-0.5";
-               statusLabel = "Pagamento autorizado";
-               statusIcon = <span className="text-2xl animate-pulse">🔔</span>;
-               subText = (
-                  <div className="flex flex-col">
-                     <span className="text-base font-bold text-gray-900 leading-tight">{lesson.studentName}</span>
-                     <span className="text-[10px] text-yellow-800 font-medium mt-1">Aguardando sua ação (Toque aqui)</span>
-                  </div>
-               );
-               break;
-            case 'in_progress':
-              cardClasses = "bg-white border-green-500 border-l-4 border-l-green-500 ring-1 ring-green-100 shadow-md transform scale-[1.01] cursor-pointer";
-              textClasses = "text-[10px] font-bold text-green-600 uppercase tracking-wider mb-0.5";
-              statusLabel = "Em andamento";
-              statusIcon = lesson.studentPhoto ? (
-                <img src={lesson.studentPhoto} alt="Aluno" className="w-10 h-10 rounded-full object-cover border-2 border-green-100 shadow-sm" />
-              ) : (
-                <span className="text-2xl">👤</span>
-              );
-              subText = (
-                 <div className="flex flex-col">
-                    <div className="flex items-baseline space-x-1.5">
-                      <span className="text-base font-bold text-gray-900 leading-tight">{lesson.studentName}</span>
-                      {lesson.cnhCategory && <span className="text-[10px] font-bold text-gray-500">[ CAT {lesson.cnhCategory} ]</span>}
-                    </div>
-                    <span className="text-[10px] text-green-600 font-bold uppercase tracking-wider mt-1">Finaliza às {slot.end}</span>
-                 </div>
-              );
-              break;
-            case 'free':
-              if (queueGroup === 0) {
-                  cardClasses = "bg-blue-50 border-blue-200 shadow-sm cursor-pointer";
-                  textClasses = "text-sm font-bold text-blue-800";
-                  statusLabel = "AGORA: Disponível";
-                  statusIcon = <span className="text-blue-500 text-xl">⏱️</span>;
-                  subText = <span className="text-[10px] text-blue-600 font-medium">Horário atual livre</span>;
-              } else {
-                  cardClasses = "bg-white border-dashed border-gray-300 hover:border-blue-300 cursor-pointer active:scale-[0.99] transition-transform";
-                  textClasses = "text-sm font-semibold text-blue-600";
-                  statusLabel = "Disponível";
-                  statusIcon = <span className="text-gray-300 text-xl">+</span>;
-                  subText = <span className="text-[10px] text-green-600 font-medium">Toque para agendar ou bloquear</span>;
-              }
-              break;
-            case 'blocked':
-              if (lesson.isReserved) {
-                  cardClasses = "bg-yellow-50 border-yellow-200 cursor-not-allowed opacity-80";
-                  textClasses = "text-[10px] font-bold text-yellow-700 uppercase tracking-wider mb-0.5";
-                  statusLabel = "Reservando...";
-                  statusIcon = <span className="text-yellow-600 text-lg animate-pulse">⏳</span>;
-                  subText = <span className="text-[10px] text-yellow-600 font-medium">Aluno em checkout</span>;
-              } else {
-                  cardClasses = "bg-gray-100 border-gray-200 cursor-pointer";
-                  textClasses = "text-sm font-semibold text-gray-500";
-                  statusLabel = "Bloqueado";
-                  statusIcon = <span className="text-gray-400 text-lg">🔒</span>;
-                  subText = <span className="text-[10px] text-gray-400 font-medium">Toque para liberar</span>;
-              }
-              break;
-            case 'confirmed':
-              cardClasses = "bg-blue-50 border-blue-200 border-l-4 border-l-blue-500 cursor-pointer active:scale-[0.99] transition-transform";
-              textClasses = "text-[10px] font-bold text-blue-600 uppercase tracking-wider mb-0.5";
-              statusLabel = "Confirmada";
-              statusIcon = lesson.studentPhoto ? (
-                <img src={lesson.studentPhoto} alt="Aluno" className="w-10 h-10 rounded-full object-cover border-2 border-blue-200 shadow-sm" />
-              ) : (
-                <span className="text-2xl">👤</span>
-              );
-              subText = (
-                <div className="flex flex-col">
-                   <div className="flex items-baseline space-x-1.5">
-                      <span className="text-base font-bold text-gray-900 leading-tight">{lesson.studentName}</span>
-                      {lesson.cnhCategory && <span className="text-[10px] font-bold text-gray-500">[ CAT {lesson.cnhCategory} ]</span>}
-                   </div>
-                </div>
-              );
-              break;
-            case 'finished':
-              cardClasses = "bg-gray-50 border-gray-200 cursor-pointer hover:bg-gray-100"; 
-              textClasses = "text-sm font-semibold text-gray-600";
-              statusLabel = lesson.studentName || "Aula finalizada";
-              statusIcon = <span className="grayscale opacity-70">🏁</span>;
-              subText = <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Finalizada (Toque para ver)</span>;
-              break;
-            case 'past_free':
-              cardClasses = "bg-gray-50 border-gray-100 opacity-50 cursor-default";
-              textClasses = "text-sm font-semibold text-gray-400";
-              statusLabel = "Não agendado";
-              statusIcon = null;
-              subText = null;
-              break;
-            case 'expired':
-              cardClasses = "bg-gray-100 border-gray-200 border-l-4 border-l-gray-300 opacity-70 cursor-default";
-              textClasses = "text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5";
-              statusLabel = "Solicitação Expirada";
-              statusIcon = <span className="text-xl grayscale opacity-50">🚫</span>;
-              subText = (
-                 <div className="flex flex-col">
-                    <span className="text-base font-bold text-gray-500 leading-tight line-through decoration-gray-400">{lesson.studentName}</span>
-                    <span className="text-[10px] text-gray-400 font-medium mt-1">Horário expirou sem confirmação</span>
-                 </div>
-              );
-              break;
-            case 'past_pending':
-              cardClasses = "bg-yellow-50/50 border-yellow-100 cursor-pointer hover:bg-yellow-50";
-              textClasses = "text-sm font-semibold text-yellow-700";
-              statusLabel = lesson.studentName || "Aula realizada";
-              statusIcon = <span className="text-xl grayscale opacity-70">⚠️</span>;
-              subText = <span className="text-[10px] text-yellow-600 font-medium uppercase tracking-wide">Pendente de finalização</span>;
-              break;
-            case 'cancelled_view':
-              cardClasses = "bg-gray-50 border-gray-100 opacity-60 cursor-pointer grayscale";
-              textClasses = "text-sm font-semibold text-gray-400 line-through decoration-gray-400";
-              statusLabel = lesson.studentName || "Aula cancelada";
-              statusIcon = <span className="text-xl opacity-50">❌</span>;
-              subText = <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide no-underline">Cancelada pelo instrutor</span>;
-              break;
-            case 'lunch':
-              cardClasses = "bg-gray-100 border-transparent opacity-100 cursor-default pointer-events-none";
-              textClasses = "text-sm font-semibold text-gray-400";
-              statusLabel = "Almoço";
-              statusIcon = <span className="text-xl grayscale opacity-50">🍽️</span>;
-              subText = <span className="text-[10px] text-gray-400 font-medium">Intervalo</span>;
-              break;
-            case 'unavailable':
-              cardClasses = "bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed";
-              textClasses = "text-sm font-semibold text-gray-400";
-              statusLabel = "Indisponível";
-              statusIcon = <span className="text-xl grayscale opacity-50">🚫</span>;
-              subText = <span className="text-[10px] text-gray-400 font-medium">Domingo (Folga)</span>;
-              break;
-          }
 
           return (
             <React.Fragment key={slot.start}>
                 {showNightDivider && (
                   <div className="flex items-center space-x-2 py-3">
                      <div className="h-px bg-indigo-100 flex-1"></div>
-                     <span className="flex items-center text-[10px] font-bold text-indigo-500 uppercase tracking-widest bg-indigo-50 px-2 py-1 rounded-full"><span className="mr-1 text-xs">🌙</span> Aulas Noturnas</span>
+                     <span className="flex items-center text-[10px] font-bold text-indigo-500 uppercase tracking-widest bg-indigo-50 px-2 py-1 rounded-full">
+                        🌙 Aulas Noturnas
+                     </span>
                      <div className="h-px bg-indigo-100 flex-1"></div>
                   </div>
                 )}
@@ -1065,16 +1025,60 @@ export const InstructorAgenda: React.FC = () => {
                         <div className="h-px bg-gray-200 flex-1"></div>
                     </div>
                 )}
-                <div onClick={() => handleSlotClick(slot, lesson, displayStatus)} className={`flex items-center p-3 rounded-xl shadow-sm relative overflow-hidden transition-all duration-200 ${cardClasses}`}>
-                  <div className="flex flex-col w-16 border-r border-gray-100 pr-3 mr-3 text-center">
-                      <span className={`text-sm font-bold ${displayStatus === 'past_free' || displayStatus === 'lunch' || displayStatus === 'expired' ? 'text-gray-400' : 'text-gray-700'}`}>{slot.start}</span>
-                      <span className="text-[10px] text-gray-400">{slot.end}</span>
+                
+                <div 
+                  onClick={() => handleSlotClick(slot, lesson, displayStatus)} 
+                  className={`
+                    flex items-center p-4 rounded-xl transition-all duration-200 cursor-pointer ring-1 ring-gray-100 shadow-sm active:scale-[0.98]
+                    ${config.bgColor} ${config.borderColor}
+                    ${isCurrent ? 'border-l-[6px]' : 'border-l-4'}
+                    ${config.isDashed ? 'border-dashed border-gray-200' : 'border-solid'}
+                  `}
+                >
+                  {/* Horário */}
+                  <div className="flex flex-col w-14 border-r border-gray-100 pr-3 mr-4 text-center shrink-0">
+                    <span className={`text-sm font-bold ${isCurrent ? 'text-emerald-700' : 'text-gray-700'}`}>
+                      {slot.start}
+                    </span>
+                    <span className="text-[10px] text-gray-400 font-medium">
+                      {slot.end}
+                    </span>
                   </div>
-                  <div className="flex-1">
-                      <div className={textClasses}>{statusLabel}</div>
-                      {subText}
+
+                  {/* Conteúdo */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center space-x-1.5 mb-0.5">
+                      {config.showDot && <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />}
+                      <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${config.textColor}`}>
+                        {isCurrent ? "• Em andamento" : config.label}
+                      </span>
+                    </div>
+                    
+                    <h3 className={`text-base font-bold truncate leading-tight ${isCurrent ? 'text-emerald-900' : 'text-gray-900'}`}>
+                      {lesson.studentName || config.label}
+                    </h3>
+                    
+                    {lesson.studentName && (
+                      <p className="text-xs text-gray-500 mt-0.5 font-medium truncate">
+                        {`Categoria ${lesson.cnhCategory || '-'} • ${getProcessLabel(lesson.processType)}`}
+                      </p>
+                    )}
                   </div>
-                  <div className="ml-2">{statusIcon}</div>
+
+                  {/* Avatar/Ícone */}
+                  <div className="ml-3 shrink-0">
+                    {lesson.studentPhoto ? (
+                      <img 
+                        src={lesson.studentPhoto} 
+                        alt=""
+                        className={`w-10 h-10 rounded-full object-cover border-2 ${isCurrent ? 'border-emerald-200' : 'border-gray-100'}`} 
+                      />
+                    ) : (
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center bg-gray-50 text-gray-400 border border-gray-100`}>
+                        <span className="text-xs font-bold">{lesson.studentName?.charAt(0) || '—'}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
             </React.Fragment>
           );
