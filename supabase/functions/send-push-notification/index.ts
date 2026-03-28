@@ -120,6 +120,7 @@ serve(async (req) => {
 
     const oldStatus = payload.old_record?.status
     const newStatus = payload.record?.status
+    const actorId = payload.record?.updated_by
 
     // Only process if the status actually changed (for UPDATE)
     if (oldStatus === newStatus) {
@@ -133,16 +134,19 @@ serve(async (req) => {
     let targetUserId: string | null = null
     let title = ''
     let body = ''
+    let notificationType: string = ''
 
     if (newStatus === 'pending_approval' && oldStatus !== 'pending_approval') {
       // 1. Student requested a class (payment confirmed) -> Notify Instructor
       targetUserId = payload.record.instructor_id
       title = 'Novo agendamento'
       body = 'Um aluno solicitou uma nova aula.'
+      notificationType = 'booking_request'
     } else if (newStatus === 'confirmed' && oldStatus === 'pending_approval') {
       // 2. Instructor approved -> Notify Student
       targetUserId = payload.record.student_id
       const category = payload.record.category
+      notificationType = 'booking_confirmed'
       
       if (category === 'A') {
         title = 'Aula Aprovada 🏍️'
@@ -151,11 +155,22 @@ serve(async (req) => {
         title = 'Aula Aprovada 🚗'
         body = 'Seu instrutor aceitou a aula de carro. Nos vemos no horário combinado!'
       }
-    } else if (payload.type === 'UPDATE' && newStatus === 'cancelled') {
+    } else if (newStatus === 'cancelled') {
       // 3. Someone cancelled -> Notify the other party
       targetUserId = payload.record.cancelled_by === 'student' ? payload.record.instructor_id : payload.record.student_id
       title = 'Aula cancelada'
       body = `A aula foi cancelada pelo ${payload.record.cancelled_by === 'student' ? 'aluno' : 'instrutor'}.`
+      notificationType = 'booking_cancelled'
+    } else if (newStatus === 'rejected') {
+      targetUserId = payload.record.student_id
+      title = 'Aula recusada'
+      body = 'O instrutor não pôde aceitar seu agendamento.'
+      notificationType = 'booking_rejected'
+    } else if (newStatus === 'expired') {
+      targetUserId = payload.record.student_id
+      title = 'Agendamento expirado'
+      body = 'O prazo para aceitar sua aula expirou.'
+      notificationType = 'booking_cancelled'
     }
 
     if (!targetUserId) {
@@ -165,11 +180,79 @@ serve(async (req) => {
       })
     }
 
-    // Initialize Supabase client to fetch tokens
+    // --- PROTEÇÃO CONTRA AUTO-NOTIFICAÇÃO ---
+    if (actorId && targetUserId === actorId) {
+      return new Response(JSON.stringify({ message: 'Ignored: Actor is the target user' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      })
+    }
+
+    // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
+    // --- IDEMPOTÊNCIA ---
+    // Check if a notification for this appointment + status + target user already exists
+    const { data: existingLog, error: logCheckError } = await supabase
+      .from('notification_logs')
+      .select('id')
+      .eq('appointment_id', payload.record.id)
+      .eq('status', newStatus)
+      .eq('target_user_id', targetUserId)
+      .maybeSingle()
+
+    if (logCheckError) {
+      console.error('Error checking notification log:', logCheckError)
+    }
+
+    if (existingLog) {
+      return new Response(JSON.stringify({ message: 'Ignored: Notification already sent (idempotency)' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      })
+    }
+
+    // --- LOG DA NOTIFICAÇÃO (Reserva a idempotência antes de enviar) ---
+    const { error: logInsertError } = await supabase
+      .from('notification_logs')
+      .insert({
+        appointment_id: payload.record.id,
+        status: newStatus,
+        target_user_id: targetUserId
+      })
+
+    if (logInsertError) {
+      // If insert fails due to unique constraint, someone else is already processing it
+      if (logInsertError.code === '23505') {
+        return new Response(JSON.stringify({ message: 'Ignored: Notification already being processed' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        })
+      }
+      console.error('Error inserting notification log:', logInsertError)
+    }
+
+    // --- INSERÇÃO NA TABELA DE NOTIFICAÇÕES (In-App) ---
+    const { error: inAppError } = await supabase
+      .from('notifications')
+      .insert({
+        user_id: targetUserId,
+        title,
+        message: body,
+        type: notificationType,
+        metadata: {
+          appointment_id: payload.record.id,
+          status: newStatus
+        }
+      })
+
+    if (inAppError) {
+      console.error('Error inserting in-app notification:', inAppError)
+    }
+
+    // --- ENVIO PUSH (FCM) ---
     // Fetch FCM tokens for the target user
     const { data: tokensData, error: tokensError } = await supabase
       .from('fcm_tokens')
@@ -181,7 +264,7 @@ serve(async (req) => {
     }
 
     if (!tokensData || tokensData.length === 0) {
-      return new Response(JSON.stringify({ message: 'No tokens found for user' }), {
+      return new Response(JSON.stringify({ message: 'In-app notification sent, but no FCM tokens found' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })

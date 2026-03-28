@@ -100,7 +100,8 @@ Deno.serve(async (req: any) => {
       .update({
         status: 'failed',
         payment_status: 'failed',
-        cancelled_reason: 'system_cleanup_expired' // Auditoria: expirou sem pagamento
+        cancelled_reason: 'system_cleanup_expired', // Auditoria: expirou sem pagamento
+        updated_by: user.id
       })
       .eq('instructor_id', instructor_id)
       .in('date', dates)
@@ -115,7 +116,8 @@ Deno.serve(async (req: any) => {
         .update({
             status: 'failed',
             payment_status: 'failed',
-            cancelled_reason: 'user_retry_new_attempt' // Auditoria: usuário reiniciou checkout
+            cancelled_reason: 'user_retry_new_attempt', // Auditoria: usuário reiniciou checkout
+            updated_by: user.id
         })
         .eq('instructor_id', instructor_id)
         .in('date', dates)
@@ -287,7 +289,8 @@ Deno.serve(async (req: any) => {
          status: 'reserved', 
          expires_at: reservationExpiresAt,
          group_id: groupId,
-         payment_status: 'pending'
+         payment_status: 'pending',
+         updated_by: user.id
        }
     });
 

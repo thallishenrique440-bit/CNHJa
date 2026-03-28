@@ -127,7 +127,6 @@ export const InstructorFinance: React.FC = () => {
                 created_at,
                 event_date,
                 type,
-                amount,
                 gross_amount,
                 platform_fee,
                 net_amount,
@@ -140,35 +139,12 @@ export const InstructorFinance: React.FC = () => {
 
         if (transError) throw transError;
 
-        // 3. Fetch Confirmed Appointments (Scheduled)
-        const { data: apptData, error: apptError } = await supabase
-            .from('appointments')
-            .select(`
-                id,
-                date,
-                start_time,
-                end_time,
-                status,
-                price,
-                profiles ( full_name )
-            `)
-            .eq('instructor_id', userId)
-            .eq('status', 'confirmed')
-            .order('date', { ascending: false });
-
-        if (apptError) throw apptError;
-
         const typedTrans = (transData || []).map((t: any) => ({
             ...t,
             profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles
         })) as Transaction[];
 
-        const typedAppts = (apptData || []).map((a: any) => ({
-            ...a,
-            profiles: Array.isArray(a.profiles) ? a.profiles[0] : a.profiles
-        })) as Appointment[];
-
-        // --- Financial Calculations (Strictly from completed transactions) ---
+        // --- Financial Calculations (Strictly from transactions) ---
         let totalRev = 0;
         let monthRev = 0;
         let totalTip = 0;
@@ -179,13 +155,13 @@ export const InstructorFinance: React.FC = () => {
         const currentYear = now.getFullYear();
 
         typedTrans.forEach(t => {
-            if (t.status === 'completed') {
+            // Include both completed and pending for earnings summary
+            if (t.status === 'completed' || t.status === 'pending') {
                 const tDate = new Date(t.event_date || t.created_at);
                 const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
                 
                 // For instructors, we care about net_amount
-                // Now refunds are already negative in the database, so we just add them
-                const val = t.net_amount;
+                const val = t.net_amount || 0;
 
                 if (t.type === 'lesson_payment') {
                     totalRev += val;
@@ -198,7 +174,7 @@ export const InstructorFinance: React.FC = () => {
                         monthTip += val;
                     }
                 } else if (t.type === 'refund') {
-                    // val is already negative, so adding it correctly subtracts from total
+                    // val is already negative in DB for refunds
                     totalRev += val;
                     if (isCurrentMonth) monthRev += val;
                 }
@@ -210,60 +186,24 @@ export const InstructorFinance: React.FC = () => {
         setTotalTips(totalTip);
         setMonthlyTips(monthTip);
 
-        // --- Build Hybrid History ---
-        const items: HistoryItem[] = [];
-
-        // Track all appointments that already have a transaction (any status)
-        const existingApptIds = new Set(typedTrans.map(t => t.appointment_id).filter(Boolean));
-
-        // Add Transactions
-        typedTrans.forEach(t => {
+        // --- Build History (Transactions ONLY) ---
+        const items: HistoryItem[] = typedTrans.map(t => {
             const logicalDate = t.event_date || t.created_at;
-            items.push({
+            return {
                 id: t.id,
                 timestamp: logicalDate,
                 sortDate: logicalDate,
                 type: t.type === 'lesson_payment' ? 'lesson' : (t.type === 'tip' ? 'tip' : 'refund'),
                 isFinancial: true,
-                amount: t.amount,
+                amount: t.net_amount, // We only use net_amount now
                 grossAmount: t.gross_amount,
                 platformFee: t.platform_fee,
                 netAmount: t.net_amount,
                 status: t.status,
                 studentName: t.profiles?.full_name || 'Aluno'
-            });
+            };
         });
 
-        // Add Confirmed Appointments (ONLY if they don't have ANY transaction record yet)
-        typedAppts.forEach(a => {
-            if (!existingApptIds.has(a.id)) {
-                // Check if it's past time (visual migration)
-                const [hours, minutes] = a.end_time.split(':').map(Number);
-                const apptEndDate = new Date(a.date);
-                apptEndDate.setHours(hours, minutes, 0, 0);
-                const isPast = apptEndDate < now;
-
-                const logicalDate = `${a.date}T${a.start_time}`;
-
-                items.push({
-                    id: a.id,
-                    timestamp: logicalDate,
-                    sortDate: logicalDate,
-                    type: 'lesson',
-                    isFinancial: false,
-                    amount: a.price,
-                    status: a.status,
-                    studentName: a.profiles?.full_name || 'Aluno',
-                    appointmentStatus: a.status,
-                    appointmentDate: a.date,
-                    appointmentTime: a.start_time,
-                    isPast
-                });
-            }
-        });
-
-        // Sort by sortDate descending
-        items.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
         setHistoryItems(items);
 
     } catch (err) {
@@ -373,7 +313,7 @@ export const InstructorFinance: React.FC = () => {
         
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
-            <span className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1 block">Este Mês</span>
+            <span className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1 block">Ganhos do mês</span>
             <span className="text-xl font-bold text-gray-900 truncate block">
                 {loading ? '...' : formatCurrency(monthlyRevenue)}
             </span>
@@ -505,14 +445,12 @@ export const InstructorFinance: React.FC = () => {
                     const getIndicatorColor = () => {
                         if (isRefund) return 'border-red-500';
                         if (isTip) return 'border-amber-400';
-                        if (!item.isFinancial) return 'border-blue-400 border-dashed';
                         return 'border-green-500';
                     };
 
                     const getIcon = () => {
                         if (isRefund) return '↩️';
                         if (isTip) return '🎁';
-                        if (!item.isFinancial) return '📅';
                         return '✅';
                     };
 
@@ -532,15 +470,10 @@ export const InstructorFinance: React.FC = () => {
                                     <span className="text-sm font-semibold text-gray-800">
                                         {studentName}
                                     </span>
-                                    {!item.isFinancial && isLesson && (
-                                        <span className={`text-[10px] font-bold uppercase ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
-                                            {item.isPast ? 'Realizada (Processando)' : 'Agendada'}
-                                        </span>
-                                    )}
                                 </div>
                                 <div className="text-right">
                                     <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
-                                        {item.isFinancial && item.netAmount !== undefined ? (
+                                        {item.netAmount !== undefined ? (
                                             <>
                                                 {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.netAmount))}
                                             </>
@@ -549,16 +482,10 @@ export const InstructorFinance: React.FC = () => {
                                         )}
                                     </span>
                                     <span className="text-[10px] text-gray-400">
-                                        {item.isFinancial ? (
-                                            <>
-                                                {item.status === 'pending' && 'Processando pagamento'}
-                                                {item.status === 'completed' && 'Disponível'}
-                                                {item.status === 'failed' && 'Falha no pagamento'}
-                                                {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
-                                            </>
-                                        ) : (
-                                            item.isPast ? 'Processando' : 'Agendado'
-                                        )}
+                                        {item.status === 'pending' && 'Processando pagamento'}
+                                        {item.status === 'completed' && 'Disponível'}
+                                        {item.status === 'failed' && 'Falha'}
+                                        {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
                                     </span>
                                 </div>
                             </div>

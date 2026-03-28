@@ -13,8 +13,7 @@ import {
   LogOut,
   Navigation,
   Pencil,
-  Copy,
-  Instagram
+  Copy
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
@@ -93,12 +92,11 @@ export const InstructorProfile: React.FC = () => {
   const [copied, setCopied] = useState(false);
 
   const profileUrl = `${window.location.origin}/#/i/${publicId}`;
-  const whatsappMsg = encodeURIComponent(`Agenda sempre cheia? Compartilhe seu perfil no WhatsApp e Instagram para atrair mais alunos. Veja meus horários aqui: ${profileUrl}`);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(profileUrl).then(() => {
       setCopied(true);
-      addToast("Link copiado com sucesso!", 'success');
+      addToast("Link copiado!", 'success');
       setTimeout(() => setCopied(false), 2000);
     });
   };
@@ -447,16 +445,6 @@ export const InstructorProfile: React.FC = () => {
       
       {/* Header Minimalista */}
       <div className="px-6 pt-8 pb-6 bg-white border-b border-gray-100 relative">
-        <div className="absolute top-6 right-6">
-          <button 
-            onClick={handleViewAsStudent}
-            className="flex items-center space-x-1 text-blue-600 hover:text-blue-700 text-[11px] font-bold transition-colors"
-          >
-            <Eye className="w-3 h-3" />
-            <span className="underline decoration-blue-200 underline-offset-2">Ver como aluno</span>
-          </button>
-        </div>
-
         <div className="flex flex-col items-center space-y-4">
           <div className="relative group cursor-pointer" onClick={handleImageClick}>
             <div className="w-28 h-28 rounded-full border-4 border-white shadow-lg overflow-hidden bg-gray-100 flex items-center justify-center ring-1 ring-blue-100">
@@ -493,34 +481,26 @@ export const InstructorProfile: React.FC = () => {
 
           {/* Quick Sharing Actions */}
           <div className="w-full pt-2">
-            <p className="text-[11px] text-gray-500 text-center mb-3 px-4 leading-relaxed">
-              Agenda sempre cheia? <br />
-              Compartilhe seu perfil no WhatsApp e Instagram para atrair mais alunos.
-            </p>
+            <div className="text-center mb-4 px-4">
+              <h2 className="text-sm font-bold text-gray-900">Transforme seu perfil em novos alunos</h2>
+              <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
+                Compartilhe seu link no WhatsApp, Instagram, Facebook ou X.
+              </p>
+            </div>
             <div className="flex items-center justify-center space-x-3">
-              <a 
-                href={`https://wa.me/?text=${whatsappMsg}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 rounded-full bg-emerald-500/10 text-[11px] font-bold text-emerald-700 hover:bg-emerald-500/20 transition-all"
-              >
-                Enviar no WhatsApp
-              </a>
-              <button 
-                onClick={() => {
-                  handleCopy();
-                  addToast("Dica: Cole o link na Bio do seu Instagram!", 'info');
-                }}
-                className="px-3 py-1.5 rounded-full bg-fuchsia-500/10 text-[11px] font-bold text-fuchsia-700 hover:bg-fuchsia-500/20 transition-all"
-              >
-                Usar no Instagram
-              </button>
               <button 
                 onClick={handleCopy}
-                className="px-3 py-1.5 rounded-full bg-slate-500/10 text-[11px] font-bold text-slate-700 hover:bg-slate-500/20 transition-all flex items-center space-x-1"
+                className="flex-1 py-3 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center space-x-2 shadow-sm"
               >
-                {copied ? <Check className="w-3 h-3" /> : null}
-                <span>Copiar link</span>
+                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span>{copied ? 'Link copiado!' : 'Copiar link'}</span>
+              </button>
+              <button 
+                onClick={handleViewAsStudent}
+                className="flex-1 py-3 rounded-xl bg-white border border-gray-200 text-gray-700 text-xs font-bold hover:bg-gray-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
+              >
+                <Eye className="w-4 h-4" />
+                <span>Ver como aluno</span>
               </button>
             </div>
           </div>

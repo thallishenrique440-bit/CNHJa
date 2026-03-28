@@ -148,7 +148,8 @@ serve(async (req) => {
             status: 'expired',
             payment_status: 'released',
             cancelled_reason: 'auto_expired_start_time',
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            updated_by: user.id
           })
           .in('id', idsToExpire)
 
@@ -219,7 +220,8 @@ serve(async (req) => {
       .update({
         status: 'confirmed',
         payment_status: 'captured',
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        updated_by: user.id
       })
       .in('id', idsToConfirm)
       .in('status', ['pending_approval', 'pending', 'awaiting_payment']) // Optimistic Lock

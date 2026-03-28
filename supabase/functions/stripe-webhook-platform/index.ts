@@ -77,7 +77,8 @@ Deno.serve(async (req: Request) => {
                status: "pending_approval",
                payment_status: "authorized",
                payment_intent_id: paymentIntentId,
-               expires_at: expiresAt
+               expires_at: expiresAt,
+               updated_by: studentId
              })
              .eq("group_id", groupId)
              .select(); // Select to verify update
@@ -124,17 +125,6 @@ Deno.serve(async (req: Request) => {
              console.log(`ℹ️ Transaction already exists for PI ${paymentIntentId}`);
            }
 
-           // 3. Notify Instructor
-           if (instructorId) {
-             await supabaseAdmin.from("notifications").insert({
-               user_id: instructorId,
-               title: "Nova Solicitação de Aula",
-               message: "Você tem uma nova solicitação de agendamento. Aceite em até 20 minutos.",
-               type: "booking_request",
-               metadata: { group_id: groupId }
-             });
-             console.log(`🔔 Notification sent to instructor ${instructorId}`);
-           }
         } else {
             console.warn(`⚠️ Missing group_id in metadata. Trying to find by payment_intent_id: ${paymentIntentId}`);
             
@@ -179,6 +169,7 @@ Deno.serve(async (req: Request) => {
 
         if (groupId) {
           console.log(`✅ Payment Captured for Group ID: ${groupId}`);
+          const instructorId = paymentIntent.metadata?.instructor_id;
 
           // 1. Update Appointments -> confirmed / captured
           // Prevent overwriting 'completed' status (late webhook) or redundant updates
@@ -186,7 +177,8 @@ Deno.serve(async (req: Request) => {
             .from("appointments")
             .update({
               status: "confirmed",
-              payment_status: "captured"
+              payment_status: "captured",
+              updated_by: instructorId
             })
             .eq("group_id", groupId)
             .neq("status", "completed")
@@ -200,18 +192,6 @@ Deno.serve(async (req: Request) => {
               description: `Pagamento Confirmado (Capturado)`
             })
             .eq("stripe_payment_intent_id", paymentIntentId);
-
-          // 3. Notify Student
-          const studentId = paymentIntent.metadata?.student_id;
-          if (studentId) {
-             await supabaseAdmin.from("notifications").insert({
-              user_id: studentId,
-              title: "Aula Confirmada!",
-              message: "O instrutor aceitou sua solicitação. Bom treino!",
-              type: "booking_accepted",
-              metadata: { group_id: groupId }
-            });
-          }
         }
         break;
       }
@@ -226,6 +206,7 @@ Deno.serve(async (req: Request) => {
 
         if (groupId) {
           console.log(`🚫 Payment Canceled (Released) for Group ID: ${groupId}`);
+          const instructorId = paymentIntent.metadata?.instructor_id;
 
           // 1. Check current status to decide next state
           const { data: appointment } = await supabaseAdmin
@@ -235,7 +216,10 @@ Deno.serve(async (req: Request) => {
              .maybeSingle();
 
           if (appointment) {
-             const updatePayload: any = { payment_status: "released" };
+             const updatePayload: any = { 
+               payment_status: "released",
+               updated_by: instructorId
+             };
              
              // Only change status to rejected if it's currently pending_approval
              // If it's 'expired', we leave it as 'expired'.
@@ -257,18 +241,6 @@ Deno.serve(async (req: Request) => {
               description: `Autorização Cancelada (Liberada)`
             })
             .eq("stripe_payment_intent_id", paymentIntentId);
-            
-          // 3. Notify Student
-          const studentId = paymentIntent.metadata?.student_id;
-          if (studentId) {
-             await supabaseAdmin.from("notifications").insert({
-              user_id: studentId,
-              title: "Solicitação Cancelada",
-              message: "O valor reservado foi liberado no seu cartão.",
-              type: "payment_released",
-              metadata: { group_id: groupId }
-            });
-          }
         }
         break;
       }

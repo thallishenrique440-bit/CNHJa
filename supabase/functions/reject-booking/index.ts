@@ -150,8 +150,10 @@ serve(async (req) => {
       .update({
         status: 'cancelled',
         payment_status: 'released',
+        cancelled_by: 'instructor',
         cancelled_reason: 'instructor_rejected',
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        updated_by: user.id
       })
       .in('id', idsToReject)
       .in('status', ['pending_approval', 'pending', 'awaiting_payment']) // Optimistic Lock

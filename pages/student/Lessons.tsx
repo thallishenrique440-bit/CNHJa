@@ -218,6 +218,7 @@ export const StudentLessons: React.FC = () => {
   const [isAutoModal, setIsAutoModal] = useState(false);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
+  const [isFinalizing, setIsFinalizing] = useState(false);
 
   // Cancellation Flow State
   const [lessonToCancel, setLessonToCancel] = useState<LessonGroup | null>(null);
@@ -457,55 +458,21 @@ export const StudentLessons: React.FC = () => {
     setFinalizingLessonGroup(group);
     setRating(0);
     setComment('');
-    setSelectedTip(20); // Reset to 20
+    setSelectedTip(10); // Default to 10
     setCustomTip('');
     setIsSubmittingTip(false);
     setTipClientSecret(null);
-
-    // If the lesson is already completed, it means the user clicked "Avaliar aula" manually
-    // In this case, we ALWAYS show the rating step, ignoring the recurrence rule.
-    if (group.status === 'completed') {
-      setFlowStep('rating');
-      return;
-    }
-
-    // Determine if we should show the rating step
-    try {
-      // Check how many COMPLETED lessons this student has with this instructor
-      const { count, error } = await supabase
-        .from('appointments')
-        .select('*', { count: 'exact', head: true })
-        .eq('student_id', session?.user?.id)
-        .eq('instructor_id', group.instructorId)
-        .eq('status', 'completed');
-
-      if (error) throw error;
-
-      const completedCount = count || 0;
-      
-      // Show rating if:
-      // 1. First lesson (completedCount === 0)
-      // 2. Every 5 lessons (completedCount is 4, 9, 14... so this next one makes it 5, 10, 15...)
-      const shouldShowRating = completedCount === 0 || (completedCount > 0 && (completedCount + 1) % 5 === 0);
-
-      if (shouldShowRating) {
-        setFlowStep('rating');
-      } else {
-        setFlowStep('tip');
-      }
-    } catch (err) {
-      console.error("Error checking lesson count:", err);
-      // Fallback to rating if error
-      setFlowStep('rating');
-    }
+    setFlowStep('rating'); // Always start with rating
   };
 
-  const submitRating = () => {
+  const submitRating = async () => {
+    if (isFinalizing) return;
+    
     if (rating >= 4) {
       setFlowStep('tip');
     } else {
       // If rating is low, skip tip and finish
-      completeLessonFlow(0);
+      await completeLessonFlow(0);
     }
   };
 
@@ -540,7 +507,8 @@ export const StudentLessons: React.FC = () => {
   };
 
   const completeLessonFlow = async (tipAmount: number) => {
-    if (!finalizingLessonGroup || !session?.user) return;
+    if (!finalizingLessonGroup || !session?.user || isFinalizing) return;
+    setIsFinalizing(true);
     setIsSubmittingTip(true);
     if (tipAmount > 0) setTipGiven(true);
     
@@ -593,6 +561,7 @@ export const StudentLessons: React.FC = () => {
        addToast("Erro ao finalizar a aula: " + err.message, 'error');
     } finally {
         setIsSubmittingTip(false);
+        setIsFinalizing(false);
     }
   };
 
@@ -1102,7 +1071,7 @@ export const StudentLessons: React.FC = () => {
         onClose={closeFlow}
         title={
             flowStep === 'rating' ? "Como foi a aula?" :
-            flowStep === 'tip' ? "Gostaria de dar uma caixinha?" :
+            flowStep === 'tip' ? "Quer reconhecer o trabalho do seu instrutor?" :
             "Aula finalizada!"
         }
         footer={null}
@@ -1134,10 +1103,10 @@ export const StudentLessons: React.FC = () => {
             />
 
             <div className="space-y-2">
-                <Button fullWidth onClick={submitRating} disabled={rating === 0}>
-                    Avaliar
+                <Button fullWidth onClick={submitRating} disabled={rating === 0 || isFinalizing}>
+                    {isFinalizing ? 'Finalizando...' : 'Avaliar'}
                 </Button>
-                <button onClick={closeFlow} className="w-full text-center text-sm text-gray-400 py-2">
+                <button onClick={closeFlow} disabled={isFinalizing} className="w-full text-center text-sm text-gray-400 py-2">
                     {isAutoModal ? 'Ignorar por enquanto' : 'Cancelar'}
                 </button>
             </div>
@@ -1158,10 +1127,7 @@ export const StudentLessons: React.FC = () => {
                 <h3 className="text-lg font-bold text-gray-900 leading-tight">
                   {finalizingLessonGroup?.instructorName}
                 </h3>
-                <p className="text-xl font-bold text-blue-600 mt-2">Gostou da aula?</p>
-                <p className="text-sm text-gray-500 mt-2 leading-relaxed px-4">
-                  A aula já foi concluída. Você pode enviar uma caixinha opcional. O valor será cobrado agora do seu cartão.
-                </p>
+                <p className="text-xl font-bold text-blue-600 mt-2">Quer reconhecer o trabalho do seu instrutor?</p>
               </div>
 
               {!tipClientSecret ? (
@@ -1180,12 +1146,12 @@ export const StudentLessons: React.FC = () => {
                             ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/20' 
                             : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                           }
-                          ${val === 20 && !selectedTip && !customTip ? 'ring-2 ring-blue-500/20 border-blue-200' : ''}
+                          ${val === 10 && !selectedTip && !customTip ? 'ring-2 ring-blue-500/20 border-blue-200' : ''}
                         `}
                       >
                         <span className="text-xs font-medium opacity-60 mb-0.5">R$</span>
                         {val}
-                        {val === 20 && (
+                        {val === 10 && (
                           <span className="absolute -top-2 bg-blue-600 text-white text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider">Sugestão</span>
                         )}
                       </button>
@@ -1210,7 +1176,7 @@ export const StudentLessons: React.FC = () => {
                   </div>
 
                   <div className="text-center space-y-1">
-                    <p className="text-sm font-semibold text-gray-800">100% do valor vai para o instrutor</p>
+                    <p className="text-sm font-semibold text-gray-800">100% da caixinha vai para o instrutor ❤️</p>
                     <p className="text-[10px] text-gray-400">Descontadas apenas taxas do cartão</p>
                     <p className="text-[11px] text-blue-600 font-medium bg-blue-50 p-2 rounded-lg border border-blue-100 italic">
                       "Ao enviar este valor, você confirma que a aula foi realizada com sucesso."
@@ -1222,10 +1188,10 @@ export const StudentLessons: React.FC = () => {
                       fullWidth 
                       variant="primary"
                       onClick={() => handleTipPayment(customTip ? Number(customTip) : (selectedTip || 0))} 
-                      disabled={(!selectedTip && !customTip) || isSubmittingTip}
+                      disabled={(!selectedTip && !customTip) || isSubmittingTip || isFinalizing}
                       className="shadow-lg shadow-blue-100 h-12 text-base"
                     >
-                      {isSubmittingTip ? 'Iniciando...' : `Confirmar R$ ${(customTip ? Number(customTip) : (selectedTip || 0)).toFixed(2).replace('.', ',')}`}
+                      {isSubmittingTip ? 'Iniciando...' : `Enviar R$ ${(customTip ? Number(customTip) : (selectedTip || 0)).toFixed(2).replace('.', ',')} de caixinha 🎁`}
                     </Button>
                     <p className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-bold">
                       Pagamento imediato
