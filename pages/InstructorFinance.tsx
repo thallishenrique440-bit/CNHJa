@@ -213,6 +213,9 @@ export const InstructorFinance: React.FC = () => {
         // --- Build Hybrid History ---
         const items: HistoryItem[] = [];
 
+        // Track all appointments that already have a transaction (any status)
+        const existingApptIds = new Set(typedTrans.map(t => t.appointment_id).filter(Boolean));
+
         // Add Transactions
         typedTrans.forEach(t => {
             const logicalDate = t.event_date || t.created_at;
@@ -231,11 +234,9 @@ export const InstructorFinance: React.FC = () => {
             });
         });
 
-        // Add Confirmed Appointments (that don't have a completed transaction yet)
-        const completedApptIds = new Set(typedTrans.filter(t => t.type === 'lesson_payment').map(t => t.appointment_id));
-        
+        // Add Confirmed Appointments (ONLY if they don't have ANY transaction record yet)
         typedAppts.forEach(a => {
-            if (!completedApptIds.has(a.id)) {
+            if (!existingApptIds.has(a.id)) {
                 // Check if it's past time (visual migration)
                 const [hours, minutes] = a.end_time.split(':').map(Number);
                 const apptEndDate = new Date(a.date);
@@ -471,6 +472,7 @@ export const InstructorFinance: React.FC = () => {
         <div className="space-y-2 text-xs text-gray-500 px-1">
             <p>• Os pagamentos das aulas caem diretamente na sua conta Stripe Express.</p>
             <p>• Os repasses para sua conta bancária são realizados automaticamente pelo Stripe, de acordo com as regras da conta Stripe Express.</p>
+            <p>• O saldo disponível e os repasses devem ser consultados diretamente no painel do Stripe.</p>
             <p>• A plataforma aplica uma taxa fixa de 10% sobre cada aula. Essa taxa é vitalícia e não está sujeita a alterações.</p>
             <p>• As taxas de processamento da Stripe são pagas pela própria plataforma, garantindo que você receba exatamente 90% do valor de cada aula.</p>
             <p>• Caso deseje manter um valor líquido específico por aula, você pode ajustar o preço da aula em aproximadamente 10%, considerando a taxa da plataforma.</p>
@@ -538,10 +540,25 @@ export const InstructorFinance: React.FC = () => {
                                 </div>
                                 <div className="text-right">
                                     <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
-                                        {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.isFinancial ? (item.netAmount || item.amount) : item.amount))}
+                                        {item.isFinancial && item.netAmount !== undefined ? (
+                                            <>
+                                                {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.netAmount))}
+                                            </>
+                                        ) : (
+                                            '—'
+                                        )}
                                     </span>
-                                    <span className="text-[10px] text-gray-400 capitalize">
-                                        {item.isFinancial ? 'Disponível' : 'Confirmado'}
+                                    <span className="text-[10px] text-gray-400">
+                                        {item.isFinancial ? (
+                                            <>
+                                                {item.status === 'pending' && 'Processando pagamento'}
+                                                {item.status === 'completed' && 'Disponível'}
+                                                {item.status === 'failed' && 'Falha no pagamento'}
+                                                {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
+                                            </>
+                                        ) : (
+                                            item.isPast ? 'Processando' : 'Agendado'
+                                        )}
                                     </span>
                                 </div>
                             </div>
@@ -594,7 +611,7 @@ export const InstructorFinance: React.FC = () => {
               🎁
             </div>
             <p className="text-sm text-gray-500 mb-2 leading-relaxed">
-              As caixinhas (gorjetas) são somadas ao seu saldo total e repassadas integralmente (sem taxa de plataforma) junto com seus pagamentos.
+              A plataforma não cobra comissão sobre a caixinha (gorjeta), apenas as taxas do Stripe.
             </p>
           </div>
       </Modal>

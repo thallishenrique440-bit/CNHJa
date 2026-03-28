@@ -73,10 +73,14 @@ serve(async (req) => {
                      instructor_id: pi.metadata.instructor_id,
                      type: "lesson_payment",
                      amount: pi.amount,
+                     gross_amount: pi.amount,
+                     platform_fee: Math.floor(pi.amount * 0.1),
+                     net_amount: pi.amount - Math.floor(pi.amount * 0.1),
                      status: "pending",
                      stripe_payment_intent_id: payment_intent_id,
                      description: `Reserva ${group_id} (Recuperada)`,
-                     metadata: pi.metadata
+                     metadata: pi.metadata,
+                     event_date: new Date().toISOString()
                  });
             }
 

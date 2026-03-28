@@ -108,10 +108,14 @@ Deno.serve(async (req: Request) => {
                  instructor_id: instructorId,
                  type: "lesson_payment",
                  amount: amountTotal,
+                 gross_amount: amountTotal,
+                 platform_fee: Math.floor(amountTotal * 0.1),
+                 net_amount: amountTotal - Math.floor(amountTotal * 0.1),
                  status: "pending", // Pending capture
                  stripe_payment_intent_id: paymentIntentId,
                  description: `Reserva ${groupId} (Aguardando Aceite)`,
-                 metadata: paymentIntent.metadata
+                 metadata: paymentIntent.metadata,
+                 event_date: new Date().toISOString()
                });
 
              if (txError) console.error("❌ Error creating transaction:", txError);

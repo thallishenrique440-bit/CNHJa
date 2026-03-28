@@ -117,7 +117,8 @@ Deno.serve(async (req: Request) => {
            let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
            if (apts && apts.length > 0) {
               // Combine date and start_time to get a Date object with explicit Brazil offset (UTC-3)
-              const lessonStart = new Date(`${apts[0].date}T${apts[0].start_time}:00-03:00`);
+              const [h, m] = apts[0].start_time.split(':');
+              const lessonStart = new Date(`${apts[0].date}T${h}:${m}:00-03:00`);
               expiresAt = lessonStart.toISOString();
            }
            
@@ -159,10 +160,14 @@ Deno.serve(async (req: Request) => {
                  instructor_id: instructorId,
                  type: "lesson_payment",
                  amount: amountTotal,
+                 gross_amount: amountTotal,
+                 platform_fee: Math.floor(amountTotal * 0.1),
+                 net_amount: amountTotal - Math.floor(amountTotal * 0.1),
                  status: "pending", // Pending capture
                  stripe_payment_intent_id: paymentIntentId,
                  description: `Reserva ${groupId} (Aguardando Aceite)`,
-                 metadata: paymentIntent.metadata
+                 metadata: paymentIntent.metadata,
+                 event_date: new Date().toISOString()
                });
 
              if (txError) console.error("❌ Error creating transaction:", txError);
@@ -194,7 +199,8 @@ Deno.serve(async (req: Request) => {
             let expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // Fallback
             if (apts && apts.length > 0) {
                // Combine date and start_time to get a Date object with explicit Brazil offset (UTC-3)
-               const lessonStart = new Date(`${apts[0].date}T${apts[0].start_time}:00-03:00`);
+               const [h, m] = apts[0].start_time.split(':');
+               const lessonStart = new Date(`${apts[0].date}T${h}:${m}:00-03:00`);
                expiresAt = lessonStart.toISOString();
             }
             
@@ -301,10 +307,24 @@ Deno.serve(async (req: Request) => {
             break;
           }
 
-          // A. Validar se a aula está CONCLUÍDA (CRÍTICO)
-          if (apt.status !== 'completed') {
-            console.error(`❌ TIP BLOCKED: Appointment ${appointmentId} status is ${apt.status} (expected completed).`);
+          // A. Validar se a aula está em estado válido para caixinha
+          // Se não estiver concluída, mas for uma aula válida que já passou/iniciou, permitimos e marcamos como concluída
+          const allowedStatuses = ['completed', 'confirmed', 'scheduled', 'pending_approval'];
+          if (!allowedStatuses.includes(apt.status)) {
+            console.error(`❌ TIP BLOCKED: Appointment ${appointmentId} status is ${apt.status} (invalid for tip).`);
             break;
+          }
+
+          // Se a aula ainda não estiver concluída, marcamos como concluída (Confirmação Implícita)
+          if (apt.status !== 'completed') {
+            console.log(`ℹ️ TIP: Implicitly completing appointment ${appointmentId} (status was ${apt.status})`);
+            await supabaseAdmin
+              .from("appointments")
+              .update({ 
+                status: "completed",
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", appointmentId);
           }
 
           // B. Validar se os IDs batem com a aula (Segurança contra spoofing)
@@ -328,6 +348,9 @@ Deno.serve(async (req: Request) => {
           }
 
           // 5. Inserir Transação de Caixinha
+          const platformFee = paymentIntent.application_fee_amount || 0;
+          const netAmount = amount - platformFee;
+
           const { error: txError } = await supabaseAdmin
             .from("transactions")
             .insert({
@@ -336,11 +359,15 @@ Deno.serve(async (req: Request) => {
               appointment_id: appointmentId,
               type: "tip",
               amount: amount,
+              gross_amount: amount,
+              platform_fee: platformFee,
+              net_amount: netAmount,
               status: "completed",
               stripe_payment_intent_id: paymentIntentId,
               stripe_transfer_id: transferId,
               description: `Caixinha • Aula ${appointmentId.split('-')[0]}...`,
-              metadata: metadata
+              metadata: metadata,
+              event_date: new Date().toISOString()
             });
 
           if (txError) {

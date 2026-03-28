@@ -75,17 +75,22 @@ Deno.serve(async (req: Request) => {
 
     const isCompleted = apt.status === 'completed';
     // Combine date and start_time to get a Date object with explicit Brazil offset (UTC-3)
-    const startTime = new Date(`${apt.date}T${apt.start_time}:00-03:00`);
-    const isAwaitingCompletion = (apt.status === 'confirmed' || apt.status === 'scheduled') && 
-                                 (startTime.getTime() < Date.now() - (50 * 60 * 1000));
+    // Garantir que pegamos apenas HH:mm caso o banco retorne HH:mm:ss
+    const [h, m] = apt.start_time.split(':');
+    const startTime = new Date(`${apt.date}T${h}:${m}:00-03:00`);
+    const nowMs = Date.now();
+    
+    // Permitir se concluída OU se confirmada/agendada/pendente e o horário de início já passou
+    // Usamos o horário de início (startTime) como gatilho para permitir a caixinha
+    const isPastOrCurrent = ['confirmed', 'scheduled', 'pending_approval'].includes(apt.status) && 
+                            (startTime.getTime() <= nowMs);
 
-    if (!isCompleted && !isAwaitingCompletion) {
-      throw new Error('A caixinha só pode ser enviada para aulas concluídas ou aguardando finalização.');
+    if (!isCompleted && !isPastOrCurrent) {
+      throw new Error('A caixinha só pode ser enviada para aulas concluídas ou que já iniciaram.');
     }
 
     // 4.1 Validação de Prazo (24 horas após o início da aula)
-    const now = new Date();
-    const diffInHours = (now.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+    const diffInHours = (nowMs - startTime.getTime()) / (1000 * 60 * 60);
     
     if (diffInHours > 24) {
       throw new Error('O prazo para enviar caixinha já expirou.');
@@ -128,7 +133,11 @@ Deno.serve(async (req: Request) => {
     // Idempotency Key: appointment_id + student_id
     const idempotencyKey = `tip_${appointment_id}_${user.id}`;
 
-    console.log(`Creating TIP | Apt: ${appointment_id} | Student: ${user.id} | Instructor: ${apt.instructor_id} | Amount: ${amount}`);
+    // Cálculo da Taxa do Stripe (3.99% + R$ 0,39)
+    // A plataforma não cobra comissão, mas repassa o custo do Stripe para o instrutor
+    const stripeFee = Math.round(amount * 0.0399 + 39);
+
+    console.log(`Creating TIP | Apt: ${appointment_id} | Student: ${user.id} | Instructor: ${apt.instructor_id} | Amount: ${amount} | Stripe Fee: ${stripeFee}`);
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount),
@@ -140,7 +149,7 @@ Deno.serve(async (req: Request) => {
       description: `Caixinha • Aula ${appointment_id}`,
       
       // Destination Charges (Split Payment)
-      application_fee_amount: 0, // ZERO TAXA DA PLATAFORMA
+      application_fee_amount: stripeFee, // Reembolso da taxa do Stripe
       transfer_data: {
         destination: instructor.stripe_account_id,
       },
