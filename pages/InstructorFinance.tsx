@@ -3,6 +3,7 @@ import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
+import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
@@ -57,7 +58,7 @@ interface HistoryItem {
 type StripeStatus = 'none' | 'pending' | 'processing' | 'active';
 
 export const InstructorFinance: React.FC = () => {
-  const { session } = useAuth();
+  const { session, signOut } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -218,15 +219,22 @@ export const InstructorFinance: React.FC = () => {
     loadData();
   }, [session]);
 
-  const handleStripeConnect = async () => {
+    const handleStripeConnect = async () => {
     setConnecting(true);
     try {
-        const { data, error } = await supabase.functions.invoke('create-stripe-account', {
+        const { data, error } = await invokeSecureFunction('create-stripe-account', {
             method: 'POST',
             body: { mode: 'create_link' }
         });
 
-        if (error) throw error;
+        if (error) {
+            if (error.message === 'SESSION_EXPIRED') {
+                addToast("Sessão expirada. Por favor, entre novamente.", 'error');
+                signOut();
+                return;
+            }
+            throw error;
+        }
 
         if (data?.url) {
             window.open(data.url, '_blank');
@@ -245,12 +253,19 @@ export const InstructorFinance: React.FC = () => {
   const handleManualSync = async () => {
     setSyncing(true);
     try {
-        const { data, error } = await supabase.functions.invoke('create-stripe-account', {
+        const { data, error } = await invokeSecureFunction('create-stripe-account', {
             method: 'POST',
             body: { mode: 'sync' }
         });
 
-        if (error) throw error;
+        if (error) {
+            if (error.message === 'SESSION_EXPIRED') {
+                addToast("Sessão expirada. Por favor, entre novamente.", 'error');
+                signOut();
+                return;
+            }
+            throw error;
+        }
 
         if (data?.status === 'synced') {
             // OPTIMISTIC UPDATE: Use response directly instead of waiting for DB read

@@ -6,6 +6,7 @@ import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
 import { supabase } from '../../lib/supabase';
+import { invokeSecureFunction } from '../../lib/functions';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getDerivedStatus, LessonDisplayStatus } from '../../lib/lessonStatus';
@@ -201,7 +202,7 @@ const TipCheckoutForm = ({
 
 export const StudentLessons: React.FC = () => {
   const navigate = useNavigate();
-  const { session, serverTimeOffset } = useAuth();
+  const { session, signOut, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
   
@@ -481,15 +482,22 @@ export const StudentLessons: React.FC = () => {
     
     setIsSubmittingTip(true);
     try {
-      // 1. Create PaymentIntent via Edge Function
-      const { data, error } = await supabase.functions.invoke('create-tip', {
+      // 1. Create PaymentIntent via Edge Function using secure wrapper
+      const { data, error } = await invokeSecureFunction('create-tip', {
         body: {
           appointment_id: finalizingLessonGroup.ids[finalizingLessonGroup.ids.length - 1],
           amount: Math.round(amount * 100) // Convert to cents
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        if (error.message === 'SESSION_EXPIRED') {
+          addToast("Sessão expirada. Por favor, entre novamente.", 'error');
+          signOut();
+          return;
+        }
+        throw error;
+      }
       if (!data?.clientSecret) throw new Error('Falha ao gerar intenção de pagamento.');
 
       // 2. Set clientSecret to show Stripe Elements

@@ -3,6 +3,7 @@ import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
+import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { getDerivedStatus as getSharedDerivedStatus, LessonDisplayStatus } from '../lib/lessonStatus';
@@ -107,7 +108,7 @@ const getProcessLabel = (val?: string) => {
 };
 
 export const InstructorAgenda: React.FC = () => {
-  const { session, serverTimeOffset } = useAuth();
+  const { session, signOut, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(getStartOfWeek(new Date()));
@@ -591,12 +592,17 @@ export const InstructorAgenda: React.FC = () => {
     setIsActionLoading(true);
 
     try {
-        // Call Edge Function to capture payment
-        const { data, error } = await supabase.functions.invoke('approve-booking', {
+        // Call Edge Function to capture payment via secure wrapper
+        const { data, error } = await invokeSecureFunction('approve-booking', {
             body: { appointment_id: selectedLesson.id }
         });
 
         if (error) {
+            if (error.message === 'SESSION_EXPIRED') {
+                addToast("Sessão expirada. Por favor, entre novamente.", 'error');
+                signOut();
+                return;
+            }
             if (error.status === 409) {
                 throw new Error('STATUS_CHANGED');
             }
@@ -658,11 +664,17 @@ export const InstructorAgenda: React.FC = () => {
     setIsActionLoading(true);
 
     try {
-        const { data, error } = await supabase.functions.invoke('reject-booking', {
+        // Call Edge Function to reject booking via secure wrapper
+        const { data, error } = await invokeSecureFunction('reject-booking', {
             body: { appointment_id: selectedLesson.id }
         });
 
         if (error) {
+            if (error.message === 'SESSION_EXPIRED') {
+                addToast("Sessão expirada. Por favor, entre novamente.", 'error');
+                signOut();
+                return;
+            }
             if (error.status === 409) {
                 throw new Error('STATUS_CHANGED');
             }
