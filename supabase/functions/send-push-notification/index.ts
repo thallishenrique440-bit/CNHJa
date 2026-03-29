@@ -121,6 +121,7 @@ serve(async (req) => {
     const oldStatus = payload.old_record?.status
     const newStatus = payload.record?.status
     const actorId = payload.record?.updated_by
+    const groupId = payload.record?.group_id
 
     // Only process if the status actually changed (for UPDATE)
     if (oldStatus === newStatus) {
@@ -193,45 +194,87 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // --- IDEMPOTÊNCIA ---
-    // Check if a notification for this appointment + status + target user already exists
-    const { data: existingLog, error: logCheckError } = await supabase
-      .from('notification_logs')
-      .select('id')
-      .eq('appointment_id', payload.record.id)
-      .eq('status', newStatus)
-      .eq('target_user_id', targetUserId)
-      .maybeSingle()
-
-    if (logCheckError) {
-      console.error('Error checking notification log:', logCheckError)
-    }
-
-    if (existingLog) {
-      return new Response(JSON.stringify({ message: 'Ignored: Notification already sent (idempotency)' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-
-    // --- LOG DA NOTIFICAÇÃO (Reserva a idempotência antes de enviar) ---
+    // --- IDEMPOTÊNCIA INDIVIDUAL (INSERT-FIRST) ---
+    // Reservamos a idempotência antes de qualquer outra lógica.
+    // Se falhar por restrição de unicidade (appointment_id, status, target_user_id), 
+    // significa que esta aula específica já foi processada.
     const { error: logInsertError } = await supabase
       .from('notification_logs')
       .insert({
         appointment_id: payload.record.id,
+        group_id: groupId,
         status: newStatus,
         target_user_id: targetUserId
       })
 
     if (logInsertError) {
-      // If insert fails due to unique constraint, someone else is already processing it
       if (logInsertError.code === '23505') {
-        return new Response(JSON.stringify({ message: 'Ignored: Notification already being processed' }), {
+        return new Response(JSON.stringify({ message: 'Ignored: Notification already processed (idempotency)' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           status: 200,
         })
       }
       console.error('Error inserting notification log:', logInsertError)
+    }
+
+    // --- AGRUPAMENTO (DEBOUNCE POR GROUP_ID) ---
+    // Se houver um group_id, verificamos se houve algum disparo para esse grupo nos últimos 20 segundos
+    if (groupId) {
+      const twentySecondsAgo = new Date(Date.now() - 20000).toISOString()
+      const { data: recentGroupLog, error: groupLogError } = await supabase
+        .from('notification_logs')
+        .select('id')
+        .eq('group_id', groupId)
+        .eq('status', newStatus)
+        .eq('target_user_id', targetUserId)
+        .neq('appointment_id', payload.record.id) // Exclui o log que acabamos de criar
+        .gt('created_at', twentySecondsAgo)
+        .maybeSingle()
+
+      if (groupLogError) {
+        console.error('Error checking group notification log:', groupLogError)
+      }
+
+      if (recentGroupLog) {
+        return new Response(JSON.stringify({ message: 'Ignored: Group already notified recently (debounce)' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        })
+      }
+
+      // --- AGREGAÇÃO (CONTAGEM DE AULAS NO GRUPO) ---
+      // Se for o "vencedor" do grupo, contamos quantas aulas estão no mesmo status
+      const { count, error: countError } = await supabase
+        .from('appointments')
+        .select('id', { count: 'exact', head: true })
+        .eq('group_id', groupId)
+        .eq('status', newStatus)
+        .eq('instructor_id', payload.record.instructor_id)
+        .eq('student_id', payload.record.student_id)
+
+      if (countError) {
+        console.error('Error counting group appointments:', countError)
+      }
+
+      if (count && count > 1) {
+        // Se houver mais de uma aula, consolidamos a mensagem
+        if (newStatus === 'pending_approval') {
+          title = 'Novos agendamentos'
+          body = `Você recebeu ${count} novas solicitações de aula.`
+        } else if (newStatus === 'confirmed') {
+          title = 'Aulas Aprovadas 🚗'
+          body = `Seu instrutor aceitou ${count} aulas do seu pacote.`
+        } else if (newStatus === 'cancelled') {
+          title = 'Aulas canceladas'
+          body = `${count} aulas foram canceladas pelo ${payload.record.cancelled_by === 'student' ? 'aluno' : 'instrutor'}.`
+        } else if (newStatus === 'rejected') {
+          title = 'Aulas recusadas'
+          body = `O instrutor não pôde aceitar ${count} agendamentos.`
+        } else if (newStatus === 'expired') {
+          title = 'Agendamentos expirados'
+          body = `O prazo para aceitar ${count} aulas expirou.`
+        }
+      }
     }
 
     // --- INSERÇÃO NA TABELA DE NOTIFICAÇÕES (In-App) ---
@@ -291,7 +334,7 @@ serve(async (req) => {
     const projectId = serviceAccount.project_id
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`
 
-    const url = targetUserId === payload.record.student_id ? '/student/lessons' : '/instructor/agenda'
+    const url = targetUserId === payload.record.student_id ? '/#/student/lessons' : '/#/instructor/agenda'
 
     const sendPromises = tokens.map(async (token) => {
       const message = {

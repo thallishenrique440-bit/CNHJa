@@ -42,6 +42,7 @@ self.addEventListener('notificationclick', function(event) {
 
   // If there's a URL in the data payload, open it
   const urlToOpen = event.notification.data?.url || '/';
+  const targetUrl = new URL(urlToOpen, self.location.origin).href;
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
@@ -49,13 +50,13 @@ self.addEventListener('notificationclick', function(event) {
       for (let i = 0; i < windowClients.length; i++) {
         const client = windowClients[i];
         // If so, just focus it.
-        if (client.url === urlToOpen && 'focus' in client) {
+        if (client.url === targetUrl && 'focus' in client) {
           return client.focus();
         }
       }
       // If not, then open the target URL in a new window/tab.
       if (clients.openWindow) {
-        return clients.openWindow(urlToOpen);
+        return clients.openWindow(targetUrl);
       }
     })
   );
