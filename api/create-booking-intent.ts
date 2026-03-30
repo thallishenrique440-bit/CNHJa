@@ -42,6 +42,7 @@ export default async function handler(req: any, res: any) {
 
   if (authError || !user) {
     console.error('[DEBUG] Auth Error:', authError?.message || 'No user found');
+    console.error('[DEBUG] Token used (first 10 chars):', token.substring(0, 10));
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -254,6 +255,7 @@ export default async function handler(req: any, res: any) {
         },
         application_fee_amount: applicationFeeAmount,
         metadata: {
+          type: 'lesson_payment',
           group_id: groupId,
           student_id: studentId,
           instructor_id: instructorId,

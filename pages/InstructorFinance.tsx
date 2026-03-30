@@ -353,28 +353,44 @@ export const InstructorFinance: React.FC = () => {
       <div className="flex-1 px-6 py-6 space-y-6">
         
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
-            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 block">Saldo Disponível</span>
-            <span className="text-xl font-bold text-indigo-600 truncate block">
+          {/* Main Balance - Full Width */}
+          <div className="col-span-2 bg-indigo-600 p-5 rounded-2xl shadow-md flex flex-col justify-center text-white">
+            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-wide mb-1 block">Saldo Disponível</span>
+            <span className="text-3xl font-bold truncate block">
                 {loading ? '...' : formatCurrency(availableBalance)}
             </span>
-            <span className="text-[10px] text-gray-400 mt-2">
-                A receber: <span className="text-gray-600 font-semibold">{formatCurrency(pendingBalance)}</span>
-            </span>
+            <div className="flex justify-between items-center mt-3 pt-3 border-t border-indigo-500/50">
+                <span className="text-[10px] text-indigo-200">A receber: <span className="text-white font-semibold">{formatCurrency(pendingBalance)}</span></span>
+                <span className="text-[10px] text-indigo-200 font-medium">Ganhos totais: {formatCurrency(totalRevenue)}</span>
+            </div>
           </div>
 
+          {/* Tips Card */}
           <div 
             onClick={() => setShowTipsInfoModal(true)}
             className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center cursor-pointer active:scale-[0.98] transition-all"
           >
              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 flex items-center">
-                Total Transferido <span className="ml-1">🏦</span>
+                Caixinha 🎁
+             </span>
+             <span className="text-xl font-bold text-amber-600 truncate">
+                {loading ? '...' : formatCurrency(totalTips)}
+             </span>
+             <span className="text-[10px] text-gray-400 mt-2 font-medium">
+                Este mês: {formatCurrency(monthlyTips)}
+             </span>
+          </div>
+
+          {/* Paid Out Card */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
+             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 flex items-center">
+                Transferido 🏦
              </span>
              <span className="text-xl font-bold text-gray-900 truncate">
                 {loading ? '...' : formatCurrency(paidOutTotal)}
              </span>
              <span className="text-[10px] text-gray-400 mt-2 font-medium">
-                Ganhos totais: {formatCurrency(totalRevenue)}
+                Repasses automáticos
              </span>
           </div>
         </div>

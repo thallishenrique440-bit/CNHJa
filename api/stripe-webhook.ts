@@ -21,6 +21,44 @@ const supabaseAdmin = createClient(
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
 
+async function upsertTransaction(paymentIntent: Stripe.PaymentIntent, status: 'pending' | 'completed' | 'failed') {
+  const metadata = paymentIntent.metadata || {};
+  const type = metadata.type || 'lesson_payment';
+  const grossAmount = paymentIntent.amount;
+  const platformFee = paymentIntent.application_fee_amount || Math.round(grossAmount * 0.1);
+  const netAmount = grossAmount - platformFee;
+
+  const transactionData: any = {
+    stripe_payment_intent_id: paymentIntent.id,
+    type: type,
+    student_id: metadata.student_id,
+    instructor_id: metadata.instructor_id,
+    gross_amount: grossAmount,
+    platform_fee: platformFee,
+    net_amount: netAmount,
+    status: status,
+    event_date: new Date().toISOString(),
+    amount: grossAmount // legacy
+  };
+
+  // Only upsert if we have the necessary IDs
+  if (transactionData.student_id && transactionData.instructor_id) {
+    const { error } = await supabaseAdmin
+      .from('transactions')
+      .upsert(transactionData, {
+        onConflict: 'stripe_payment_intent_id,type'
+      });
+    
+    if (error) {
+      console.error(`❌ Error upserting transaction [PI: ${paymentIntent.id}]:`, error.message);
+    } else {
+      console.log(`💰 Transaction ${status} recorded for PI: ${paymentIntent.id}`);
+    }
+  } else {
+    console.warn(`⚠️ Missing metadata for transaction [PI: ${paymentIntent.id}]`, metadata);
+  }
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -65,6 +103,9 @@ export default async function handler(req: any, res: any) {
             .eq('group_id', groupId);
 
           if (error) throw error;
+
+          // 4. Record transaction as pending
+          await upsertTransaction(paymentIntent, 'pending');
         }
         break;
       }
@@ -87,6 +128,9 @@ export default async function handler(req: any, res: any) {
             .neq('status', 'confirmed');
 
           if (error) throw error;
+
+          // 4. Record transaction as completed
+          await upsertTransaction(paymentIntent, 'completed');
         }
         break;
       }
@@ -113,6 +157,9 @@ export default async function handler(req: any, res: any) {
                 payment_status: 'released',
               })
               .eq('group_id', groupId);
+            
+            // 4. Record transaction as failed/canceled
+            await upsertTransaction(paymentIntent, 'failed');
           }
         }
         break;
@@ -133,6 +180,9 @@ export default async function handler(req: any, res: any) {
               cancelled_reason: 'payment_failed'
             })
             .eq('group_id', groupId);
+          
+          // 4. Record transaction as failed
+          await upsertTransaction(paymentIntent, 'failed');
         }
         break;
       }
