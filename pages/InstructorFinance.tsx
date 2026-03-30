@@ -19,6 +19,7 @@ interface Transaction {
   net_amount: number;
   status: 'pending' | 'completed' | 'failed';
   appointment_id?: string;
+  stripe_payout_id?: string;
   profiles: {
     full_name: string;
   };
@@ -48,6 +49,7 @@ interface HistoryItem {
   netAmount?: number;
   status: string;
   studentName: string;
+  stripePayoutId?: string;
   appointmentStatus?: string;
   appointmentDate?: string;
   appointmentTime?: string;
@@ -72,6 +74,11 @@ export const InstructorFinance: React.FC = () => {
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
   const [totalTips, setTotalTips] = useState(0);
   const [monthlyTips, setMonthlyTips] = useState(0);
+  
+  // New Balance Metrics
+  const [pendingBalance, setPendingBalance] = useState(0);
+  const [availableBalance, setAvailableBalance] = useState(0);
+  const [paidOutTotal, setPaidOutTotal] = useState(0);
   
   // Stripe State
   const [stripeStatus, setStripeStatus] = useState<StripeStatus>('none');
@@ -133,6 +140,7 @@ export const InstructorFinance: React.FC = () => {
                 net_amount,
                 status,
                 appointment_id,
+                stripe_payout_id,
                 profiles ( full_name )
             `)
             .eq('instructor_id', userId)
@@ -150,20 +158,34 @@ export const InstructorFinance: React.FC = () => {
         let monthRev = 0;
         let totalTip = 0;
         let monthTip = 0;
+        
+        let pendingBal = 0;
+        let availableBal = 0;
+        let paidOutSum = 0;
 
         const now = new Date();
         const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
 
         typedTrans.forEach(t => {
-            // Include both completed and pending for earnings summary
+            const val = t.net_amount || 0;
+
+            // 1. Status-based balances
+            if (t.status === 'pending') {
+                pendingBal += val;
+            } else if (t.status === 'completed') {
+                if (t.stripe_payout_id) {
+                    paidOutSum += val;
+                } else {
+                    availableBal += val;
+                }
+            }
+
+            // 2. Earnings Summary (Total historical earnings)
             if (t.status === 'completed' || t.status === 'pending') {
                 const tDate = new Date(t.event_date || t.created_at);
                 const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
                 
-                // For instructors, we care about net_amount
-                const val = t.net_amount || 0;
-
                 if (t.type === 'lesson_payment') {
                     totalRev += val;
                     if (isCurrentMonth) monthRev += val;
@@ -175,7 +197,6 @@ export const InstructorFinance: React.FC = () => {
                         monthTip += val;
                     }
                 } else if (t.type === 'refund') {
-                    // val is already negative in DB for refunds
                     totalRev += val;
                     if (isCurrentMonth) monthRev += val;
                 }
@@ -186,6 +207,10 @@ export const InstructorFinance: React.FC = () => {
         setMonthlyRevenue(monthRev);
         setTotalTips(totalTip);
         setMonthlyTips(monthTip);
+        
+        setPendingBalance(pendingBal);
+        setAvailableBalance(availableBal);
+        setPaidOutTotal(paidOutSum);
 
         // --- Build History (Transactions ONLY) ---
         const items: HistoryItem[] = typedTrans.map(t => {
@@ -201,7 +226,8 @@ export const InstructorFinance: React.FC = () => {
                 platformFee: t.platform_fee,
                 netAmount: t.net_amount,
                 status: t.status,
-                studentName: t.profiles?.full_name || 'Aluno'
+                studentName: t.profiles?.full_name || 'Aluno',
+                stripePayoutId: t.stripe_payout_id
             };
         });
 
@@ -328,12 +354,12 @@ export const InstructorFinance: React.FC = () => {
         
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
-            <span className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1 block">Ganhos do mês</span>
-            <span className="text-xl font-bold text-gray-900 truncate block">
-                {loading ? '...' : formatCurrency(monthlyRevenue)}
+            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 block">Saldo Disponível</span>
+            <span className="text-xl font-bold text-indigo-600 truncate block">
+                {loading ? '...' : formatCurrency(availableBalance)}
             </span>
             <span className="text-[10px] text-gray-400 mt-2">
-                Total acumulado: <span className="text-gray-600 font-semibold">{formatCurrency(totalRevenue)}</span>
+                A receber: <span className="text-gray-600 font-semibold">{formatCurrency(pendingBalance)}</span>
             </span>
           </div>
 
@@ -341,14 +367,14 @@ export const InstructorFinance: React.FC = () => {
             onClick={() => setShowTipsInfoModal(true)}
             className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center cursor-pointer active:scale-[0.98] transition-all"
           >
-             <span className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1 flex items-center">
-                Caixinha (Mês) <span className="ml-1">🎁</span>
+             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 flex items-center">
+                Total Transferido <span className="ml-1">🏦</span>
              </span>
-             <span className="text-xl font-bold text-green-600 truncate">
-                {loading ? '...' : formatCurrency(monthlyTips)}
+             <span className="text-xl font-bold text-gray-900 truncate">
+                {loading ? '...' : formatCurrency(paidOutTotal)}
              </span>
-             <span className="text-[10px] text-green-600/70 mt-2 font-medium">
-                Total acumulado: {formatCurrency(totalTips)}
+             <span className="text-[10px] text-gray-400 mt-2 font-medium">
+                Ganhos totais: {formatCurrency(totalRevenue)}
              </span>
           </div>
         </div>
@@ -497,8 +523,12 @@ export const InstructorFinance: React.FC = () => {
                                         )}
                                     </span>
                                     <span className="text-[10px] text-gray-400">
-                                        {item.status === 'pending' && 'Processando pagamento'}
-                                        {item.status === 'completed' && 'Disponível'}
+                                        {item.status === 'pending' && 'Processando'}
+                                        {item.status === 'completed' && (
+                                            item.stripePayoutId 
+                                                ? 'Transferido' 
+                                                : 'Disponível'
+                                        )}
                                         {item.status === 'failed' && 'Falha'}
                                         {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
                                     </span>

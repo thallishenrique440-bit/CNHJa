@@ -502,3 +502,31 @@ $$;
 -- 6. Composite Index for performance
 CREATE INDEX IF NOT EXISTS idx_appointments_student_instructor_status_date 
 ON public.appointments (student_id, instructor_id, status, date DESC);
+
+-- ==============================================================================
+-- MIGRATION: FINANCE REAL-TIME MIRROR (PHASE 3)
+-- ==============================================================================
+
+-- 1. Backfill stripe_payment_intent_id from appointments
+-- This links existing transactions to their Stripe PaymentIntents for idempotency.
+UPDATE public.transactions t
+SET stripe_payment_intent_id = a.payment_intent_id
+FROM public.appointments a
+WHERE t.appointment_id = a.id 
+AND t.stripe_payment_intent_id IS NULL 
+AND a.payment_intent_id IS NOT NULL;
+
+-- 2. Create Unique Index for Idempotency (PI + Type)
+-- This ensures that for a given Stripe PaymentIntent, each transaction type (lesson_payment, tip, etc.) is only recorded once.
+-- The WHERE clause ensures we don't conflict with legacy data that lacks a PI ID.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_stripe_pi_type 
+ON public.transactions (stripe_payment_intent_id, type) 
+WHERE stripe_payment_intent_id IS NOT NULL;
+
+-- 3. Performance Indexes for Financial Dashboard
+-- Speeds up queries for "A Receber", "Em Processamento" and "Transferido"
+CREATE INDEX IF NOT EXISTS idx_transactions_instructor_status 
+ON public.transactions (instructor_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_stripe_payout_id 
+ON public.transactions (stripe_payout_id);

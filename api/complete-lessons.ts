@@ -49,37 +49,11 @@ export default async function handler(req: any, res: any) {
       throw fetchError;
     }
 
-    const bookingsToComplete = [];
-    const transactionPayloads = [];
-    const appointmentIds: string[] = [];
+    const appointmentIds: string[] = confirmedBookings?.map(b => b.id) || [];
 
-    // Process the filtered list
-    for (const booking of confirmedBookings || []) {
-        bookingsToComplete.push(booking);
-        appointmentIds.push(booking.id);
-        
-        const gross = booking.price;
-        const fee = Math.floor(gross * 0.1); // 10% platform fee
-        const net = gross - fee;
+    console.log(`Found ${appointmentIds.length} lessons to complete.`);
 
-        transactionPayloads.push({
-            appointment_id: booking.id,
-            student_id: booking.student_id,
-            instructor_id: booking.instructor_id,
-            type: 'lesson_payment',
-            amount: gross, // legacy/display
-            gross_amount: gross,
-            platform_fee: fee,
-            net_amount: net,
-            status: 'completed',
-            created_at: new Date().toISOString(),
-            event_date: `${booking.date}T${booking.start_time}:00-03:00`
-        });
-    }
-
-    console.log(`Found ${bookingsToComplete.length} lessons to complete.`);
-
-    if (bookingsToComplete.length === 0) {
+    if (appointmentIds.length === 0) {
       return res.status(200).json({ message: 'No lessons to complete.' });
     }
 
@@ -98,35 +72,9 @@ export default async function handler(req: any, res: any) {
         throw updateError;
     }
 
-    const updatedIds = new Set(updatedAppointments?.map(a => a.id));
-    const actualProcessedCount = updatedIds.size;
+    const actualProcessedCount = updatedAppointments?.length || 0;
 
     console.log(`Successfully updated ${actualProcessedCount} lessons.`);
-
-    if (actualProcessedCount === 0) {
-        return res.status(200).json({ message: 'No lessons updated (possibly processed by another job).' });
-    }
-
-    // Filter transactions to only include those that were actually updated
-    const validTransactions = transactionPayloads.filter(t => updatedIds.has(t.appointment_id));
-
-    // 3. Create Transactions
-    // Use ignoreDuplicates: true to handle race conditions or re-runs gracefully
-    // This relies on the UNIQUE constraint (appointment_id, type)
-    const { error: transError } = await supabaseAdmin
-      .from('transactions')
-      .insert(validTransactions)
-      .select() // Needed for ignoreDuplicates to work in some versions, but good practice
-      // @ts-ignore - Supabase types might not be fully up to date in this env
-      .options({ ignoreDuplicates: true }); 
-
-    if (transError) {
-        console.error("❌ Error creating transactions:", transError);
-        // Even if transaction creation fails (e.g. duplicate), we already updated status to completed.
-        // This is acceptable as the constraint prevents double payment.
-        // If it was a real error, we log it.
-        return res.status(500).json({ error: 'Failed to create transactions', details: transError });
-    }
 
     return res.status(200).json({ 
         message: 'Job completed', 

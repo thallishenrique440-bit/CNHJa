@@ -170,7 +170,7 @@ export const StudentFinance: React.FC = () => {
         // --- Process Financial Summary ---
         let totalSpent = 0;
         typedTrans.forEach(t => {
-          if (t.status === 'completed') {
+          if (t.status === 'completed' || t.status === 'pending') {
             // For students, we care about gross_amount
             // Now refunds are already negative in the database, so we just add them
             const val = t.gross_amount;
