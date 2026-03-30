@@ -69,6 +69,7 @@ export const RegisterInstructor: React.FC = () => {
         data: {
           full_name: name,
           city: city, // Standardized via CitySelect
+          phone: whatsapp,
           whatsapp: whatsapp,
           credential: detranCredential,
           role: 'instructor'

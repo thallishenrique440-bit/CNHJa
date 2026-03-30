@@ -241,9 +241,6 @@ export const InstructorProfile: React.FC = () => {
         setSaving(true); // Reuse saving state for upload indicator
 
         const fileExt = file.name.split('.').pop();
-        // Updated Path Structure: avatars/{userId}/profile.{ext}
-        // This matches the RLS policy: (storage.foldername(name))[1] = auth.uid()
-        // Adding Date.now() bypasses browser caching on update
         const fileName = `profile-${Date.now()}.${fileExt}`;
         const filePath = `${session.user.id}/${fileName}`;
 
@@ -259,15 +256,14 @@ export const InstructorProfile: React.FC = () => {
           .from('avatars')
           .getPublicUrl(filePath);
 
-        // 3. Update Profile Table with new URL
-        const { error: dbError } = await supabase
+        // 3. Update profile with new avatar URL
+        const { error: updateError } = await supabase
           .from('profiles')
           .update({ avatar_url: publicUrl })
           .eq('id', session.user.id);
 
-        if (dbError) throw dbError;
+        if (updateError) throw updateError;
 
-        // Ensure state is synced with public URL
         setProfileImage(publicUrl);
         addToast("Foto de perfil atualizada!", 'success');
 
@@ -291,15 +287,19 @@ export const InstructorProfile: React.FC = () => {
     const userId = session.user.id;
 
     try {
+      // 1. Update Profile (Base Info)
       const { error: profileError } = await supabase
         .from('profiles')
         .update({
-          city: city, // Updating city with standardized value
+          full_name: name,
+          city: city,
+          phone: whatsapp.replace(/\D/g, ''),
+          updated_at: new Date().toISOString()
         })
         .eq('id', userId);
 
       if (profileError) throw profileError;
-
+      
       let catArray: string[] = [];
       if (category === 'AB') catArray = ['A', 'B'];
       else if (category === 'A') catArray = ['A'];

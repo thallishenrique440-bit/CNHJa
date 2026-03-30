@@ -4,6 +4,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { Button } from '../../components/Button';
+import { DateSelector } from '../../components/DateSelector';
 import { Modal } from '../../components/Modal';
 import { supabase } from '../../lib/supabase';
 import { invokeSecureFunction } from '../../lib/functions';
@@ -74,30 +75,6 @@ interface LessonGroup extends Omit<Lesson, 'id' | 'price' | 'endTime'> {
 }
 
 // --- Helpers ---
-const getStartOfWeek = (date: Date) => {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-const addDays = (date: Date, days: number) => {
-  const result = new Date(date);
-  result.setDate(result.getDate() + days);
-  return result;
-};
-
-const formatDate = (date: Date) => {
-  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
-};
-
-const getDayName = (date: Date) => {
-  const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-  return days[date.getDay()];
-};
-
 const addMinutesToTime = (time: string, minutesToAdd: number) => {
   const [h, m] = time.split(':').map(Number);
   const date = new Date();
@@ -210,8 +187,7 @@ export const StudentLessons: React.FC = () => {
   const [trustedContact, setTrustedContact] = useState<string | null>(null);
   const [securityMessage, setSecurityMessage] = useState<string>('Estou em aula agora e compartilho minha localização.');
   
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedDayIndex, setSelectedDayIndex] = useState(new Date().getDay() === 0 ? 6 : new Date().getDay() - 1);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   
   // Finalization Flow State
   const [finalizingLessonGroup, setFinalizingLessonGroup] = useState<LessonGroup | null>(null);
@@ -238,11 +214,6 @@ export const StudentLessons: React.FC = () => {
   // Pending Review State
   const [pendingReviewAptId, setPendingReviewAptId] = useState<string | null>(null);
   const hasPromptedReview = React.useRef(false);
-
-  const weekStart = getStartOfWeek(currentDate);
-  const weekEnd = addDays(weekStart, 6);
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  const selectedDate = weekDays[selectedDayIndex];
 
   const [lessons, setLessons] = useState<Lesson[]>([]);
 
@@ -422,7 +393,7 @@ export const StudentLessons: React.FC = () => {
     const interval = setInterval(fetchLessons, 30000);
     return () => clearInterval(interval);
 
-  }, [session, currentDate]);
+  }, [session, selectedDate]);
 
   // Fetch Student Profile for Security Features
   useEffect(() => {
@@ -451,9 +422,6 @@ export const StudentLessons: React.FC = () => {
 
     fetchProfile();
   }, [session]);
-
-  const handlePrevWeek = () => setCurrentDate(addDays(currentDate, -7));
-  const handleNextWeek = () => setCurrentDate(addDays(currentDate, 7));
 
   const startFinalization = async (group: LessonGroup) => {
     setFinalizingLessonGroup(group);
@@ -605,7 +573,8 @@ export const StudentLessons: React.FC = () => {
          // Offer to open WhatsApp
          const clean = group.instructorWhatsapp.replace(/\D/g, '');
          const full = clean.startsWith('55') ? clean : `55${clean}`;
-         const msg = encodeURIComponent(`Olá, preciso cancelar minha aula do dia ${formatDate(group.date)} às ${group.time}, mas o app não permite com menos de 24h. Podemos conversar?`);
+         const dateStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(group.date);
+         const msg = encodeURIComponent(`Olá, preciso cancelar minha aula do dia ${dateStr} às ${group.time}, mas o app não permite com menos de 24h. Podemos conversar?`);
          setTimeout(() => {
             if(confirm("Deseja abrir o WhatsApp do instrutor agora?")) {
                window.open(`https://wa.me/${full}?text=${msg}`, '_blank');
@@ -827,49 +796,21 @@ export const StudentLessons: React.FC = () => {
       
       {/* Header & Date Strip */}
       <div className="bg-white px-6 pt-6 pb-4 border-b border-gray-100 shadow-sm z-10 sticky top-0">
-        <h1 className="text-xl font-bold text-gray-900 mb-4">Minhas Aulas</h1>
-        
-        {/* Week Controls */}
-        <div className="flex items-center justify-between mb-4 bg-gray-50 rounded-lg p-1">
-          <button onClick={handlePrevWeek} className="p-1.5 text-blue-600 hover:bg-white rounded-md">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-bold text-gray-900">Minhas Aulas</h1>
+          <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center">
+            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-          </button>
-          <span className="text-xs font-semibold text-gray-700">
-            {formatDate(weekStart)} - {formatDate(weekEnd)}
-          </span>
-          <button onClick={handleNextWeek} className="p-1.5 text-blue-600 hover:bg-white rounded-md">
-             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
+          </div>
         </div>
 
-        {/* Days Strip */}
-        <div className="flex justify-between items-center space-x-1">
-          {weekDays.map((date, index) => {
-            const isSelected = index === selectedDayIndex;
-            const isToday = new Date().toDateString() === date.toDateString();
-            return (
-              <button
-                key={index}
-                onClick={() => setSelectedDayIndex(index)}
-                className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl flex-1 transition-all duration-200 
-                  ${isSelected ? 'bg-blue-600 text-white shadow-md transform scale-105' : 'bg-transparent text-gray-500 hover:bg-gray-50'}
-                `}
-              >
-                <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
-                  {getDayName(date)}
-                </span>
-                <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : 'text-gray-700'}`}>
-                  {date.getDate()}
-                </span>
-                {isToday && (<div className={`w-1 h-1 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-blue-600'}`}></div>)}
-              </button>
-            );
-          })}
-        </div>
+        <DateSelector 
+          selectedDate={selectedDate} 
+          onDateSelect={setSelectedDate} 
+          daysBefore={30} 
+          daysAfter={30} 
+        />
       </div>
 
       {/* Lesson List */}

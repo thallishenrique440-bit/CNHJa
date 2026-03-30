@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
+import { DateSelector } from '../components/DateSelector';
 import { supabase } from '../lib/supabase';
 import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
@@ -111,7 +112,6 @@ export const InstructorAgenda: React.FC = () => {
   const { session, signOut, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [viewDate, setViewDate] = useState(getStartOfWeek(new Date()));
   const [nightLessonsEnabled, setNightLessonsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   
@@ -377,13 +377,6 @@ export const InstructorAgenda: React.FC = () => {
       supabase.removeChannel(channel);
     };
   }, [fetchAppointments, session]);
-
-  const weekStart = getStartOfWeek(viewDate);
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  
-  const handlePrevRange = () => setViewDate(current => addDays(current, -7));
-  const handleNextRange = () => setViewDate(current => addDays(current, 7));
-  const handleDayClick = (date: Date) => setSelectedDate(date);
 
   const getSlotData = (date: Date, slot: TimeSlot): Lesson => {
     if (slot.isLunch) return { id: 'lunch', status: 'lunch' };
@@ -877,32 +870,13 @@ export const InstructorAgenda: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex items-center justify-between space-x-2">
-            <button onClick={handlePrevRange} className="p-2 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-50 transition-colors">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-            </button>
-            <div className="flex-1 flex justify-between items-center space-x-1">
-                {weekDays.map((date, index) => {
-                    const isSelected = date.toDateString() === selectedDate.toDateString();
-                    const isToday = new Date().toDateString() === date.toDateString();
-                    return (
-                    <button
-                        key={index}
-                        onClick={() => handleDayClick(date)}
-                        className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl flex-1 transition-all duration-200 
-                        ${isSelected ? 'bg-blue-600 text-white shadow-md transform scale-105' : 'bg-transparent text-gray-500 hover:bg-gray-50'}
-                        `}
-                    >
-                        <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>{getDayName(date)}</span>
-                        <span className={`text-sm font-bold leading-none mt-0.5 ${isSelected ? 'text-white' : 'text-gray-700'}`}>{date.getDate()}</span>
-                        {isToday && (<div className={`w-1 h-1 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-blue-600'}`}></div>)}
-                    </button>
-                    );
-                })}
-            </div>
-            <button onClick={handleNextRange} className="p-2 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-50 transition-colors">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-            </button>
+        <div className="mt-2">
+          <DateSelector 
+            selectedDate={selectedDate} 
+            onDateSelect={setSelectedDate} 
+            daysBefore={14} 
+            daysAfter={60} 
+          />
         </div>
       </div>
 

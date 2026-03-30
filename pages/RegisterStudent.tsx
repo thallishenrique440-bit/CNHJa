@@ -76,20 +76,6 @@ export const RegisterStudent: React.FC = () => {
     }
 
     if (data.user) {
-      // Manual Profile Update to ensure phone is saved in public.profiles table
-      // (Safety net in case Trigger doesn't map metadata perfectly)
-      if (data.session) {
-         const { error: profileError } = await supabase
-            .from('profiles')
-            .update({ phone: whatsapp })
-            .eq('id', data.user.id);
-         
-         if (profileError) {
-             console.error("Error updating profile phone:", profileError);
-             // We don't block flow here, ProfileGuard will catch it if it failed
-         }
-      }
-
       localStorage.setItem('ab_user_type', 'student');
       
       setLoading(false);

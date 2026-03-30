@@ -112,18 +112,19 @@ export const StudentProfile: React.FC = () => {
     const userId = session.user.id;
 
     try {
-        // Update all fields in 'profiles' table
         const { error } = await supabase
-            .from('profiles')
-            .update({ 
-                city: city,
-                phone: phone, // Save Phone
-                trusted_contact: trustedContact,
-                security_message: defaultMessage,
-                experience_level: experience,
-                cnh_process_type: cnhProcess
-            }) 
-            .eq('id', userId);
+          .from('profiles')
+          .update({
+            full_name: name,
+            phone: phone,
+            city: city,
+            trusted_contact: trustedContact,
+            security_message: defaultMessage,
+            experience_level: experience,
+            cnh_process_type: cnhProcess,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', userId);
 
         if (error) throw error;
 
@@ -166,12 +167,13 @@ export const StudentProfile: React.FC = () => {
           .from('avatars')
           .getPublicUrl(filePath);
 
-        const { error: dbError } = await supabase
+        // Update profile with new avatar URL
+        const { error: updateError } = await supabase
           .from('profiles')
           .update({ avatar_url: publicUrl })
           .eq('id', session.user.id);
 
-        if (dbError) throw dbError;
+        if (updateError) throw updateError;
 
         setProfileImage(publicUrl);
         addToast("Foto atualizada!", 'success');
@@ -240,8 +242,8 @@ export const StudentProfile: React.FC = () => {
           <Input 
             label="Nome completo" 
             value={name} 
-            readOnly
-            className="bg-gray-50 text-gray-500 border-transparent"
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Seu nome completo"
           />
           
           <Input 
