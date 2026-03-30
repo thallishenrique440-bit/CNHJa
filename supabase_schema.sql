@@ -186,6 +186,8 @@ END $$;
 ALTER TABLE public.appointments ADD COLUMN IF NOT EXISTS expires_at timestamptz;
 ALTER TABLE public.appointments ADD COLUMN IF NOT EXISTS purchase_id uuid;
 ALTER TABLE public.appointments ADD COLUMN IF NOT EXISTS payment_id text;
+ALTER TABLE public.appointments ADD COLUMN IF NOT EXISTS reschedule_requested_at timestamptz;
+ALTER TABLE public.appointments ADD COLUMN IF NOT EXISTS rescheduled_at timestamptz;
 
 -- 3. Índices de Performance
 -- Nota: idx_unique_active_slot já previne double booking.
@@ -250,7 +252,7 @@ DO $$
 BEGIN
     ALTER TABLE public.appointments DROP CONSTRAINT IF EXISTS appointments_status_check;
     ALTER TABLE public.appointments ADD CONSTRAINT appointments_status_check
-        CHECK (status IN ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked', 'reserved', 'failed', 'pending_approval', 'expired', 'rejected'));
+        CHECK (status IN ('pending', 'scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'blocked', 'reserved', 'failed', 'pending_approval', 'expired', 'rejected', 'no_show'));
 EXCEPTION
     WHEN others THEN NULL;
 END $$;
@@ -516,12 +518,16 @@ WHERE t.appointment_id = a.id
 AND t.stripe_payment_intent_id IS NULL 
 AND a.payment_intent_id IS NOT NULL;
 
--- 2. Create Unique Index for Idempotency (PI + Type)
--- This ensures that for a given Stripe PaymentIntent, each transaction type (lesson_payment, tip, etc.) is only recorded once.
+-- 2. Create Unique Index for Idempotency (PI + Type + Appointment)
+-- This ensures that for a given Stripe PaymentIntent, each transaction type (lesson_payment, tip, etc.) is recorded once per appointment.
+-- This supports combos (multiple appointments per PaymentIntent) while maintaining idempotency.
 -- The WHERE clause ensures we don't conflict with legacy data that lacks a PI ID.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_stripe_pi_type 
-ON public.transactions (stripe_payment_intent_id, type) 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_pi_type_appointment 
+ON public.transactions (stripe_payment_intent_id, type, appointment_id) 
 WHERE stripe_payment_intent_id IS NOT NULL;
+
+-- Remove the old index that was too restrictive for combos
+DROP INDEX IF EXISTS idx_transactions_stripe_pi_type;
 
 -- 3. Performance Indexes for Financial Dashboard
 -- Speeds up queries for "A Receber", "Em Processamento" and "Transferido"

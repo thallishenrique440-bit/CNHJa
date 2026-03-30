@@ -9,7 +9,8 @@ export type LessonDBStatus =
   | 'rejected' 
   | 'expired' 
   | 'blocked' 
-  | 'reserved';
+  | 'reserved'
+  | 'no_show';
 
 export type LessonDisplayStatus = 
   | 'pending'           // Aguardando aprovação
@@ -22,6 +23,7 @@ export type LessonDisplayStatus =
   | 'expired'           // Expirada (não confirmada a tempo)
   | 'blocked'           // Bloqueada pelo instrutor
   | 'reserved'          // Reservada (pagamento em curso)
+  | 'no_show'           // Aluno não compareceu
   | 'free'              // Livre (apenas instrutor)
   | 'lunch'             // Almoço (apenas instrutor)
   | 'unavailable';      // Indisponível (apenas instrutor)

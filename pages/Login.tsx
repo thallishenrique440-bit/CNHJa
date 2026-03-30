@@ -12,7 +12,8 @@ export const Login: React.FC = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async () => {
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!email || !password) {
       addToast("Preencha email e senha.", 'warning');
       return;
@@ -72,11 +73,13 @@ export const Login: React.FC = () => {
         </h1>
       </div>
 
-      <div className="flex-1 flex flex-col space-y-6">
+      <form onSubmit={handleLogin} className="flex-1 flex flex-col space-y-6">
         
         <Input 
           label="Email" 
           type="email" 
+          name="email"
+          autoComplete="email"
           placeholder="seu@email.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -86,12 +89,15 @@ export const Login: React.FC = () => {
           <Input 
             label="Senha" 
             type="password" 
+            name="password"
+            autoComplete="current-password"
             placeholder="Digite sua senha"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
           <div className="flex justify-end pr-1">
             <button 
+              type="button"
               onClick={() => navigate('/forgot-password')}
               className="text-sm font-medium text-blue-600 hover:text-blue-700 p-1"
             >
@@ -101,12 +107,12 @@ export const Login: React.FC = () => {
         </div>
 
         <div className="pt-2">
-          <Button fullWidth onClick={handleLogin} disabled={loading}>
+          <Button fullWidth type="submit" disabled={loading}>
             {loading ? 'Entrando...' : 'Entrar'}
           </Button>
         </div>
 
-      </div>
+      </form>
 
       <div className="mt-auto mb-6 flex justify-center">
         <button 

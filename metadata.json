@@ -1,5 +1,5 @@
 {
   "name": "AutoescolaBR",
   "description": "A mobile-first platform connecting students with independent driving instructors.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["geolocation"]
 }

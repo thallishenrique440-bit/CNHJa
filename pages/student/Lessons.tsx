@@ -36,6 +36,8 @@ interface Lesson {
   placeId?: string | null;
   lessonCategory: 'A' | 'B';
   isReviewed?: boolean; 
+  rescheduleRequestedAt?: Date | null;
+  rescheduledAt?: Date | null;
 }
 
 interface DBAppointment {
@@ -47,6 +49,8 @@ interface DBAppointment {
   price: number;
   category: string;
   instructor_id: string;
+  reschedule_requested_at: string | null;
+  rescheduled_at: string | null;
   instructors: {
     whatsapp: string;
     meeting_point: string;
@@ -201,6 +205,16 @@ export const StudentLessons: React.FC = () => {
   const [lessonToCancel, setLessonToCancel] = useState<LessonGroup | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
+  // Rescheduling Flow State
+  const [lessonForAction, setLessonForAction] = useState<LessonGroup | null>(null);
+  const [lessonToReschedule, setLessonToReschedule] = useState<LessonGroup | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState(new Date());
+  const [rescheduleTime, setRescheduleTime] = useState<string | null>(null);
+  const [rescheduleBusySlots, setRescheduleBusySlots] = useState<string[]>([]);
+  const [instructorConfig, setInstructorConfig] = useState<{ hasNight: boolean, workSat: boolean } | null>(null);
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
+
   // Tip Flow State
   const [selectedTip, setSelectedTip] = useState<number | null>(20); // Default to 20 as suggested
   const [customTip, setCustomTip] = useState('');
@@ -261,7 +275,9 @@ export const StudentLessons: React.FC = () => {
           dbStatus: apt.dbStatus,
           location: apt.location,
           lessonCategory: apt.lessonCategory,
-          isReviewed: apt.isReviewed
+          isReviewed: apt.isReviewed,
+          rescheduleRequestedAt: apt.rescheduleRequestedAt,
+          rescheduledAt: apt.rescheduledAt
         };
         setIsAutoModal(true);
         startFinalization(group);
@@ -287,6 +303,8 @@ export const StudentLessons: React.FC = () => {
             price,
             category,
             instructor_id,
+            reschedule_requested_at,
+            rescheduled_at,
             instructors (
               whatsapp,
               meeting_point,
@@ -370,7 +388,9 @@ export const StudentLessons: React.FC = () => {
                 dbStatus: apt.status,
                 price: apt.price,
                 lessonCategory: category,
-                isReviewed: hasReview
+                isReviewed: hasReview,
+                rescheduleRequestedAt: apt.reschedule_requested_at ? new Date(apt.reschedule_requested_at) : null,
+                rescheduledAt: apt.rescheduled_at ? new Date(apt.rescheduled_at) : null
               };
             } catch (mapErr) {
               console.error('Error mapping individual lesson:', apt.id, mapErr);
@@ -587,6 +607,174 @@ export const StudentLessons: React.FC = () => {
     }
   };
 
+  // --- REQUEST RESCHEDULE (<24h) ---
+  const [isRequestingReschedule, setIsRequestingReschedule] = useState(false);
+  const requestReschedule = async (group: LessonGroup) => {
+    if (!session?.user) return;
+    setIsRequestingReschedule(true);
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ reschedule_requested_at: new Date().toISOString() })
+        .in('id', group.ids);
+
+      if (error) throw error;
+
+      addToast("Solicitação enviada! O instrutor foi notificado.", "success");
+      setLessonForAction(null);
+      
+      // Refresh lessons
+      const { data: updatedData } = await supabase
+        .from('appointments')
+        .select('id, reschedule_requested_at')
+        .in('id', group.ids);
+      
+      if (updatedData) {
+        setLessons(prev => prev.map(l => {
+          const updated = updatedData.find(u => u.id === l.id);
+          if (updated) return { ...l, rescheduleRequestedAt: new Date(updated.reschedule_requested_at) };
+          return l;
+        }));
+      }
+    } catch (err) {
+      console.error("Error requesting reschedule:", err);
+      addToast("Erro ao enviar solicitação. Tente novamente.", "error");
+    } finally {
+      setIsRequestingReschedule(false);
+    }
+  };
+
+  // --- ACTION CLICK (DECISION MODAL) ---
+  const handleActionClick = (group: LessonGroup) => {
+    const now = new Date(Date.now() + serverTimeOffset);
+    const [h, m] = group.time.split(':').map(Number);
+    const lessonStart = new Date(group.date);
+    lessonStart.setHours(h, m, 0, 0);
+
+    if (now >= lessonStart) {
+      addToast("Não é possível alterar aulas que já começaram ou passaram.", "warning");
+      return;
+    }
+
+    setLessonForAction(group);
+  };
+
+  // --- FETCH AVAILABILITY FOR RESCHEDULING ---
+  useEffect(() => {
+    if (!lessonToReschedule || !session?.user) return;
+
+    const fetchRescheduleAvailability = async () => {
+      setIsLoadingAvailability(true);
+      const dateKey = rescheduleDate.toISOString().split('T')[0];
+      
+      try {
+        // Fetch instructor config if not already fetched
+        if (!instructorConfig) {
+          const { data: instData } = await supabase
+            .from('instructors')
+            .select('has_night_lessons, work_saturday_afternoon')
+            .eq('id', lessonToReschedule.instructorId)
+            .single();
+          
+          if (instData) {
+            setInstructorConfig({
+              hasNight: !!instData.has_night_lessons,
+              workSat: !!instData.work_saturday_afternoon
+            });
+          }
+        }
+
+        // Fetch busy slots
+        const { data: instructorData } = await supabase
+          .from('appointments')
+          .select('id, start_time, status, student_id')
+          .eq('instructor_id', lessonToReschedule.instructorId)
+          .eq('date', dateKey)
+          .not('status', 'in', '("cancelled","failed","rejected","expired")');
+
+        const { data: studentData } = await supabase
+          .from('appointments')
+          .select('id, start_time, status, instructor_id')
+          .eq('student_id', session.user.id)
+          .eq('date', dateKey)
+          .not('status', 'in', '("cancelled","failed","rejected","expired")');
+
+        const busySlotsSet = new Set<string>();
+        if (instructorData) {
+          instructorData.forEach(apt => {
+            // Don't mark as busy if it's one of the appointments we are rescheduling
+            if (lessonToReschedule.ids.includes(apt.id)) return;
+            busySlotsSet.add(apt.start_time.substring(0, 5));
+          });
+        }
+        if (studentData) {
+          studentData.forEach(apt => {
+            if (lessonToReschedule.ids.includes(apt.id)) return;
+            busySlotsSet.add(apt.start_time.substring(0, 5));
+          });
+        }
+
+        setRescheduleBusySlots(Array.from(busySlotsSet));
+      } catch (err) {
+        console.error("Error fetching reschedule availability:", err);
+      } finally {
+        setIsLoadingAvailability(false);
+      }
+    };
+
+    fetchRescheduleAvailability();
+  }, [rescheduleDate, lessonToReschedule, session]);
+
+  const confirmReschedule = async () => {
+    if (!lessonToReschedule || !rescheduleTime) return;
+    setIsRescheduling(true);
+
+    try {
+      const dateKey = rescheduleDate.toISOString().split('T')[0];
+      
+      // If it's a group, we need to update all appointments in sequence
+      // For simplicity, we'll assume they are back-to-back 50min slots
+      const updates = lessonToReschedule.ids.map((id, index) => {
+        const [h, m] = rescheduleTime.split(':').map(Number);
+        const startTime = new Date(rescheduleDate);
+        startTime.setHours(h, m + (index * 50), 0, 0);
+        const startTimeStr = `${String(startTime.getHours()).padStart(2, '0')}:${String(startTime.getMinutes()).padStart(2, '0')}:00`;
+        
+        const endTime = new Date(rescheduleDate);
+        endTime.setHours(h, m + ((index + 1) * 50), 0, 0);
+        const endTimeStr = `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}:00`;
+
+        return supabase
+          .from('appointments')
+          .update({
+            date: dateKey,
+            start_time: startTimeStr,
+            end_time: endTimeStr,
+            status: 'pending_approval',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+      });
+
+      const results = await Promise.all(updates);
+      const error = results.find(r => r.error)?.error;
+      if (error) throw error;
+
+      addToast("Aula reagendada com sucesso! Aguarde a aprovação do instrutor.", "success");
+      setLessonToReschedule(null);
+      setRescheduleTime(null);
+      
+      // Refresh lessons
+      window.location.reload(); // Simple way to refresh everything
+
+    } catch (err: any) {
+      console.error("Error rescheduling:", err);
+      addToast("Erro ao reagendar: " + err.message, "error");
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
   const confirmCancellation = async () => {
     if (!lessonToCancel) return;
     setIsCancelling(true);
@@ -709,7 +897,9 @@ export const StudentLessons: React.FC = () => {
         lng: daily[0].lng,
         placeId: daily[0].placeId,
         lessonCategory: daily[0].lessonCategory,
-        isReviewed: daily[0].isReviewed
+        isReviewed: daily[0].isReviewed,
+        rescheduleRequestedAt: daily[0].rescheduleRequestedAt,
+        rescheduledAt: daily[0].rescheduledAt
     };
 
     for (let i = 1; i < daily.length; i++) {
@@ -750,7 +940,9 @@ export const StudentLessons: React.FC = () => {
                 lng: next.lng,
                 placeId: next.placeId,
                 lessonCategory: next.lessonCategory,
-                isReviewed: next.isReviewed
+                isReviewed: next.isReviewed,
+                rescheduleRequestedAt: next.rescheduleRequestedAt,
+                rescheduledAt: next.rescheduledAt
             };
         }
     }
@@ -858,6 +1050,11 @@ export const StudentLessons: React.FC = () => {
                            {group.count} aulas
                         </span>
                     )}
+                    {group.rescheduleRequestedAt && (
+                        <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full border border-amber-200 ml-1 animate-pulse">
+                           Reagendamento solicitado
+                        </span>
+                    )}
                   </div>
                   
                   <div className="flex items-center">
@@ -911,10 +1108,18 @@ export const StudentLessons: React.FC = () => {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0">
-                        {/* Cancel Button - Based on real-time check and DB status */}
+                        {/* Action Button - Decision Modal */}
                         {(() => {
-                            const isCancellableStatus = group.dbStatus === 'confirmed' || group.dbStatus === 'scheduled' || group.dbStatus === 'pending_approval';
-                            if (!isCancellableStatus) return null;
+                            if (group.rescheduleRequestedAt) {
+                                return (
+                                    <span className="text-[10px] text-amber-600 font-medium italic">
+                                        Aguardando instrutor...
+                                    </span>
+                                );
+                            }
+
+                            const isActionableStatus = group.dbStatus === 'confirmed' || group.dbStatus === 'scheduled' || group.dbStatus === 'pending_approval';
+                            if (!isActionableStatus) return null;
 
                             const now = new Date(Date.now() + serverTimeOffset);
                             const [y, m, d] = group.dateStr.split('-').map(Number);
@@ -925,10 +1130,10 @@ export const StudentLessons: React.FC = () => {
                                 return (
                                     <Button 
                                       variant="outline"
-                                      onClick={() => handleCancelClick(group)}
-                                      className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-gray-200 text-red-500 hover:bg-red-50 hover:border-red-100"
+                                      onClick={() => handleActionClick(group)}
+                                      className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-blue-200 text-blue-600 hover:bg-blue-50 hover:border-blue-300"
                                     >
-                                      Cancelar
+                                      Remarcar / Cancelar
                                     </Button>
                                 );
                             }
@@ -977,6 +1182,239 @@ export const StudentLessons: React.FC = () => {
           })
         )}
       </div>
+
+      {/* Decision Modal */}
+      <Modal
+        isOpen={!!lessonForAction}
+        onClose={() => setLessonForAction(null)}
+        title={(() => {
+          if (!lessonForAction) return "";
+          const now = new Date(Date.now() + serverTimeOffset);
+          const [h, m] = lessonForAction.time.split(':').map(Number);
+          const lessonStart = new Date(lessonForAction.date);
+          lessonStart.setHours(h, m, 0, 0);
+          const diffMs = lessonStart.getTime() - now.getTime();
+          const diffHours = diffMs / (1000 * 60 * 60);
+          
+          if (diffHours < 24 && lessonForAction.status !== 'pending') {
+            return "Solicitar reagendamento?";
+          }
+          return "Deseja cancelar ou remarcar sua aula?";
+        })()}
+        footer={null}
+      >
+        <div className="space-y-4 py-2">
+          {(() => {
+            if (!lessonForAction) return null;
+            const now = new Date(Date.now() + serverTimeOffset);
+            const [h, m] = lessonForAction.time.split(':').map(Number);
+            const lessonStart = new Date(lessonForAction.date);
+            lessonStart.setHours(h, m, 0, 0);
+            const diffMs = lessonStart.getTime() - now.getTime();
+            const diffHours = diffMs / (1000 * 60 * 60);
+            const isUnder24h = diffHours < 24 && lessonForAction.status !== 'pending';
+
+            if (isUnder24h) {
+              return (
+                <>
+                  <div className="text-center mb-6">
+                    <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+                      ⚠️
+                    </div>
+                    <p className="text-sm text-gray-600 font-medium">
+                      Faltam menos de 24h para a aula.
+                    </p>
+                    <p className="text-xs text-gray-500 mt-2">
+                      Alterações neste período dependem da aprovação do instrutor. Você pode solicitar o reagendamento aqui ou falar com ele pelo WhatsApp.
+                    </p>
+                  </div>
+
+                  <Button 
+                    fullWidth 
+                    onClick={() => requestReschedule(lessonForAction)}
+                    disabled={isRequestingReschedule}
+                    className="h-12 text-base shadow-md shadow-amber-100 bg-amber-600 hover:bg-amber-700"
+                  >
+                    {isRequestingReschedule ? 'Enviando...' : 'Pedir Reagendamento'}
+                  </Button>
+
+                  {lessonForAction.instructorWhatsapp && (
+                    <button 
+                      onClick={() => {
+                        const clean = lessonForAction.instructorWhatsapp!.replace(/\D/g, '');
+                        const full = clean.startsWith('55') ? clean : `55${clean}`;
+                        const dateStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(lessonForAction.date);
+                        const msg = encodeURIComponent(`Olá, gostaria de reagendar minha aula do dia ${dateStr} às ${lessonForAction.time}. Podemos conversar?`);
+                        window.open(`https://wa.me/${full}?text=${msg}`, '_blank');
+                      }}
+                      className="w-full text-center py-2 text-sm text-green-600 font-medium hover:underline"
+                    >
+                      Falar via WhatsApp
+                    </button>
+                  )}
+
+                  <button 
+                    onClick={() => setLessonForAction(null)}
+                    className="w-full text-center py-2 text-sm text-gray-400"
+                  >
+                    Voltar
+                  </button>
+                </>
+              );
+            }
+
+            return (
+              <>
+                <div className="text-center mb-6">
+                  <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+                    🗓️
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    Reagendar não tem custo e mantém sua vaga garantida com o instrutor.
+                  </p>
+                </div>
+
+                <Button 
+                  fullWidth 
+                  onClick={() => {
+                    setInstructorConfig(null);
+                    setRescheduleDate(new Date());
+                    setRescheduleTime(null);
+                    setLessonToReschedule(lessonForAction);
+                    setLessonForAction(null);
+                  }}
+                  className="h-12 text-base shadow-md shadow-blue-100"
+                >
+                  Remarcar aula
+                </Button>
+
+                <button 
+                  onClick={() => {
+                    setLessonToCancel(lessonForAction);
+                    setLessonForAction(null);
+                  }}
+                  className="w-full text-center py-2 text-sm text-gray-400 hover:text-red-500 transition-colors"
+                >
+                  Cancelar aula
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      </Modal>
+
+      {/* Reschedule Modal */}
+      <Modal
+        isOpen={!!lessonToReschedule}
+        onClose={() => {
+          setLessonToReschedule(null);
+          setRescheduleTime(null);
+        }}
+        title="Escolha o novo horário"
+        footer={
+          <div className="flex space-x-3 w-full">
+            <Button 
+              variant="outline" 
+              fullWidth 
+              onClick={() => {
+                setLessonToReschedule(null);
+                setRescheduleTime(null);
+              }}
+            >
+              Voltar
+            </Button>
+            <Button 
+              fullWidth 
+              onClick={confirmReschedule}
+              disabled={!rescheduleTime || isRescheduling}
+              className="shadow-md shadow-blue-100"
+            >
+              {isRescheduling ? 'Confirmando...' : 'Confirmar'}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-6 py-2">
+          <DateSelector 
+            selectedDate={rescheduleDate} 
+            onDateSelect={setRescheduleDate} 
+            daysBefore={0} 
+            daysAfter={7} 
+          />
+
+          {isLoadingAvailability ? (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-4 gap-2">
+              {(instructorConfig ? (() => {
+                const slots = [
+                  '07:00', '07:50', '08:40', '09:30', '10:20', '11:10',
+                  '13:50', '14:40', '15:30', '16:20', '17:10'
+                ];
+                if (instructorConfig.hasNight) {
+                  slots.push('18:00', '18:50', '19:40', '20:30', '21:20', '22:10');
+                }
+                return slots;
+              })() : []).map((time) => {
+                const isBusy = rescheduleBusySlots.includes(time);
+                const isSelected = rescheduleTime === time;
+                
+                // Sunday check
+                const isSunday = rescheduleDate.getDay() === 0;
+                
+                // Saturday check
+                let isSatOff = false;
+                if (rescheduleDate.getDay() === 6) {
+                  const [h, m] = time.split(':').map(Number);
+                  const minutes = h * 60 + m;
+                  const limit = instructorConfig?.workSat ? (17 * 60 + 10) : (11 * 60 + 10);
+                  if (minutes > limit) isSatOff = true;
+                }
+
+                // Past time check
+                let isPast = false;
+                const today = new Date();
+                if (rescheduleDate.toDateString() === today.toDateString()) {
+                  const [h, m] = time.split(':').map(Number);
+                  const now = new Date();
+                  const slotDate = new Date();
+                  slotDate.setHours(h, m, 0, 0);
+                  if (slotDate < now) isPast = true;
+                }
+
+                const isDisabled = isBusy || isSunday || isSatOff || isPast;
+
+                return (
+                  <button
+                    key={time}
+                    onClick={() => setRescheduleTime(time)}
+                    disabled={isDisabled}
+                    className={`
+                      py-2 rounded-lg text-sm font-medium transition-all
+                      ${isSelected 
+                        ? 'bg-blue-600 text-white shadow-md' 
+                        : !isDisabled 
+                          ? 'bg-white text-gray-700 border border-gray-200 hover:border-blue-300' 
+                          : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-transparent'
+                      }
+                    `}
+                  >
+                    {time}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          
+          {lessonToReschedule && lessonToReschedule.count > 1 && (
+            <p className="text-[10px] text-gray-400 text-center italic">
+              * Você está reagendando um bloco de {lessonToReschedule.count} aulas. O novo horário selecionado será o início da primeira aula.
+            </p>
+          )}
+        </div>
+      </Modal>
 
       {/* Cancellation Modal */}
       <Modal

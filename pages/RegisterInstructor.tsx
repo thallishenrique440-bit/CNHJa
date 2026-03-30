@@ -28,7 +28,8 @@ export const RegisterInstructor: React.FC = () => {
     return pwd.length >= minLength && hasUpper && hasLower && hasNumber;
   };
 
-  const handleRegister = async () => {
+  const handleRegister = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!name || !detranCredential || !email || !whatsapp || !city || !password || !confirmPassword) {
       addToast("Por favor, preencha todos os campos obrigatórios.", 'warning');
       return;
@@ -129,10 +130,12 @@ export const RegisterInstructor: React.FC = () => {
         </h1>
       </div>
 
-      <div className="flex-1 flex flex-col space-y-5">
+      <form onSubmit={handleRegister} className="flex-1 flex flex-col space-y-5">
         
         <Input 
           label="Nome completo" 
+          name="name"
+          autoComplete="name"
           placeholder="Digite seu nome completo"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -140,6 +143,8 @@ export const RegisterInstructor: React.FC = () => {
 
         <Input 
           label="Número da credencial do instrutor" 
+          name="credential"
+          autoComplete="off"
           placeholder="Digite apenas números"
           value={detranCredential}
           onChange={(e) => setDetranCredential(e.target.value.replace(/\D/g, ''))}
@@ -149,6 +154,8 @@ export const RegisterInstructor: React.FC = () => {
         <Input 
           label="Email" 
           type="email" 
+          name="email"
+          autoComplete="email"
           placeholder="seu@email.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -157,6 +164,8 @@ export const RegisterInstructor: React.FC = () => {
         <Input 
           label="WhatsApp para contato (obrigatório)" 
           type="tel" 
+          name="whatsapp"
+          autoComplete="tel"
           placeholder="Ex: 11999999999"
           value={whatsapp}
           onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, ''))}
@@ -174,6 +183,8 @@ export const RegisterInstructor: React.FC = () => {
           <Input 
             label="Senha" 
             type="password" 
+            name="password"
+            autoComplete="new-password"
             placeholder="Crie uma senha forte"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -186,6 +197,8 @@ export const RegisterInstructor: React.FC = () => {
         <Input 
           label="Confirmar senha" 
           type="password" 
+          name="confirmPassword"
+          autoComplete="new-password"
           placeholder="Repita sua senha"
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
@@ -207,12 +220,12 @@ export const RegisterInstructor: React.FC = () => {
         </div>
 
         <div className="pt-4">
-          <Button fullWidth onClick={handleRegister} disabled={loading}>
+          <Button fullWidth type="submit" disabled={loading}>
             {loading ? 'Criando conta...' : 'Criar conta'}
           </Button>
         </div>
 
-      </div>
+      </form>
 
       <div className="mt-8 mb-6 flex justify-center">
         <button 

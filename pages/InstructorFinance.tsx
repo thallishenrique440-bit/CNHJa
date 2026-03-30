@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
+import { Info } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
@@ -85,6 +86,7 @@ export const InstructorFinance: React.FC = () => {
   
   // UI States
   const [showTipsInfoModal, setShowTipsInfoModal] = useState(false);
+  const [showPaymentsInfoModal, setShowPaymentsInfoModal] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Helper to format currency from cents
@@ -326,7 +328,16 @@ export const InstructorFinance: React.FC = () => {
     <div className="min-h-screen bg-gray-50 pb-24 sm:max-w-md sm:mx-auto relative flex flex-col">
       
       <div className="px-6 py-6 bg-white border-b border-gray-100 sticky top-0 z-20">
-        <h1 className="text-xl font-bold text-gray-900">Financeiro</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold text-gray-900">Financeiro</h1>
+          <button 
+            onClick={() => setShowPaymentsInfoModal(true)}
+            className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
+            title="Como funcionam os pagamentos"
+          >
+            <Info className="w-5 h-5" />
+          </button>
+        </div>
         <div className="flex items-center justify-between mt-1">
             <p className="text-xs text-gray-500">Gestão de repasses</p>
             
@@ -466,14 +477,15 @@ export const InstructorFinance: React.FC = () => {
                 }`}></div>
         </div>
 
-        <div className="space-y-2 text-xs text-gray-500 px-1">
-            <p>• Os pagamentos das aulas caem diretamente na sua conta Stripe Express.</p>
-            <p>• Os repasses para sua conta bancária são realizados automaticamente pelo Stripe, de acordo com as regras da conta Stripe Express.</p>
-            <p>• O saldo disponível e os repasses devem ser consultados diretamente no painel do Stripe.</p>
-            <p>• A plataforma aplica uma taxa fixa de 10% sobre cada aula. Essa taxa é vitalícia e não está sujeita a alterações.</p>
-            <p>• As taxas de processamento da Stripe são pagas pela própria plataforma, garantindo que você receba exatamente 90% do valor de cada aula.</p>
-            <p>• Caso deseje manter um valor líquido específico por aula, você pode ajustar o preço da aula em aproximadamente 10%, considerando a taxa da plataforma.</p>
-        </div>
+        <Button 
+          variant="outline" 
+          fullWidth 
+          onClick={() => setShowPaymentsInfoModal(true)}
+          className="bg-white border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 py-4 shadow-sm"
+        >
+          <Info className="w-4 h-4" />
+          Como funcionam os pagamentos
+        </Button>
 
         <div className="space-y-4 pt-2">
           <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Histórico de Aulas</h2>
@@ -583,6 +595,84 @@ export const InstructorFinance: React.FC = () => {
         </div>
 
       </div>
+
+      <Modal
+        isOpen={showPaymentsInfoModal}
+        onClose={() => setShowPaymentsInfoModal(false)}
+        title="💰 Como funcionam os pagamentos"
+        footer={
+           <Button fullWidth onClick={() => setShowPaymentsInfoModal(false)}>
+              Entendi
+            </Button>
+        }
+      >
+        <div className="space-y-6 text-left pb-4">
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              📊 Onde acompanhar seu saldo
+            </h4>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Você pode acompanhar valores disponíveis e repasses diretamente no painel do Stripe (sua conta digital conectada à plataforma).
+            </p>
+          </section>
+
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              ⚙️ Taxa da plataforma
+            </h4>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              A plataforma cobra uma taxa fixa de 10% por aula. Essa taxa é vitalícia e não está sujeita a alterações.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              💳 Pagamento das aulas
+            </h4>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              O pagamento das aulas é feito pelo aluno e cai diretamente na sua conta Stripe Express (sua carteira digital).
+            </p>
+          </section>
+
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              🏦 Repasse para sua conta
+            </h4>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              O Stripe realiza automaticamente os repasses para sua conta bancária cadastrada, conforme as regras da sua conta Stripe.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              💵 Quanto você recebe
+            </h4>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Você recebe exatamente 90% do valor de cada aula. As taxas de processamento do cartão são pagas pela plataforma. 
+              <span className="block mt-1 font-medium text-indigo-600">Exemplo: Se a aula custa R$ 100, R$ 90 são seus.</span>
+            </p>
+          </section>
+
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              📈 Ajuste de preço
+            </h4>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Se quiser manter um valor líquido específico, você pode ajustar o preço da aula em aproximadamente 10%.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
+              🔐 Confirmação de pagamentos
+            </h4>
+            <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
+              <p>📌 Os pagamentos são reservados no momento do agendamento e confirmados quando você aceita a aula.</p>
+              <p>📌 Em pacotes, o valor total é processado de uma vez para garantir todas as aulas.</p>
+            </div>
+          </section>
+        </div>
+      </Modal>
 
       <Modal
         isOpen={showTipsInfoModal}

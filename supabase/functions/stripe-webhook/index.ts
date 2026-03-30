@@ -80,33 +80,57 @@ Deno.serve(async (req: Request) => {
       case "payment_intent.succeeded": {
         const pi = event.data.object;
         const metadata = pi.metadata || {};
-        const { instructor_id, student_id, appointment_id, type } = metadata;
+        const { instructor_id, student_id, appointment_id, group_id, type } = metadata;
 
-        // A. Validação Obrigatória de Metadata
-        if (!instructor_id || !student_id || !appointment_id) {
+        // A. Validação de Metadata (Exige instructor_id, student_id e [appointment_id OU group_id])
+        if (!instructor_id || !student_id || (!appointment_id && !group_id)) {
           console.error(`❌ CRITICAL: Missing metadata for PI ${pi.id}. Metadata:`, JSON.stringify(metadata));
-          return new Response("Missing Metadata", { status: 200 });
+          return new Response("Missing Metadata", { status: 500 }); // AJUSTE: Status 500 para retry
         }
 
-        const txType = type || 'lesson_payment';
+        // AJUSTE: Tipo fixo para 'lesson_payment' se não for explicitamente 'tip'
+        const txType = type === 'tip' ? 'tip' : 'lesson_payment';
 
-        // B. Proteção contra Eventos Fora de Ordem (Anti-Downgrade)
-        // A constraint UNIQUE(stripe_payment_intent_id, type) garante que maybeSingle() seja seguro
-        const { data: existing } = await supabaseAdmin
-          .from('transactions')
-          .select('status, stripe_transfer_id')
-          .eq('stripe_payment_intent_id', pi.id)
-          .eq('type', txType)
-          .maybeSingle();
+        // B. Resolução de Agendamentos (Mapeamento Atômico)
+        let appointmentsToProcess = [];
+        
+        if (txType === 'lesson_payment') {
+          if (appointment_id) {
+            // Fluxo de aula única: usa o valor total do PI
+            appointmentsToProcess = [{ id: appointment_id, price: pi.amount }];
+          } else if (group_id) {
+            // Fluxo de combo: busca todas as aulas vinculadas ao grupo e instrutor
+            const { data: groupApts, error: groupError } = await supabaseAdmin
+              .from('appointments')
+              .select('id, price')
+              .eq('group_id', group_id)
+              .eq('instructor_id', instructor_id);
 
-        if (existing?.status === 'completed' && event.type === 'payment_intent.amount_capturable_updated') {
-          console.log(`ℹ️ PI ${pi.id} already completed. Skipping pending update.`);
-          break;
+            if (groupError || !groupApts || groupApts.length === 0) {
+              console.error(`❌ ERROR: No appointments found for group_id ${group_id}. PI: ${pi.id}`, groupError);
+              return new Response("Appointments Not Found", { status: 500 });
+            }
+
+            // AJUSTE: Validação de Consistência Financeira (Soma das aulas vs Total do PI)
+            const totalAptsPrice = groupApts.reduce((sum, apt) => sum + (apt.price || 0), 0);
+            if (totalAptsPrice !== pi.amount) {
+              console.error(`❌ CRITICAL: Price mismatch for group ${group_id}. Stripe: ${pi.amount}, DB: ${totalAptsPrice}`);
+              return new Response("Price Mismatch", { status: 500 });
+            }
+            appointmentsToProcess = groupApts;
+          }
+        } else {
+          // Caso de 'tip' (caixinha) - exige appointment_id
+          if (!appointment_id) {
+             console.error(`❌ ERROR: Missing appointment_id for tip. PI: ${pi.id}`);
+             return new Response("Missing Appointment ID for Tip", { status: 500 });
+          }
+          appointmentsToProcess = [{ id: appointment_id, price: pi.amount }];
         }
 
-        // C. Otimização: Retrieve de Charge apenas se necessário
-        let transferId = existing?.stripe_transfer_id || null;
-        if (!transferId && event.type === 'payment_intent.succeeded' && pi.latest_charge) {
+        // C. Otimização: Retrieve de Charge apenas se necessário (uma vez para o PI)
+        let transferId = null;
+        if (event.type === 'payment_intent.succeeded' && pi.latest_charge) {
           try {
             const chargeId = typeof pi.latest_charge === 'string' ? pi.latest_charge : pi.latest_charge.id;
             const charge = await stripe.charges.retrieve(chargeId);
@@ -118,50 +142,75 @@ Deno.serve(async (req: Request) => {
           }
         }
 
-        // D. Cálculo Financeiro (Centavos)
-        const amount = pi.amount;
-        const platform_fee = Math.floor(amount * 0.10);
-        const net_amount = amount - platform_fee;
-        const status = event.type === 'payment_intent.succeeded' ? 'completed' : 'pending';
+        // D. Loop de Processamento Idempotente
+        for (const item of appointmentsToProcess) {
+          // AJUSTE: Segurança no loop (valida ID)
+          if (!item.id) {
+            console.warn(`⚠️ Skipping invalid appointment record in PI ${pi.id}`);
+            continue;
+          }
 
-        // E. UPSERT Idempotente
-        const { error: txError } = await supabaseAdmin
-          .from('transactions')
-          .upsert({
-            stripe_payment_intent_id: pi.id,
-            type: txType,
-            student_id,
-            instructor_id,
-            appointment_id,
-            amount,
-            gross_amount: amount,
-            platform_fee,
-            net_amount,
-            status,
-            stripe_transfer_id: transferId,
-            description: txType === 'tip' ? 'Caixinha' : 'Pagamento de Aula',
-            metadata: metadata,
-            event_date: new Date().toISOString()
-          }, { onConflict: 'stripe_payment_intent_id,type' });
+          // AJUSTE: Proteção contra Eventos Fora de Ordem (Anti-Downgrade)
+          // A constraint UNIQUE(stripe_payment_intent_id, type, appointment_id) garante que maybeSingle() seja seguro
+          const { data: existing } = await supabaseAdmin
+            .from('transactions')
+            .select('status, stripe_transfer_id')
+            .eq('stripe_payment_intent_id', pi.id)
+            .eq('type', txType)
+            .eq('appointment_id', item.id)
+            .maybeSingle();
 
-        if (txError) {
-          console.error(`❌ Error upserting transaction for PI ${pi.id}:`, txError);
-          throw txError;
-        }
+          // AJUSTE: Proteção global contra downgrade de status
+          if (existing?.status === 'completed') {
+            console.log(`ℹ️ PI ${pi.id} / Apt ${item.id} already completed. Skipping update.`);
+            continue;
+          }
 
-        // F. Sincronização de Status da Aula (Apenas para lesson_payment)
-        if (txType !== 'tip') {
-          const aptStatus = status === 'completed' ? 'confirmed' : 'pending_approval';
-          const payStatus = status === 'completed' ? 'paid' : 'authorized';
-          
-          await supabaseAdmin
-            .from('appointments')
-            .update({ 
-              status: aptStatus, 
-              payment_status: payStatus, 
-              payment_intent_id: pi.id 
-            })
-            .eq('id', appointment_id);
+          // E. Cálculo Financeiro (Centavos)
+          const itemAmount = item.price;
+          const platform_fee = Math.floor(itemAmount * 0.10);
+          const net_amount = itemAmount - platform_fee;
+          const status = event.type === 'payment_intent.succeeded' ? 'completed' : 'pending';
+
+          // F. UPSERT Idempotente
+          const { error: txError } = await supabaseAdmin
+            .from('transactions')
+            .upsert({
+              stripe_payment_intent_id: pi.id,
+              type: txType,
+              student_id,
+              instructor_id,
+              appointment_id: item.id,
+              amount: itemAmount,
+              gross_amount: itemAmount,
+              platform_fee,
+              net_amount,
+              status,
+              stripe_transfer_id: transferId || existing?.stripe_transfer_id,
+              description: txType === 'tip' ? 'Caixinha' : 'Pagamento de Aula',
+              metadata: metadata,
+              event_date: new Date().toISOString()
+            }, { onConflict: 'stripe_payment_intent_id,type,appointment_id' });
+
+          if (txError) {
+            console.error(`❌ Error upserting transaction for PI ${pi.id} / apt ${item.id}:`, txError);
+            throw txError; // Força erro 500 para retry
+          }
+
+          // G. Sincronização de Status da Aula (Apenas para lesson_payment)
+          if (txType !== 'tip') {
+            const aptStatus = status === 'completed' ? 'confirmed' : 'pending_approval';
+            const payStatus = status === 'completed' ? 'paid' : 'authorized';
+            
+            await supabaseAdmin
+              .from('appointments')
+              .update({ 
+                status: aptStatus, 
+                payment_status: payStatus, 
+                payment_intent_id: pi.id 
+              })
+              .eq('id', item.id);
+          }
         }
         break;
       }

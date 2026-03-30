@@ -27,6 +27,8 @@ interface Lesson {
   difficulties?: string[];
   observations?: string;
   price?: number;
+  rescheduleRequestedAt?: string | null;
+  rescheduledAt?: string | null;
   // Metadata for cancellation message
   dateStr?: string;
   timeStr?: string;
@@ -135,8 +137,42 @@ export const InstructorAgenda: React.FC = () => {
   const [isActionLoading, setIsActionLoading] = useState(false);
 
   // Cancellation State
-  const [viewState, setViewState] = useState<'details' | 'cancel_form' | 'cancel_success'>('details');
+  const [viewState, setViewState] = useState<'details' | 'cancel_form' | 'cancel_success' | 'reschedule_picker'>('details');
   const [cancelReason, setCancelReason] = useState('');
+  
+  // Rescheduling State
+  const [isReschedulingModalOpen, setIsReschedulingModalOpen] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState(new Date());
+  const [rescheduleTime, setRescheduleTime] = useState<string | null>(null);
+  const [busySlotsForReschedule, setBusySlotsForReschedule] = useState<string[]>([]);
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
+
+  const fetchAvailabilityForReschedule = async (date: Date) => {
+    if (!session?.user) return;
+    setIsLoadingAvailability(true);
+    try {
+      const dateStr = date.toISOString().split('T')[0];
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('start_time')
+        .eq('instructor_id', session.user.id)
+        .eq('date', dateStr)
+        .neq('status', 'cancelled');
+
+      if (error) throw error;
+      setBusySlotsForReschedule(data.map(d => d.start_time));
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsLoadingAvailability(false);
+    }
+  };
+
+  useEffect(() => {
+    if (viewState === 'reschedule_picker') {
+      fetchAvailabilityForReschedule(rescheduleDate);
+    }
+  }, [viewState, rescheduleDate]);
 
   // FETCH SETTINGS FROM DB
   useEffect(() => {
@@ -270,6 +306,8 @@ export const InstructorAgenda: React.FC = () => {
                 category,
                 price,
                 group_id,
+                reschedule_requested_at,
+                rescheduled_at,
                 profiles:student_id (
                     full_name,
                     avatar_url,
@@ -330,6 +368,8 @@ export const InstructorAgenda: React.FC = () => {
                         experience: apt.profiles?.experience_level,
                         processType: apt.profiles?.cnh_process_type,
                         price: apt.price,
+                        rescheduleRequestedAt: apt.reschedule_requested_at,
+                        rescheduledAt: apt.rescheduled_at,
                         dateStr: apt.date,
                         timeStr: timeKey,
                         isReserved: isReserved,
@@ -709,6 +749,7 @@ export const InstructorAgenda: React.FC = () => {
         .from('appointments')
         .update({ 
           status: 'completed',
+          reschedule_requested_at: null,
           updated_at: new Date().toISOString()
         })
         .eq('id', selectedLesson.id);
@@ -717,6 +758,98 @@ export const InstructorAgenda: React.FC = () => {
       
       addToast('Aula finalizada com sucesso!', 'success');
       closeLessonModal();
+      fetchAppointments();
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleNoShow = async () => {
+    if (!selectedLesson) return;
+    
+    // Protection: already completed or no_show
+    if (selectedLesson.dbStatus === 'completed' || selectedLesson.dbStatus === 'no_show') {
+        addToast("Esta aula já foi finalizada ou marcada como falta.", "warning");
+        return;
+    }
+
+    if (!confirm("Isso encerrará a aula e consumirá o crédito do aluno. Confirmar falta (No-Show)?")) return;
+
+    setIsActionLoading(true);
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ 
+          status: 'no_show',
+          reschedule_requested_at: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedLesson.id);
+
+      if (error) throw error;
+      
+      addToast('Falta registrada com sucesso!', 'success');
+      closeLessonModal();
+      fetchAppointments();
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleRefuseReschedule = async () => {
+    if (!selectedLesson) return;
+    setIsActionLoading(true);
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ 
+          reschedule_requested_at: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedLesson.id);
+
+      if (error) throw error;
+      
+      addToast('Pedido de reagendamento recusado.', 'info');
+      closeLessonModal();
+      fetchAppointments();
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!selectedLesson || !rescheduleTime) return;
+    
+    setIsActionLoading(true);
+    try {
+      const dateStr = rescheduleDate.toISOString().split('T')[0];
+      const endTime = minutesToTime(timeToMinutes(rescheduleTime) + 50);
+
+      const { error } = await supabase
+        .from('appointments')
+        .update({ 
+          date: dateStr,
+          start_time: rescheduleTime,
+          end_time: endTime,
+          rescheduled_at: new Date().toISOString(),
+          reschedule_requested_at: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedLesson.id);
+
+      if (error) throw error;
+      
+      addToast('Aula reagendada com sucesso!', 'success');
+      setIsReschedulingModalOpen(false);
+      closeLessonModal();
+      fetchAppointments();
     } catch (error: any) {
       addToast(error.message, 'error');
     } finally {
@@ -735,7 +868,9 @@ export const InstructorAgenda: React.FC = () => {
             .update({ 
                 status: 'cancelled',
                 cancelled_by: 'instructor',
-                cancelled_reason: cancelReason 
+                cancelled_reason: cancelReason,
+                reschedule_requested_at: null,
+                updated_at: new Date().toISOString()
             })
             .eq('id', selectedLesson.id);
 
@@ -1038,6 +1173,16 @@ export const InstructorAgenda: React.FC = () => {
                       <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${config.textColor}`}>
                         {isCurrent ? "• Em andamento" : config.label}
                       </span>
+                      {lesson.rescheduleRequestedAt && (
+                        <span className="text-[8px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full animate-pulse border border-amber-200">
+                           Reagendamento solicitado
+                        </span>
+                      )}
+                      {lesson.rescheduledAt && (
+                        <span className="text-[8px] font-bold bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full border border-blue-100">
+                           Reagendado
+                        </span>
+                      )}
                     </div>
                     
                     <h3 className={`text-base font-bold truncate leading-tight ${isCurrent ? 'text-emerald-900' : 'text-gray-900'}`}>
@@ -1080,6 +1225,7 @@ export const InstructorAgenda: React.FC = () => {
         title={
             viewState === 'cancel_success' ? "Aula cancelada!" :
             viewState === 'cancel_form' ? "Cancelar aula" :
+            viewState === 'reschedule_picker' ? "Escolher novo horário" :
             selectedLesson?.status === 'pending' ? (groupLessons.length > 1 ? "Solicitação de Combo" : "Solicitação de aula") : 
             "Detalhes da aula"
         }
@@ -1097,6 +1243,15 @@ export const InstructorAgenda: React.FC = () => {
              <div className="space-y-3 w-full">
                 <Button fullWidth onClick={handleInstructorCancel} disabled={isActionLoading || cancelReason.length < 3} className="bg-red-600 hover:bg-red-700 text-white">
                    {isActionLoading ? 'Cancelando...' : 'Confirmar cancelamento'}
+                </Button>
+                <Button variant="outline" fullWidth onClick={() => setViewState('details')}>
+                   Voltar
+                </Button>
+             </div>
+          ) : viewState === 'reschedule_picker' ? (
+             <div className="space-y-3 w-full">
+                <Button fullWidth onClick={handleConfirmReschedule} disabled={isActionLoading || !rescheduleTime} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                   {isActionLoading ? 'Reagendando...' : 'Confirmar Reagendamento'}
                 </Button>
                 <Button variant="outline" fullWidth onClick={() => setViewState('details')}>
                    Voltar
@@ -1132,6 +1287,27 @@ export const InstructorAgenda: React.FC = () => {
               );
           })() : (
              <div className="space-y-3 w-full">
+                {/* Reschedule Request Actions */}
+                {selectedLesson?.rescheduleRequestedAt && (
+                    <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 space-y-2 mb-2">
+                        <Button 
+                            fullWidth 
+                            onClick={() => setViewState('reschedule_picker')}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                        >
+                            Remarcar Aula
+                        </Button>
+                        <Button 
+                            fullWidth 
+                            variant="outline" 
+                            onClick={handleRefuseReschedule}
+                            className="bg-white border-amber-200 text-amber-700 hover:bg-amber-100"
+                        >
+                            Manter Horário Atual
+                        </Button>
+                    </div>
+                )}
+
                 {selectedLesson?.status !== 'free' && selectedLesson?.status !== 'blocked' && (
                     <Button 
                        fullWidth 
@@ -1143,6 +1319,37 @@ export const InstructorAgenda: React.FC = () => {
                     </Button>
                 )}
                 
+                {/* Completion / No-Show Actions for In-Progress or Past Lessons */}
+                {(selectedLesson?.dbStatus === 'confirmed' || selectedLesson?.dbStatus === 'scheduled') && (() => {
+                    const now = new Date(Date.now() + serverTimeOffset);
+                    const [y, m, d] = selectedLesson.dateStr!.split('-').map(Number);
+                    const [h, min] = selectedLesson.timeStr!.split(':').map(Number);
+                    const lessonStart = new Date(y, m - 1, d, h, min);
+
+                    if (now >= lessonStart) {
+                        return (
+                            <div className="grid grid-cols-2 gap-3">
+                                <Button 
+                                    fullWidth 
+                                    variant="outline" 
+                                    onClick={handleNoShow}
+                                    className="border-red-200 text-red-600 hover:bg-red-50"
+                                >
+                                    Marcar Falta
+                                </Button>
+                                <Button 
+                                    fullWidth 
+                                    onClick={handleFinalizeLesson}
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                >
+                                    Aula Realizada
+                                </Button>
+                            </div>
+                        );
+                    }
+                    return null;
+                })()}
+
                 <Button fullWidth variant="outline" onClick={closeLessonModal} className="py-2.5 text-sm h-10 min-h-0">Fechar</Button>
                 
                 {/* Cancel Button for Scheduled/Confirmed Lessons - Only if not started yet */}
@@ -1205,9 +1412,72 @@ export const InstructorAgenda: React.FC = () => {
                     </div>
                 )}
 
+                {/* STATE: RESCHEDULE PICKER */}
+                {viewState === 'reschedule_picker' && (
+                    <div className="w-full">
+                        <p className="text-xs text-gray-500 mb-4 text-center">
+                            Selecione uma nova data e horário para esta aula.
+                        </p>
+                        
+                        <div className="mb-6">
+                            <DateSelector 
+                                selectedDate={rescheduleDate}
+                                onDateSelect={(date: Date) => {
+                                    setRescheduleDate(date);
+                                    setRescheduleTime(null);
+                                }}
+                            />
+                        </div>
+
+                        <div className="space-y-3">
+                            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider ml-1">Horários Disponíveis</h4>
+                            {isLoadingAvailability ? (
+                                <div className="flex justify-center py-8">
+                                    <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-3 gap-2">
+                                    {dynamicSlots.filter(s => !s.isLunch).map(s => {
+                                        const isBusy = busySlotsForReschedule.includes(s.start);
+                                        const isSelected = rescheduleTime === s.start;
+                                        
+                                        return (
+                                            <button
+                                                key={s.start}
+                                                disabled={isBusy}
+                                                onClick={() => setRescheduleTime(s.start)}
+                                                className={`
+                                                    py-2 rounded-lg text-xs font-bold transition-all border
+                                                    ${isSelected 
+                                                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' 
+                                                        : isBusy 
+                                                            ? 'bg-gray-50 border-gray-100 text-gray-300 cursor-not-allowed' 
+                                                            : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300 hover:bg-indigo-50'}
+                                                `}
+                                            >
+                                                {s.start}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 {/* STATE: DETAILS (DEFAULT) */}
                 {viewState === 'details' && (
                     <>
+                        {selectedLesson.rescheduleRequestedAt && (
+                            <div className="w-full mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start space-x-3 animate-pulse">
+                                <span className="text-xl">⏳</span>
+                                <div>
+                                    <p className="text-xs font-bold text-amber-800">Reagendamento Solicitado</p>
+                                    <p className="text-[10px] text-amber-700">O aluno solicitou a alteração deste horário (regra menor que 24h).</p>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-2xl border-2 border-white shadow-sm mb-3">
                             {selectedLesson.studentPhoto ? <img src={selectedLesson.studentPhoto} alt="" className="w-full h-full rounded-full object-cover" /> : "👤"}
                         </div>

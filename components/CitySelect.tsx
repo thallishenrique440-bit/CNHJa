@@ -83,8 +83,9 @@ export const CitySelect: React.FC<CitySelectProps> = ({
           }}
           disabled={disabled}
           placeholder={placeholder}
+          name="city"
+          autoComplete="address-level2"
           className="w-full px-4 py-3.5 rounded-xl bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-          autoComplete="off"
         />
         
         {/* Icons (Clear or Search) */}
