@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -135,6 +135,7 @@ export const InstructorAgenda: React.FC = () => {
   const [groupLessons, setGroupLessons] = useState<Lesson[]>([]); // NEW STATE FOR COMBO
   const [selectedDisplayStatus, setSelectedDisplayStatus] = useState<DisplayStatus | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const isSubmittingRef = useRef(false);
 
   // Cancellation State
   const [viewState, setViewState] = useState<'details' | 'cancel_form' | 'cancel_success' | 'reschedule_picker'>('details');
@@ -622,6 +623,8 @@ export const InstructorAgenda: React.FC = () => {
 
   const handleConfirmLesson = async () => {
     if (!selectedLesson) return;
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setIsActionLoading(true);
 
     try {
@@ -687,13 +690,17 @@ export const InstructorAgenda: React.FC = () => {
         }
     } finally {
         setIsActionLoading(false);
+        isSubmittingRef.current = false;
     }
   };
 
   const handleRejectLesson = async () => {
     if (!selectedLesson) return;
+    if (isSubmittingRef.current) return;
+    
     if (!confirm("Tem certeza que deseja recusar esta solicitação? O valor será estornado ao aluno.")) return;
 
+    isSubmittingRef.current = true;
     setIsActionLoading(true);
 
     try {
@@ -738,6 +745,7 @@ export const InstructorAgenda: React.FC = () => {
         }
     } finally {
         setIsActionLoading(false);
+        isSubmittingRef.current = false;
     }
   };
 
