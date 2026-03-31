@@ -168,7 +168,30 @@ Deno.serve(async (req: Request) => {
 
           // E. Cálculo Financeiro (Centavos)
           const itemAmount = item.price;
-          const platform_fee = Math.floor(itemAmount * 0.10);
+          
+          // AJUSTE: Usar valor REAL da taxa do Stripe (não recalcular no webhook)
+          // Isso garante que o que foi cobrado no Stripe seja o que está no banco.
+          const totalFee = pi.application_fee_amount || 0;
+          let platform_fee = 0;
+
+          if (appointmentsToProcess.length === 1) {
+            platform_fee = totalFee;
+          } else {
+            // AJUSTE 3: Divisão proporcional para combos
+            const index = appointmentsToProcess.indexOf(item);
+            const isLast = index === appointmentsToProcess.length - 1;
+            
+            if (isLast) {
+              // Ajusta diferença de centavos na última aula para evitar inconsistência
+              const previousFees = appointmentsToProcess
+                .slice(0, -1)
+                .reduce((sum, a) => sum + Math.floor(totalFee * (a.price / pi.amount)), 0);
+              platform_fee = totalFee - previousFees;
+            } else {
+              platform_fee = Math.floor(totalFee * (itemAmount / pi.amount));
+            }
+          }
+
           const net_amount = itemAmount - platform_fee;
           const status = event.type === 'payment_intent.succeeded' ? 'completed' : 'pending';
 

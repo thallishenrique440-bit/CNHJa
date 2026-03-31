@@ -110,8 +110,8 @@ Deno.serve(async (req: Request) => {
                  type: "lesson_payment",
                  amount: amountTotal,
                  gross_amount: amountTotal,
-                 platform_fee: Math.floor(amountTotal * 0.1),
-                 net_amount: amountTotal - Math.floor(amountTotal * 0.1),
+                 platform_fee: paymentIntent.application_fee_amount || 0,
+                 net_amount: amountTotal - (paymentIntent.application_fee_amount || 0),
                  status: "pending", // Pending capture
                  stripe_payment_intent_id: paymentIntentId,
                  description: `Reserva ${groupId} (Aguardando Aceite)`,

@@ -40,6 +40,39 @@ Deno.serve(async (req: Request) => {
       throw new Error('Token de usuário inválido ou expirado.');
     }
 
+    // 1.5 Gerenciar Cliente Stripe (Customer)
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('full_name, stripe_customer_id')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError) throw profileError;
+
+    let stripeCustomerId = profile.stripe_customer_id;
+
+    if (!stripeCustomerId) {
+      console.log(`Criando novo Cliente Stripe para o usuário ${user.id}`);
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: profile.full_name || undefined,
+        metadata: {
+          supabase_user_id: user.id
+        }
+      });
+      stripeCustomerId = customer.id;
+
+      await supabaseAdmin
+        .from('profiles')
+        .update({ stripe_customer_id: stripeCustomerId })
+        .eq('id', user.id);
+    }
+
     // 2. Ler corpo da requisição
     const body = await req.json();
     const { appointment_id, amount } = body;
@@ -48,12 +81,8 @@ Deno.serve(async (req: Request) => {
       throw new Error('Valor inválido. Use centavos inteiros (mínimo R$ 1,00).');
     }
 
-    // 3. Inicializar Supabase Admin
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
-
+    // 3. (Removido inicialização duplicada do supabaseAdmin)
+    
     // 4. Validar Aula (Appointment)
     // - Existe?
     // - Pertence ao aluno logado?
@@ -133,15 +162,15 @@ Deno.serve(async (req: Request) => {
     // Idempotency Key: appointment_id + student_id
     const idempotencyKey = `tip_${appointment_id}_${user.id}`;
 
-    // Cálculo da Taxa do Stripe (3.99% + R$ 0,39)
-    // A plataforma não cobra comissão, mas repassa o custo do Stripe para o instrutor
-    const stripeFee = Math.round(amount * 0.0399 + 39);
+    // AJUSTE: Regra da Caixinha (0% de taxa da plataforma)
+    const platformFee = 0;
 
-    console.log(`Creating TIP | Apt: ${appointment_id} | Student: ${user.id} | Instructor: ${apt.instructor_id} | Amount: ${amount} | Stripe Fee: ${stripeFee}`);
+    console.log(`Creating TIP | Apt: ${appointment_id} | Student: ${user.id} | Instructor: ${apt.instructor_id} | Amount: ${amount} | Platform Fee: ${platformFee}`);
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount),
       currency: 'brl',
+      customer: stripeCustomerId, // Vínculo com o cliente Stripe
       capture_method: 'automatic', // Cobrança imediata
       automatic_payment_methods: {
         enabled: true,
@@ -149,7 +178,7 @@ Deno.serve(async (req: Request) => {
       description: `Caixinha • Aula ${appointment_id}`,
       
       // Destination Charges (Split Payment)
-      application_fee_amount: stripeFee, // Reembolso da taxa do Stripe
+      application_fee_amount: platformFee, // 0 para caixinhas
       transfer_data: {
         destination: instructor.stripe_account_id,
       },
@@ -158,7 +187,8 @@ Deno.serve(async (req: Request) => {
         type: 'tip',
         appointment_id: String(appointment_id),
         student_id: String(user.id),
-        instructor_id: String(apt.instructor_id)
+        instructor_id: String(apt.instructor_id),
+        customer_id: stripeCustomerId
       },
       
     }, { idempotencyKey });

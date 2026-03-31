@@ -57,11 +57,47 @@ Deno.serve(async (req: any) => {
       Deno.env.get('SUPABASE_ANON_KEY') ?? ''
     )
 
+    // 3.5 Inicializar Supabase Admin (Necessário para buscar perfil e gerenciar slots)
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
     // 4. Validar Usuário
     const { data: { user }, error: userError } = await supabaseAuthClient.auth.getUser(token)
     
     if (userError || !user) {
-      throw new Error('Token de usuário inválido ou expirado.');
+      throw new Error('Token de usuário inválido or expirado.');
+    }
+
+    // 4.5 Gerenciar Cliente Stripe (Customer)
+    // Buscamos o stripe_customer_id no perfil do usuário
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('full_name, stripe_customer_id')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError) throw profileError;
+
+    let stripeCustomerId = profile.stripe_customer_id;
+
+    if (!stripeCustomerId) {
+      console.log(`Criando novo Cliente Stripe para o usuário ${user.id}`);
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: profile.full_name || undefined,
+        metadata: {
+          supabase_user_id: user.id
+        }
+      });
+      stripeCustomerId = customer.id;
+
+      // Salvar de volta no perfil para reutilização futura
+      await supabaseAdmin
+        .from('profiles')
+        .update({ stripe_customer_id: stripeCustomerId })
+        .eq('id', user.id);
     }
 
     // 5. Ler corpo da requisição
@@ -78,11 +114,7 @@ Deno.serve(async (req: any) => {
         throw new Error('Categoria da aula (A ou B) é obrigatória.');
     }
 
-    // 6. Inicializar Supabase Admin
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
+    // 6. (Removido inicialização duplicada do supabaseAdmin)
 
     const dates = slots.map((s: any) => s.date)
     const times = slots.map((s: any) => s.time)
@@ -337,6 +369,7 @@ Deno.serve(async (req: any) => {
         paymentIntent = await stripe.paymentIntents.create({
           amount: finalUnitAmount,
           currency: 'brl',
+          customer: stripeCustomerId, // Vínculo com o cliente Stripe
           capture_method: 'manual', // AUTH ONLY: O valor é reservado, mas não cobrado
           automatic_payment_methods: {
             enabled: true,
@@ -345,6 +378,7 @@ Deno.serve(async (req: any) => {
           
           // Destination Charges (Split Payment)
           application_fee_amount: platformFee, // Inteiro
+          on_behalf_of: instructorData.stripe_account_id, // Transparência: Instrutor como negócio de registro
           transfer_data: {
             destination: instructorData.stripe_account_id,
           },
@@ -352,7 +386,8 @@ Deno.serve(async (req: any) => {
           metadata: {
             group_id: String(groupId),
             student_id: String(user.id),
-            instructor_id: String(instructor_id)
+            instructor_id: String(instructor_id),
+            customer_id: stripeCustomerId // Redundância para auditoria
           },
           
         }, { idempotencyKey: groupId });

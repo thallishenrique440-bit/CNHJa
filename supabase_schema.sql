@@ -212,7 +212,11 @@ GRANT ALL ON public.appointments TO service_role;
 -- MIGRATION: STRIPE CONNECT EXPRESS (MARKETPLACE)
 -- ==============================================================================
 
--- 1. Atualizar tabela INSTRUCTORS para vincular conta Stripe
+-- 1. Atualizar tabela PROFILES para vincular cliente Stripe
+ALTER TABLE public.profiles
+ADD COLUMN IF NOT EXISTS stripe_customer_id text;
+
+-- 2. Atualizar tabela INSTRUCTORS para vincular conta Stripe
 ALTER TABLE public.instructors
 ADD COLUMN IF NOT EXISTS stripe_account_id text, -- ID da conta Express (acct_...)
 ADD COLUMN IF NOT EXISTS stripe_onboarding_completed boolean DEFAULT false, -- Se completou o fluxo
