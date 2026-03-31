@@ -177,21 +177,22 @@ Deno.serve(async (req: Request) => {
             .from("appointments")
             .update({
               status: "confirmed",
-              payment_status: "captured",
+              payment_status: "paid",
               updated_by: instructorId
             })
             .eq("group_id", groupId)
             .neq("status", "completed")
             .neq("status", "confirmed");
 
-          // 2. Update Transaction -> completed
+          // 2. Update Transaction -> captured
           await supabaseAdmin
             .from("transactions")
             .update({
-              status: "completed",
+              status: "captured",
               description: `Pagamento Confirmado (Capturado)`
             })
-            .eq("stripe_payment_intent_id", paymentIntentId);
+            .eq("stripe_payment_intent_id", paymentIntentId)
+            .not("status", "in", '("completed", "captured")');
         }
         break;
       }
@@ -240,7 +241,8 @@ Deno.serve(async (req: Request) => {
               status: "failed",
               description: `Autorização Cancelada (Liberada)`
             })
-            .eq("stripe_payment_intent_id", paymentIntentId);
+            .eq("stripe_payment_intent_id", paymentIntentId)
+            .not("status", "in", '("completed", "captured")');
         }
         break;
       }

@@ -110,7 +110,7 @@ serve(async (req) => {
             console.log(`✅ Repairing ${id}: Stripe is succeeded.`)
             updates = {
                 status: 'confirmed', // or scheduled
-                payment_status: 'captured'
+                payment_status: 'paid'
             };
             action = 'repaired_succeeded';
         } else if (pi.status === 'canceled') {

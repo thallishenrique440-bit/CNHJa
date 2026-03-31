@@ -18,7 +18,7 @@ interface Transaction {
   gross_amount: number;
   platform_fee: number;
   net_amount: number;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'captured' | 'completed' | 'failed';
   appointment_id?: string;
   stripe_payout_id?: string;
   profiles: {
@@ -146,6 +146,7 @@ export const InstructorFinance: React.FC = () => {
                 profiles ( full_name )
             `)
             .eq('instructor_id', userId)
+            .in('status', ['captured', 'completed'])
             .order('event_date', { ascending: false });
 
         if (transError) throw transError;
@@ -161,47 +162,43 @@ export const InstructorFinance: React.FC = () => {
         let totalTip = 0;
         let monthTip = 0;
         
-        let pendingBal = 0;
-        let availableBal = 0;
-        let paidOutSum = 0;
+        let toReceiveBal = 0;
+        let transferredBal = 0;
 
         const now = new Date();
         const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
 
         typedTrans.forEach(t => {
+            // Include captured and completed
+            if (!['captured', 'completed'].includes(t.status)) return;
+
             const val = t.net_amount || 0;
 
-            // 1. Status-based balances
-            if (t.status === 'pending') {
-                pendingBal += val;
-            } else if (t.status === 'completed') {
-                if (t.stripe_payout_id) {
-                    paidOutSum += val;
-                } else {
-                    availableBal += val;
-                }
+            // 1. Payout-based balances
+            if (t.stripe_payout_id) {
+                transferredBal += val;
+            } else {
+                toReceiveBal += val;
             }
 
             // 2. Earnings Summary (Total historical earnings)
-            if (t.status === 'completed' || t.status === 'pending') {
-                const tDate = new Date(t.event_date || t.created_at);
-                const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
-                
-                if (t.type === 'lesson_payment') {
-                    totalRev += val;
-                    if (isCurrentMonth) monthRev += val;
-                } else if (t.type === 'tip') {
-                    totalRev += val;
-                    totalTip += val;
-                    if (isCurrentMonth) {
-                        monthRev += val;
-                        monthTip += val;
-                    }
-                } else if (t.type === 'refund') {
-                    totalRev += val;
-                    if (isCurrentMonth) monthRev += val;
+            const tDate = new Date(t.event_date || t.created_at);
+            const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
+            
+            if (t.type === 'lesson_payment') {
+                totalRev += val;
+                if (isCurrentMonth) monthRev += val;
+            } else if (t.type === 'tip') {
+                totalRev += val;
+                totalTip += val;
+                if (isCurrentMonth) {
+                    monthRev += val;
+                    monthTip += val;
                 }
+            } else if (t.type === 'refund') {
+                totalRev += val; // val is negative for refunds
+                if (isCurrentMonth) monthRev += val;
             }
         });
 
@@ -210,9 +207,9 @@ export const InstructorFinance: React.FC = () => {
         setTotalTips(totalTip);
         setMonthlyTips(monthTip);
         
-        setPendingBalance(pendingBal);
-        setAvailableBalance(availableBal);
-        setPaidOutTotal(paidOutSum);
+        setPendingBalance(0); // We no longer show pending in the main metrics
+        setAvailableBalance(toReceiveBal);
+        setPaidOutTotal(transferredBal);
 
         // --- Build History (Transactions ONLY) ---
         const items: HistoryItem[] = typedTrans.map(t => {
@@ -366,14 +363,25 @@ export const InstructorFinance: React.FC = () => {
         <div className="grid grid-cols-2 gap-4">
           {/* Main Balance - Full Width */}
           <div className="col-span-2 bg-indigo-600 p-5 rounded-2xl shadow-md flex flex-col justify-center text-white">
-            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-wide mb-1 block">Saldo Disponível</span>
+            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-wide mb-1 block">A Receber</span>
             <span className="text-3xl font-bold truncate block">
                 {loading ? '...' : formatCurrency(availableBalance)}
             </span>
             <div className="flex justify-between items-center mt-3 pt-3 border-t border-indigo-500/50">
-                <span className="text-[10px] text-indigo-200">A receber: <span className="text-white font-semibold">{formatCurrency(pendingBalance)}</span></span>
-                <span className="text-[10px] text-indigo-200 font-medium">Ganhos totais: {formatCurrency(totalRevenue)}</span>
+                <span className="text-[10px] text-indigo-200">Ganhos totais: <span className="text-white font-semibold">{formatCurrency(totalRevenue)}</span></span>
+                <span className="text-[10px] text-indigo-200 font-medium">Este mês: {formatCurrency(monthlyRevenue)}</span>
             </div>
+          </div>
+
+          {/* Fee Transparency Message */}
+          <div className="col-span-2 bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex items-center space-x-3">
+            <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <span className="text-indigo-600 text-xs font-bold">ℹ️</span>
+            </div>
+            <p className="text-[10px] text-indigo-800 leading-tight">
+              Você recebe <span className="font-bold text-indigo-900">90%</span> do valor de cada aula. 
+              A plataforma retém <span className="font-bold text-indigo-900">10%</span> para custos operacionais e de processamento.
+            </p>
           </div>
 
           {/* Tips Card */}
@@ -551,14 +559,17 @@ export const InstructorFinance: React.FC = () => {
                                         )}
                                     </span>
                                     <span className="text-[10px] text-gray-400">
-                                        {item.status === 'pending' && 'Processando'}
+                                        {item.status === 'pending' && 'Pendente'}
+                                        {item.status === 'captured' && (
+                                            <span className="text-blue-500 font-bold">Em processamento</span>
+                                        )}
                                         {item.status === 'completed' && (
                                             item.stripePayoutId 
                                                 ? 'Transferido' 
-                                                : 'Disponível'
+                                                : <span className="text-green-600 font-bold">Concluído</span>
                                         )}
                                         {item.status === 'failed' && 'Falha'}
-                                        {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
+                                        {!['pending', 'captured', 'completed', 'failed'].includes(item.status) && item.status}
                                     </span>
                                 </div>
                             </div>

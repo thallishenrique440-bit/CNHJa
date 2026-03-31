@@ -492,6 +492,7 @@ AS $$
 DECLARE
   updated_count integer;
 BEGIN
+  -- 1. Update Appointments
   UPDATE public.appointments
   SET 
     status = 'completed',
@@ -501,6 +502,18 @@ BEGIN
     AND (date + start_time) < (now() - interval '230 minutes');
     
   GET DIAGNOSTICS updated_count = ROW_COUNT;
+
+  -- 2. Update Transactions (captured -> completed)
+  -- Only for transactions linked to appointments that are now completed
+  UPDATE public.transactions t
+  SET 
+    status = 'completed',
+    description = 'Aula Concluída'
+  FROM public.appointments a
+  WHERE t.appointment_id = a.id
+    AND a.status = 'completed'
+    AND t.status = 'captured';
+
   RETURN updated_count;
 END;
 $$;

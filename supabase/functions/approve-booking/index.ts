@@ -93,7 +93,7 @@ serve(async (req) => {
     }
 
     // Idempotency: If the main appointment is already approved, return success
-    if (appointment.status === 'confirmed' && appointment.payment_status === 'captured') {
+    if (appointment.status === 'confirmed' && appointment.payment_status === 'paid') {
       return new Response(
         JSON.stringify({ message: 'Appointment already approved', appointment }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -219,7 +219,7 @@ serve(async (req) => {
       .from('appointments')
       .update({
         status: 'confirmed',
-        payment_status: 'captured',
+        payment_status: 'paid',
         updated_at: new Date().toISOString(),
         updated_by: user.id
       })
@@ -234,7 +234,7 @@ serve(async (req) => {
         .select('id, status, payment_status')
         .in('id', idsToConfirm);
       
-      const allConfirmed = checkGroup?.every(a => a.status === 'confirmed' && a.payment_status === 'captured');
+      const allConfirmed = checkGroup?.every(a => a.status === 'confirmed' && a.payment_status === 'paid');
       
       if (allConfirmed) {
         console.log(JSON.stringify({

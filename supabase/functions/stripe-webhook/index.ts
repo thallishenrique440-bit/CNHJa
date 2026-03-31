@@ -193,7 +193,7 @@ Deno.serve(async (req: Request) => {
           }
 
           const net_amount = itemAmount - platform_fee;
-          const status = event.type === 'payment_intent.succeeded' ? 'completed' : 'pending';
+          const status = event.type === 'payment_intent.succeeded' ? 'captured' : 'pending';
 
           // F. UPSERT Idempotente
           const { error: txError } = await supabaseAdmin
@@ -245,18 +245,18 @@ Deno.serve(async (req: Request) => {
         const pi = event.data.object;
         const paymentIntentId = pi.id;
 
-        // Proteção: Não cancelar se já estiver concluído (segurança extra)
+        // Proteção: Não cancelar se já estiver concluído ou capturado (segurança extra)
         await supabaseAdmin
           .from("transactions")
           .update({ status: "failed", description: "Autorização Cancelada/Expirada" })
           .eq("stripe_payment_intent_id", paymentIntentId)
-          .neq("status", "completed");
+          .not("status", "in", '("completed", "captured")');
 
         await supabaseAdmin
           .from("appointments")
           .update({ status: "cancelled", payment_status: "released" })
           .eq("payment_intent_id", paymentIntentId)
-          .neq("status", "completed");
+          .not("status", "in", '("completed", "confirmed")');
         break;
       }
 

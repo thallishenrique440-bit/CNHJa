@@ -13,7 +13,7 @@ interface Transaction {
   gross_amount: number;
   platform_fee: number;
   net_amount: number;
-  status: string;
+  status: 'pending' | 'captured' | 'completed' | 'failed';
   instructorName: string;
   appointment_id?: string;
 }
@@ -42,7 +42,7 @@ interface HistoryItem {
   grossAmount?: number;
   platformFee?: number;
   netAmount?: number;
-  status: string;
+  status: 'pending' | 'captured' | 'completed' | 'failed' | string;
   instructorName: string;
   appointmentDate?: string;
   appointmentTime?: string;
@@ -133,6 +133,8 @@ export const StudentFinance: React.FC = () => {
             )
           `)
           .eq('student_id', userId)
+          .in('status', ['captured', 'completed'])
+          .in('type', ['lesson_payment', 'tip'])
           .order('event_date', { ascending: false });
 
         if (transError) throw transError;
@@ -170,11 +172,9 @@ export const StudentFinance: React.FC = () => {
         // --- Process Financial Summary ---
         let totalSpent = 0;
         typedTrans.forEach(t => {
-          if (t.status === 'completed' || t.status === 'pending') {
-            // For students, we care about gross_amount
-            // Now refunds are already negative in the database, so we just add them
-            const val = t.gross_amount;
-            totalSpent += val;
+          // Include captured and completed
+          if (['captured', 'completed'].includes(t.status) && (t.type === 'lesson_payment' || t.type === 'tip')) {
+            totalSpent += t.gross_amount;
           }
         });
 
@@ -209,41 +209,13 @@ export const StudentFinance: React.FC = () => {
             sortDate: logicalDate,
             type: t.type === 'lesson_payment' ? 'lesson' : (t.type === 'tip' ? 'tip' : 'refund'),
             isFinancial: true,
-            amount: t.amount,
+            amount: t.gross_amount,
             grossAmount: t.gross_amount,
             platformFee: t.platform_fee,
             netAmount: t.net_amount,
             status: t.status,
             instructorName: t.instructorName
           });
-        });
-
-        // Add Active Appointments (not yet paid or confirmed)
-        const paidApptIds = new Set(typedTrans.filter(t => t.type === 'lesson_payment').map(t => t.appointment_id));
-        
-        typedAppts.forEach(a => {
-          if (a.status !== 'completed' && !paidApptIds.has(a.id)) {
-            const [hours, minutes] = (a.end_time || a.start_time).split(':').map(Number);
-            const [y, m, d] = a.date.split('-').map(Number);
-            const apptEndDate = new Date(y, m - 1, d, hours, minutes);
-            const isPast = apptEndDate < now;
-
-            const logicalDate = `${a.date}T${a.start_time}`;
-
-            items.push({
-              id: a.id,
-              timestamp: logicalDate,
-              sortDate: logicalDate,
-              type: 'lesson',
-              isFinancial: false,
-              amount: a.price,
-              status: a.status,
-              instructorName: a.instructorName,
-              appointmentDate: a.date,
-              appointmentTime: a.start_time,
-              isPast
-            });
-          }
         });
 
         // Sort by sortDate descending
@@ -323,8 +295,14 @@ export const StudentFinance: React.FC = () => {
                ))}
              </div>
           ) : historyItems.length === 0 ? (
-             <div className="text-center py-10 bg-white rounded-2xl border border-gray-100 border-dashed">
-                <p className="text-gray-400 text-sm">Nenhuma atividade encontrada.</p>
+             <div className="text-center py-12 bg-white rounded-2xl border border-gray-100 border-dashed px-6">
+                <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <span className="text-xl">⏳</span>
+                </div>
+                <h3 className="text-gray-900 font-bold text-sm mb-1">Aguardando processamento</h3>
+                <p className="text-gray-400 text-xs leading-relaxed">
+                  Se você realizou um pagamento recentemente, ele aparecerá aqui em alguns instantes assim que for confirmado.
+                </p>
              </div>
           ) : (
             <div className="space-y-3">
@@ -382,9 +360,14 @@ export const StudentFinance: React.FC = () => {
                               Falhou
                           </span>
                       )}
+                      {item.isFinancial && item.status === 'captured' && (
+                          <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
+                              Em processamento
+                          </span>
+                      )}
                       {item.isFinancial && item.status === 'completed' && (
                           <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
-                              Pago
+                              Concluído
                           </span>
                       )}
                     </div>
