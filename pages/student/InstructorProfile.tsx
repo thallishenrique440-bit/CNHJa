@@ -59,7 +59,7 @@ export const StudentInstructorProfile: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { session } = useAuth();
+  const { session, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
 
   // Data States
@@ -429,7 +429,7 @@ export const StudentInstructorProfile: React.FC = () => {
                 .select('start_time, status, student_id')
                 .eq('instructor_id', instructor.id)
                 .eq('date', dateKey)
-                .not('status', 'in', '("cancelled","failed","rejected","expired")'); 
+                .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
 
              if (instructorError) throw instructorError;
 
@@ -439,7 +439,7 @@ export const StudentInstructorProfile: React.FC = () => {
                 .select('start_time, status, instructor_id')
                 .eq('student_id', session.user.id)
                 .eq('date', dateKey)
-                .not('status', 'in', '("cancelled","failed","rejected","expired")');
+                .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
 
              if (studentError) throw studentError;
 
@@ -492,13 +492,10 @@ export const StudentInstructorProfile: React.FC = () => {
       const [dateStr, timeStr] = slotKey.split('|');
       
       // 1. Check if it's in the past
-      if (dateStr < dateKeyToday) return false;
-      if (dateStr === dateKeyToday) {
-        const [h, m] = timeStr.split(':').map(Number);
-        const slotTime = new Date();
-        slotTime.setHours(h, m, 0, 0);
-        if (slotTime < now) return false;
-      }
+      const now = new Date(Date.now() + serverTimeOffset);
+      const slotTime = new Date(`${dateStr}T${timeStr}:00-03:00`);
+      
+      if (slotTime <= now) return false;
 
       // 2. Check if it's busy on the CURRENT selected date
       // (We only have busySlots for the selectedDate)

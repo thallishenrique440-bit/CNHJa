@@ -157,10 +157,10 @@ export const InstructorAgenda: React.FC = () => {
         .select('start_time')
         .eq('instructor_id', session.user.id)
         .eq('date', dateStr)
-        .neq('status', 'cancelled');
+        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
 
       if (error) throw error;
-      setBusySlotsForReschedule(data.map(d => d.start_time));
+      setBusySlotsForReschedule(data.map(d => d.start_time.substring(0, 5)));
     } catch (error: any) {
       addToast(error.message, 'error');
     } finally {
@@ -832,6 +832,30 @@ export const InstructorAgenda: React.FC = () => {
       const dateStr = rescheduleDate.toISOString().split('T')[0];
       const endTime = minutesToTime(timeToMinutes(rescheduleTime) + 50);
 
+      // 1. Double check past time
+      const now = new Date(Date.now() + serverTimeOffset);
+      const slotDateTime = new Date(`${dateStr}T${rescheduleTime}:00-03:00`);
+      
+      if (slotDateTime <= now) {
+        throw new Error("Não é possível agendar para um horário no passado");
+      }
+
+      // 2. Double check availability
+      if (!session?.user?.id) throw new Error("Sessão não encontrada.");
+      const { data: conflict } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('instructor_id', session.user.id)
+        .eq('date', dateStr)
+        .eq('start_time', rescheduleTime)
+        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment'])
+        .neq('id', selectedLesson.id)
+        .maybeSingle();
+
+      if (conflict) {
+        throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
+      }
+
       const { error } = await supabase
         .from('appointments')
         .update({ 
@@ -844,7 +868,17 @@ export const InstructorAgenda: React.FC = () => {
         })
         .eq('id', selectedLesson.id);
 
-      if (error) throw error;
+      if (error) {
+        const isConflict = 
+          error.code === '23505' || 
+          error.message?.toLowerCase().includes('duplicate') || 
+          error.message?.toLowerCase().includes('unique');
+
+        if (isConflict) {
+          throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
+        }
+        throw error;
+      }
       
       addToast('Aula reagendada com sucesso!', 'success');
       setIsReschedulingModalOpen(false);
@@ -1441,16 +1475,24 @@ export const InstructorAgenda: React.FC = () => {
                                         const isBusy = busySlotsForReschedule.includes(s.start);
                                         const isSelected = rescheduleTime === s.start;
                                         
+                                        // Past time check
+                                        const dateStr = rescheduleDate.toISOString().split('T')[0];
+                                        const slotDateTime = new Date(`${dateStr}T${s.start}:00-03:00`);
+                                        const now = new Date(Date.now() + serverTimeOffset);
+                                        const isPast = slotDateTime <= now;
+                                        
+                                        const isDisabled = isBusy || isPast;
+                                        
                                         return (
                                             <button
                                                 key={s.start}
-                                                disabled={isBusy}
+                                                disabled={isDisabled}
                                                 onClick={() => setRescheduleTime(s.start)}
                                                 className={`
                                                     py-2 rounded-lg text-xs font-bold transition-all border
                                                     ${isSelected 
                                                         ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' 
-                                                        : isBusy 
+                                                        : isDisabled 
                                                             ? 'bg-gray-50 border-gray-100 text-gray-300 cursor-not-allowed' 
                                                             : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300 hover:bg-indigo-50'}
                                                 `}

@@ -690,14 +690,14 @@ export const StudentLessons: React.FC = () => {
           .select('id, start_time, status, student_id')
           .eq('instructor_id', lessonToReschedule.instructorId)
           .eq('date', dateKey)
-          .not('status', 'in', '("cancelled","failed","rejected","expired")');
+          .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
 
         const { data: studentData } = await supabase
           .from('appointments')
           .select('id, start_time, status, instructor_id')
           .eq('student_id', session.user.id)
           .eq('date', dateKey)
-          .not('status', 'in', '("cancelled","failed","rejected","expired")');
+          .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
 
         const busySlotsSet = new Set<string>();
         if (instructorData) {
@@ -732,6 +732,29 @@ export const StudentLessons: React.FC = () => {
     try {
       const dateKey = rescheduleDate.toISOString().split('T')[0];
       
+      // 1. Double check past time
+      const now = new Date(Date.now() + serverTimeOffset);
+      const slotDate = new Date(`${dateKey}T${rescheduleTime}:00-03:00`);
+      
+      if (slotDate <= now) {
+        throw new Error("Não é possível reagendar para um horário no passado.");
+      }
+
+      // 2. Double check availability
+      const { data: conflict } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('instructor_id', lessonToReschedule.instructorId)
+        .eq('date', dateKey)
+        .eq('start_time', rescheduleTime)
+        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment'])
+        .not('id', 'in', `(${lessonToReschedule.ids.join(',')})`)
+        .maybeSingle();
+
+      if (conflict) {
+        throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
+      }
+      
       // If it's a group, we need to update all appointments in sequence
       // For simplicity, we'll assume they are back-to-back 50min slots
       const updates = lessonToReschedule.ids.map((id, index) => {
@@ -758,7 +781,17 @@ export const StudentLessons: React.FC = () => {
 
       const results = await Promise.all(updates);
       const error = results.find(r => r.error)?.error;
-      if (error) throw error;
+      if (error) {
+        const isConflict = 
+          error.code === '23505' || 
+          error.message?.toLowerCase().includes('duplicate') || 
+          error.message?.toLowerCase().includes('unique');
+
+        if (isConflict) {
+          throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
+        }
+        throw error;
+      }
 
       addToast("Aula reagendada com sucesso! Aguarde a aprovação do instrutor.", "success");
       setLessonToReschedule(null);
@@ -1375,14 +1408,11 @@ export const StudentLessons: React.FC = () => {
 
                 // Past time check
                 let isPast = false;
-                const today = new Date();
-                if (rescheduleDate.toDateString() === today.toDateString()) {
-                  const [h, m] = time.split(':').map(Number);
-                  const now = new Date();
-                  const slotDate = new Date();
-                  slotDate.setHours(h, m, 0, 0);
-                  if (slotDate < now) isPast = true;
-                }
+                const now = new Date(Date.now() + serverTimeOffset);
+                const slotDate = new Date(rescheduleDate);
+                const [h, m] = time.split(':').map(Number);
+                slotDate.setHours(h, m, 0, 0);
+                if (slotDate <= now) isPast = true;
 
                 const isDisabled = isBusy || isSunday || isSatOff || isPast;
 

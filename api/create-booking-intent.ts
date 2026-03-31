@@ -177,7 +177,31 @@ export default async function handler(req: any, res: any) {
     const groupId = uuidv4();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
 
-    // 3.5 Cleanup previous abandoned checkouts by the same user for the same slots
+    // 3.5 Double check availability for ALL lessons in the batch
+    for (const lesson of lessons) {
+      const { data: conflict } = await supabase
+        .from('appointments')
+        .select('id, student_id, status')
+        .eq('instructor_id', instructorId)
+        .eq('date', lesson.date)
+        .eq('start_time', lesson.startTime)
+        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment'])
+        .maybeSingle();
+
+      if (conflict) {
+        // Allow retry if it's the same student and it's a temporary status
+        if (conflict.student_id === studentId && (conflict.status === 'awaiting_payment' || conflict.status === 'reserved')) {
+          // This will be cleaned up in the next step
+          continue; 
+        }
+        return res.status(409).json({ 
+          error: `O horário ${lesson.startTime} no dia ${lesson.date} já foi ocupado por outro aluno.`,
+          code: 'SLOT_TAKEN'
+        });
+      }
+    }
+
+    // 3.6 Cleanup previous abandoned checkouts by the same user for the same slots
     for (const lesson of lessons) {
       await supabase
           .from('appointments')
