@@ -149,7 +149,7 @@ export default async function handler(req: any, res: any) {
       .from('appointments')
       .update({
         status: 'confirmed',
-        payment_status: 'captured',
+        payment_status: 'paid',
         updated_at: new Date().toISOString()
       })
       .eq('group_id', appointment.group_id);

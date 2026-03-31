@@ -19,11 +19,16 @@ serve(async (req) => {
 
   try {
     // 1. Setup Clients
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Missing Authorization header');
+    }
+
     // Auth Client: Validates user identity and RLS for reads
     const authClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+      { global: { headers: { Authorization: authHeader } } }
     )
 
     // Admin Client: Guarantees critical writes (bypassing RLS)
@@ -213,65 +218,21 @@ serve(async (req) => {
       }
     }
 
-    // 5. Persist (DB): Update Status for ALL appointments in the group
-    const idsToConfirm = appointmentsToApprove.map(a => a.id);
-    const { data: updatedAppointments, error: updateError } = await adminClient
-      .from('appointments')
-      .update({
-        status: 'confirmed',
-        payment_status: 'paid',
-        updated_at: new Date().toISOString(),
-        updated_by: user.id
-      })
-      .in('id', idsToConfirm)
-      .in('status', ['pending_approval', 'pending', 'awaiting_payment']) // Optimistic Lock
-      .select()
-
-    if (updateError || !updatedAppointments || updatedAppointments.length !== idsToConfirm.length) {
-      // Update failed or was partial. Check if it was because of race condition (webhook beat us)
-      const { data: checkGroup } = await adminClient
-        .from('appointments')
-        .select('id, status, payment_status')
-        .in('id', idsToConfirm);
-      
-      const allConfirmed = checkGroup?.every(a => a.status === 'confirmed' && a.payment_status === 'paid');
-      
-      if (allConfirmed) {
-        console.log(JSON.stringify({
-          event: "approve_group_sync_success",
-          group_id: appointment.group_id,
-          message: "Group already confirmed (likely race condition with webhook)"
-        }));
-        return new Response(
-          JSON.stringify({ message: 'Booking approved successfully (synced)', count: idsToConfirm.length }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-      }
-
-      // If we are here, some appointments are NOT confirmed but payment WAS captured.
-      console.error(JSON.stringify({
-        event: "CRITICAL_PAYMENT_SYNC_ERROR",
-        group_id: appointment.group_id,
-        payment_intent_id: appointment.payment_intent_id,
-        error: updateError?.message || "Partial update or status mismatch",
-        expected_ids: idsToConfirm,
-        actual_status: checkGroup?.map(a => `${a.id}:${a.status}`)
-      }));
-
-      throw new Error('Falha crítica: O pagamento foi capturado mas o banco de dados não pôde ser atualizado totalmente. Nossa equipe foi notificada para reconciliação manual.');
-    }
-
+    // 5. Return Success (Capture Initiated)
+    // We NO LONGER update the database here to avoid race conditions with the Stripe Webhook.
+    // The Webhook (payment_intent.succeeded) is now the single source of truth for confirmation.
     console.log(JSON.stringify({
-      event: "approve_group_success",
+      event: "approve_group_capture_initiated",
       group_id: appointment.group_id,
-      count: updatedAppointments.length
+      payment_intent_id: appointment.payment_intent_id,
+      count: appointmentsToApprove.length
     }));
 
     return new Response(
       JSON.stringify({ 
-        message: 'Booking group approved successfully', 
-        count: updatedAppointments.length,
-        appointments: updatedAppointments 
+        message: 'Captura de pagamento iniciada. A confirmação será processada em instantes.', 
+        status: 'processing',
+        count: appointmentsToApprove.length
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

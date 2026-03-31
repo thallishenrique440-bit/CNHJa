@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -289,6 +289,7 @@ export const InstructorAgenda: React.FC = () => {
 
   // --- REAL DATA STATE ---
   const [appointments, setAppointments] = useState<Record<string, Lesson>>({});
+  const [confirmingLessons, setConfirmingLessons] = useState<Record<string, boolean>>({});
 
   const fetchAppointments = React.useCallback(async () => {
     if (!session?.user) return;
@@ -389,6 +390,15 @@ export const InstructorAgenda: React.FC = () => {
     }
   }, [selectedDate, session]);
 
+  // Debounce mechanism for Realtime
+  const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fetchAppointmentsDebounced = React.useCallback(() => {
+    if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+    fetchTimeoutRef.current = setTimeout(() => {
+      fetchAppointments();
+    }, 200);
+  }, [fetchAppointments]);
+
   // Initial Fetch & Realtime Subscription
   useEffect(() => {
     fetchAppointments();
@@ -407,17 +417,18 @@ export const InstructorAgenda: React.FC = () => {
         },
         (payload) => {
            // Refresh data when any appointment changes for this instructor
-           // We could optimize to check if the date matches, but simple refetch is safer
+           // We use debounce to group multiple rapid updates (e.g. group bookings)
            console.log('Realtime update:', payload);
-           fetchAppointments();
+           fetchAppointmentsDebounced();
         }
       )
       .subscribe();
 
     return () => {
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
       supabase.removeChannel(channel);
     };
-  }, [fetchAppointments, session]);
+  }, [fetchAppointments, fetchAppointmentsDebounced, session]);
 
   const getSlotData = (date: Date, slot: TimeSlot): Lesson => {
     if (slot.isLunch) return { id: 'lunch', status: 'lunch' };
@@ -654,6 +665,24 @@ export const InstructorAgenda: React.FC = () => {
             throw new Error(data.error);
         }
 
+        if (data?.status === 'processing') {
+            addToast("Processando pagamento... A aula será confirmada em instantes.", 'info');
+            
+            // Set local confirming state for the lesson and any group lessons
+            const lessonsToMark = groupLessons.length > 0 ? groupLessons : (selectedLesson ? [selectedLesson] : []);
+            if (lessonsToMark.length > 0) {
+                setConfirmingLessons(prev => {
+                    const next = { ...prev };
+                    lessonsToMark.forEach(l => { next[l.id] = true; });
+                    return next;
+                });
+            }
+
+            closeLessonModal();
+            return;
+        }
+
+        // Fallback for direct success (if any)
         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
         if (keyToUpdate) {
             setAppointments(prev => ({
@@ -1064,6 +1093,7 @@ export const InstructorAgenda: React.FC = () => {
              </div>
         ) : sortedSlots.map(({ slot, lesson, displayStatus, queueGroup }) => {
           const isCurrent = displayStatus === 'in_progress';
+          const isConfirming = confirmingLessons[lesson.id];
           
           const statusConfig: Record<string, { 
             label: string, 
@@ -1074,10 +1104,10 @@ export const InstructorAgenda: React.FC = () => {
             isDashed?: boolean
           }> = {
             pending: { 
-              label: "Solicitação Pendente", 
-              borderColor: "border-l-amber-400", 
-              bgColor: "bg-amber-50/30", 
-              textColor: "text-amber-700",
+              label: isConfirming ? "Processando pagamento..." : "Solicitação Pendente", 
+              borderColor: isConfirming ? "border-l-blue-400" : "border-l-amber-400", 
+              bgColor: isConfirming ? "bg-blue-50/30" : "bg-amber-50/30", 
+              textColor: isConfirming ? "text-blue-700" : "text-amber-700",
               showDot: true 
             },
             past_pending: { 

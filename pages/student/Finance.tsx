@@ -13,7 +13,7 @@ interface Transaction {
   gross_amount: number;
   platform_fee: number;
   net_amount: number;
-  status: 'pending' | 'captured' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed';
   instructorName: string;
   appointment_id?: string;
 }
@@ -42,7 +42,7 @@ interface HistoryItem {
   grossAmount?: number;
   platformFee?: number;
   netAmount?: number;
-  status: 'pending' | 'captured' | 'completed' | 'failed' | string;
+  status: 'pending' | 'completed' | 'failed' | string;
   instructorName: string;
   appointmentDate?: string;
   appointmentTime?: string;
@@ -133,7 +133,7 @@ export const StudentFinance: React.FC = () => {
             )
           `)
           .eq('student_id', userId)
-          .in('status', ['captured', 'completed'])
+          .in('status', ['completed'])
           .in('type', ['lesson_payment', 'tip'])
           .order('event_date', { ascending: false });
 
@@ -173,7 +173,7 @@ export const StudentFinance: React.FC = () => {
         let totalSpent = 0;
         typedTrans.forEach(t => {
           // Include captured and completed
-          if (['captured', 'completed'].includes(t.status) && (t.type === 'lesson_payment' || t.type === 'tip')) {
+          if (['completed'].includes(t.status) && (t.type === 'lesson_payment' || t.type === 'tip')) {
             totalSpent += t.gross_amount;
           }
         });
@@ -360,7 +360,7 @@ export const StudentFinance: React.FC = () => {
                               Falhou
                           </span>
                       )}
-                      {item.isFinancial && item.status === 'captured' && (
+                      {item.isFinancial && item.status === 'completed' && (
                           <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
                               Em processamento
                           </span>

@@ -512,7 +512,7 @@ BEGIN
   FROM public.appointments a
   WHERE t.appointment_id = a.id
     AND a.status = 'completed'
-    AND t.status = 'captured';
+    AND t.status = 'pending';
 
   RETURN updated_count;
 END;

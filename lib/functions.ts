@@ -28,7 +28,13 @@ export async function invokeSecureFunction<T = any>(
     }
 
     // 2. Invoke the function with the guaranteed valid session
-    const { data, error } = await supabase.functions.invoke(functionName, options);
+    const { data, error } = await supabase.functions.invoke(functionName, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
 
     return { data, error };
   } catch (err) {

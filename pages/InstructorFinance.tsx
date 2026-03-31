@@ -18,7 +18,7 @@ interface Transaction {
   gross_amount: number;
   platform_fee: number;
   net_amount: number;
-  status: 'pending' | 'captured' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed';
   appointment_id?: string;
   stripe_payout_id?: string;
   profiles: {
@@ -146,7 +146,7 @@ export const InstructorFinance: React.FC = () => {
                 profiles ( full_name )
             `)
             .eq('instructor_id', userId)
-            .in('status', ['captured', 'completed'])
+            .in('status', ['completed'])
             .order('event_date', { ascending: false });
 
         if (transError) throw transError;
@@ -171,7 +171,7 @@ export const InstructorFinance: React.FC = () => {
 
         typedTrans.forEach(t => {
             // Include captured and completed
-            if (!['captured', 'completed'].includes(t.status)) return;
+            if (!['completed'].includes(t.status)) return;
 
             const val = t.net_amount || 0;
 
@@ -560,7 +560,7 @@ export const InstructorFinance: React.FC = () => {
                                     </span>
                                     <span className="text-[10px] text-gray-400">
                                         {item.status === 'pending' && 'Pendente'}
-                                        {item.status === 'captured' && (
+                                        {item.status === 'completed' && (
                                             <span className="text-blue-500 font-bold">Em processamento</span>
                                         )}
                                         {item.status === 'completed' && (
@@ -569,7 +569,7 @@ export const InstructorFinance: React.FC = () => {
                                                 : <span className="text-green-600 font-bold">Concluído</span>
                                         )}
                                         {item.status === 'failed' && 'Falha'}
-                                        {!['pending', 'captured', 'completed', 'failed'].includes(item.status) && item.status}
+                                        {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
                                     </span>
                                 </div>
                             </div>

@@ -121,7 +121,7 @@ export default async function handler(req: any, res: any) {
             .from('appointments')
             .update({
               status: 'confirmed',
-              payment_status: 'captured',
+              payment_status: 'paid',
             })
             .eq('group_id', groupId)
             .neq('status', 'completed')
