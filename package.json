@@ -7,7 +7,7 @@
     "node": "20.x"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "tsx server.ts",
     "build": "rm -rf dist && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit"

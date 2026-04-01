@@ -152,7 +152,8 @@ export default async function handler(req: any, res: any) {
         payment_status: 'paid',
         updated_at: new Date().toISOString()
       })
-      .eq('group_id', appointment.group_id);
+      .eq('group_id', appointment.group_id)
+      .in('status', ['pending_approval', 'confirmed']); // Defensive: Only update if still pending or already confirmed by webhook
 
     if (updateError) {
       throw updateError;

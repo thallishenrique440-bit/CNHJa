@@ -13,7 +13,8 @@ export type LessonDBStatus =
   | 'no_show';
 
 export type LessonDisplayStatus = 
-  | 'pending'           // Aguardando aprovação
+  | 'pending'           // Aguardando aprovação (legacy/fallback)
+  | 'pending_approval'  // Aguardando aprovação do instrutor
   | 'confirmed'         // Confirmada (futura)
   | 'in_progress'       // Em andamento (agora)
   | 'awaiting_completion' // Aguardando finalização (passada mas não concluída no banco)
@@ -42,7 +43,7 @@ export function getDerivedStatus(
   // Defensive checks for missing or invalid inputs
   if (!dateStr || !startTimeStr || !endTimeStr) {
     console.warn('getDerivedStatus: Missing required time fields', { dateStr, startTimeStr, endTimeStr });
-    return (dbStatus === 'pending_approval' ? 'pending' : dbStatus) as LessonDisplayStatus;
+    return dbStatus as LessonDisplayStatus;
   }
 
   // Parsing date and time
@@ -53,7 +54,7 @@ export function getDerivedStatus(
   const endParts = endTimeStr.split(':').map(Number);
 
   if (dateParts.length < 3 || startParts.length < 2 || endParts.length < 2) {
-    return (dbStatus === 'pending_approval' ? 'pending' : dbStatus) as LessonDisplayStatus;
+    return dbStatus as LessonDisplayStatus;
   }
 
   const [year, month, day] = dateParts;
@@ -68,7 +69,7 @@ export function getDerivedStatus(
 
   // Safety check for invalid dates
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    return (dbStatus === 'pending_approval' ? 'pending' : dbStatus) as LessonDisplayStatus;
+    return dbStatus as LessonDisplayStatus;
   }
 
   // Lógica baseada em tempo APENAS para aulas confirmadas ou agendadas
@@ -81,9 +82,6 @@ export function getDerivedStatus(
     
     return 'awaiting_completion';
   }
-
-  // Mapeamento necessário para compatibilidade com LessonDisplayStatus
-  if (dbStatus === 'pending_approval') return 'pending';
 
   // Para todos os outros status (cancelled, rejected, completed, expired, etc.), 
   // retorna o status original sem modificação baseada em tempo.

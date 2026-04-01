@@ -10,7 +10,7 @@ import { useToast } from '../contexts/ToastContext';
 import { getDerivedStatus as getSharedDerivedStatus, LessonDisplayStatus } from '../lib/lessonStatus';
 
 // --- Types ---
-type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'cancelled' | 'completed' | 'expired' | 'rejected';
+type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'pending_approval' | 'reserved' | 'cancelled' | 'completed' | 'expired' | 'rejected' | 'no_show';
 type DisplayStatus = LessonDisplayStatus | 'finished' | 'past_free' | 'past_pending' | 'cancelled_view' | 'unavailable';
 
 interface Lesson {
@@ -290,6 +290,10 @@ export const InstructorAgenda: React.FC = () => {
   // --- REAL DATA STATE ---
   const [appointments, setAppointments] = useState<Record<string, Lesson>>({});
   const [confirmingLessons, setConfirmingLessons] = useState<Record<string, boolean>>({});
+  const [refreshCounter, setRefreshCounter] = useState(0);
+  const [processingStartTimes, setProcessingStartTimes] = useState<Record<string, number>>({});
+  const [showVerifyButton, setShowVerifyButton] = useState<Record<string, boolean>>({});
+  const [hasAutoRefreshed, setHasAutoRefreshed] = useState<Record<string, boolean>>({});
 
   const fetchAppointments = React.useCallback(async () => {
     if (!session?.user) return;
@@ -388,7 +392,83 @@ export const InstructorAgenda: React.FC = () => {
     } finally {
         setLoading(false);
     }
-  }, [selectedDate, session]);
+  }, [selectedDate, session, refreshCounter]);
+
+  // --- UX RESILIENCE FOR PROCESSING STATES ---
+  useEffect(() => {
+    const now = Date.now();
+    const newStartTimes = { ...processingStartTimes };
+    const newShowVerify = { ...showVerifyButton };
+    const newAutoRefreshed = { ...hasAutoRefreshed };
+    let changed = false;
+
+    // Get all current processing IDs (from appointments)
+    const processingApts = Object.values(appointments).filter(a => a.status === 'reserved' || confirmingLessons[a.id]);
+
+    // Add new ones
+    processingApts.forEach(apt => {
+      if (!newStartTimes[apt.id]) {
+        newStartTimes[apt.id] = now;
+        changed = true;
+      }
+    });
+
+    // Remove old ones
+    Object.keys(newStartTimes).forEach(id => {
+      if (!processingApts.find(a => a.id === id)) {
+        delete newStartTimes[id];
+        delete newShowVerify[id];
+        delete newAutoRefreshed[id];
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      setProcessingStartTimes(newStartTimes);
+      setShowVerifyButton(newShowVerify);
+      setHasAutoRefreshed(newAutoRefreshed);
+    }
+  }, [appointments, confirmingLessons]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
+      const newShowVerify = { ...showVerifyButton };
+      const newAutoRefreshed = { ...hasAutoRefreshed };
+
+      Object.entries(processingStartTimes).forEach(([id, startTime]) => {
+        const elapsed = now - startTime;
+        
+        if (elapsed >= 10000 && !newAutoRefreshed[id]) {
+          console.log(`[UX Resilience] Auto-refreshing for ${id}...`);
+          window.dispatchEvent(new CustomEvent('refresh-agenda'));
+          newAutoRefreshed[id] = true;
+          changed = true;
+        }
+
+        if (elapsed >= 12000 && !newShowVerify[id]) {
+          newShowVerify[id] = true;
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        setShowVerifyButton(newShowVerify);
+        setHasAutoRefreshed(newAutoRefreshed);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [processingStartTimes, showVerifyButton, hasAutoRefreshed]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      setRefreshCounter(prev => prev + 1);
+    };
+    window.addEventListener('refresh-agenda', handleRefresh);
+    return () => window.removeEventListener('refresh-agenda', handleRefresh);
+  }, []);
 
   // Debounce mechanism for Realtime
   const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -1101,7 +1181,8 @@ export const InstructorAgenda: React.FC = () => {
             bgColor: string, 
             textColor: string, 
             showDot?: boolean,
-            isDashed?: boolean
+            isDashed?: boolean,
+            showVerify?: boolean
           }> = {
             pending: { 
               label: isConfirming ? "Processando pagamento..." : "Solicitação Pendente", 
@@ -1183,14 +1264,15 @@ export const InstructorAgenda: React.FC = () => {
 
           let config = statusConfig[displayStatus] || statusConfig.free;
           
-          // Especial case for reserved slots
-          if (displayStatus === 'blocked' && lesson.isReserved) {
+          // Special case for reserved or pending_approval slots
+          if (displayStatus === 'reserved' || displayStatus === 'pending_approval' || (displayStatus === 'blocked' && lesson.isReserved)) {
             config = {
-              label: "Reservando...",
-              borderColor: "border-l-yellow-400",
-              bgColor: "bg-yellow-50/50",
-              textColor: "text-yellow-700",
-              showDot: true
+              label: displayStatus === 'pending_approval' ? "Aguardando Aprovação" : "Processando...",
+              borderColor: "border-l-amber-400",
+              bgColor: "bg-amber-50/50",
+              textColor: "text-amber-700",
+              showDot: true,
+              showVerify: !!(lesson.id && showVerifyButton[lesson.id])
             };
           }
 
@@ -1244,6 +1326,17 @@ export const InstructorAgenda: React.FC = () => {
                       {config.showDot && <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />}
                       <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${config.textColor}`}>
                         {isCurrent ? "• Em andamento" : config.label}
+                        {config.showVerify && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.dispatchEvent(new CustomEvent('refresh-agenda'));
+                            }}
+                            className="block mt-1 text-[10px] font-bold text-blue-600 hover:text-blue-800 underline decoration-blue-300 underline-offset-2"
+                          >
+                            Verificar status
+                          </button>
+                        )}
                       </span>
                       {lesson.rescheduleRequestedAt && (
                         <span className="text-[8px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full animate-pulse border border-amber-200">

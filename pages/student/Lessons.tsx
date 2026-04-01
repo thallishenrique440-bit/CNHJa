@@ -230,6 +230,10 @@ export const StudentLessons: React.FC = () => {
   const hasPromptedReview = React.useRef(false);
 
   const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [refreshCounter, setRefreshCounter] = useState(0);
+  const [processingStartTimes, setProcessingStartTimes] = useState<Record<string, number>>({});
+  const [showVerifyButton, setShowVerifyButton] = useState<Record<string, boolean>>({});
+  const [hasAutoRefreshed, setHasAutoRefreshed] = useState<Record<string, boolean>>({});
 
   // --- FETCH PENDING REVIEW ---
   useEffect(() => {
@@ -413,7 +417,92 @@ export const StudentLessons: React.FC = () => {
     const interval = setInterval(fetchLessons, 30000);
     return () => clearInterval(interval);
 
-  }, [session, selectedDate]);
+  }, [session, selectedDate, refreshCounter]);
+
+  // --- UX RESILIENCE FOR PROCESSING STATES ---
+  useEffect(() => {
+    const now = Date.now();
+    const newStartTimes = { ...processingStartTimes };
+    const newShowVerify = { ...showVerifyButton };
+    const newAutoRefreshed = { ...hasAutoRefreshed };
+    let changed = false;
+
+    // Get all current processing group IDs
+    const processingGroups = new Set(
+      lessons
+        .filter(l => l.status === 'reserved' || l.status === 'pending_approval')
+        .map(l => l.id) // Using ID here as proxy for group if not grouped yet, but lessons are individual here
+    );
+
+    // Add new ones
+    processingGroups.forEach(id => {
+      if (!newStartTimes[id]) {
+        newStartTimes[id] = now;
+        changed = true;
+      }
+    });
+
+    // Remove old ones
+    Object.keys(newStartTimes).forEach(id => {
+      if (!processingGroups.has(id)) {
+        delete newStartTimes[id];
+        delete newShowVerify[id];
+        delete newAutoRefreshed[id];
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      setProcessingStartTimes(newStartTimes);
+      setShowVerifyButton(newShowVerify);
+      setHasAutoRefreshed(newAutoRefreshed);
+    }
+  }, [lessons]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
+      const newShowVerify = { ...showVerifyButton };
+      const newAutoRefreshed = { ...hasAutoRefreshed };
+
+      Object.entries(processingStartTimes).forEach(([id, startTime]) => {
+        const elapsed = now - startTime;
+        
+        // Auto-refresh at 10s
+        if (elapsed >= 10000 && !newAutoRefreshed[id]) {
+          console.log(`[UX Resilience] Auto-refreshing for ${id}...`);
+          // We can't easily call fetchLessons here without moving it out of useEffect or using a ref
+          // But we can trigger a refresh by updating a dummy state or calling a ref-stored function
+          window.dispatchEvent(new CustomEvent('refresh-lessons'));
+          newAutoRefreshed[id] = true;
+          changed = true;
+        }
+
+        // Show button at 12s
+        if (elapsed >= 12000 && !newShowVerify[id]) {
+          newShowVerify[id] = true;
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        setShowVerifyButton(newShowVerify);
+        setHasAutoRefreshed(newAutoRefreshed);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [processingStartTimes, showVerifyButton, hasAutoRefreshed]);
+
+  // Listener for auto-refresh
+  useEffect(() => {
+    const handleRefresh = () => {
+      setRefreshCounter(prev => prev + 1);
+    };
+    window.addEventListener('refresh-lessons', handleRefresh);
+    return () => window.removeEventListener('refresh-lessons', handleRefresh);
+  }, []);
 
   // Fetch Student Profile for Security Features
   useEffect(() => {
@@ -994,10 +1083,28 @@ export const StudentLessons: React.FC = () => {
     });
   }, [lessons, selectedDate]);
 
-  const renderStatusBadge = (status: LessonStatus) => {
+  const renderStatusBadge = (status: LessonStatus, groupId?: string) => {
     switch (status) {
       case 'confirmed': 
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Agendada</span>;
+      case 'reserved':
+      case 'pending_approval':
+        return (
+          <div className="flex flex-col items-end space-y-1">
+            <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 animate-pulse">Processando...</span>
+            {groupId && showVerifyButton[groupId] && (
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.dispatchEvent(new CustomEvent('refresh-lessons'));
+                }}
+                className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline decoration-blue-300 underline-offset-2"
+              >
+                Verificar status
+              </button>
+            )}
+          </div>
+        );
       case 'pending': 
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando</span>;
       case 'in_progress': 
@@ -1091,7 +1198,7 @@ export const StudentLessons: React.FC = () => {
                   </div>
                   
                   <div className="flex items-center">
-                      {renderStatusBadge(group.status)}
+                      {renderStatusBadge(group.status, group.ids[0])}
                   </div>
                 </div>
 

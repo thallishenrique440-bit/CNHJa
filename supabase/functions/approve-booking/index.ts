@@ -134,8 +134,12 @@ serve(async (req) => {
           reason: "start_time_passed"
         }));
         
-        // 1. Cancel Stripe PaymentIntent
+        // 1. Cancel Stripe PaymentIntent with metadata for reason
         try {
+          await stripe.paymentIntents.update(appointment.payment_intent_id, {
+            metadata: { cancellation_reason: 'auto_expired_start_time' }
+          });
+
           await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
             idempotencyKey: `auto_expire_group_${appointment.group_id || appointment.id}`
           })
@@ -144,19 +148,6 @@ serve(async (req) => {
             console.error('Failed to cancel Stripe PaymentIntent during auto-expiration:', stripeError)
           }
         }
-
-        // 2. Update DB for ALL pending appointments in the group
-        const idsToExpire = appointmentsToApprove.map(a => a.id);
-        await adminClient
-          .from('appointments')
-          .update({
-            status: 'expired',
-            payment_status: 'released',
-            cancelled_reason: 'auto_expired_start_time',
-            updated_at: new Date().toISOString(),
-            updated_by: user.id
-          })
-          .in('id', idsToExpire)
 
         return new Response(
           JSON.stringify({ error: 'Uma ou mais aulas deste combo já expiraram e não podem mais ser aceitas.', code: 'AUTH_EXPIRED' }),
@@ -194,17 +185,20 @@ serve(async (req) => {
           capturedIntent = retrievedIntent
           console.log('PaymentIntent was already succeeded. Proceeding.')
         } else if (retrievedIntent.status === 'canceled') {
-           // Auth expired. Fail safely for the whole group.
-           const idsToCancel = appointmentsToApprove.map(a => a.id);
-           await adminClient.from('appointments').update({
-             status: 'cancelled',
-             payment_status: 'failed',
-             cancelled_reason: 'auth_expired'
-           }).in('id', idsToCancel)
+           // Auth expired. 
+           // We NO LONGER update the database here. The Webhook will handle it.
+           // But we can ensure the metadata is correct if it wasn't already.
+           try {
+             await stripe.paymentIntents.update(appointment.payment_intent_id, {
+               metadata: { cancellation_reason: 'auth_expired' }
+             });
+           } catch (e) {
+             console.warn('Could not update metadata for expired PI:', e);
+           }
            
            return new Response(
             JSON.stringify({ 
-              error: 'Payment authorization expired. Appointments cancelled.',
+              error: 'Payment authorization expired. Appointments will be cancelled.',
               code: 'AUTH_EXPIRED'
             }),
             { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

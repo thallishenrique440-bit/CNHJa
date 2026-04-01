@@ -300,7 +300,8 @@ create table if not exists public.notifications (
   message text not null,
   type text not null check (type in ('booking_request', 'booking_accepted', 'booking_rejected', 'booking_cancelled', 'booking_expired', 'payment_released', 'reminder', 'system')),
   read boolean not null default false,
-  metadata jsonb -- Para linkar com appointment_id, etc.
+  metadata jsonb, -- Para linkar com appointment_id, etc.
+  idempotency_key text unique -- Chave única para evitar duplicidade (ex: type:group_id)
 );
 
 -- RLS para Notificações

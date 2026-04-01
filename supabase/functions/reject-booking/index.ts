@@ -118,6 +118,11 @@ serve(async (req) => {
     // 4. Act (Stripe): Cancel Payment Intent (if exists)
     if (appointment.payment_intent_id) {
       try {
+        // Update metadata before cancelling so the webhook knows the reason
+        await stripe.paymentIntents.update(appointment.payment_intent_id, {
+          metadata: { cancellation_reason: 'instructor_rejected' }
+        });
+
         await stripe.paymentIntents.cancel(
           appointment.payment_intent_id,
           {
@@ -148,66 +153,21 @@ serve(async (req) => {
       console.log('No PaymentIntent ID found. Skipping Stripe cancellation.')
     }
 
-    // 5. Persist (DB): Update Status for ALL appointments in the group
-    const idsToReject = appointmentsToReject.map(a => a.id);
-    const { data: updatedAppointments, error: updateError } = await adminClient
-      .from('appointments')
-      .update({
-        status: 'cancelled',
-        payment_status: 'released',
-        cancelled_by: 'instructor',
-        cancelled_reason: 'instructor_rejected',
-        updated_at: new Date().toISOString(),
-        updated_by: user.id
-      })
-      .in('id', idsToReject)
-      .in('status', ['pending_approval', 'pending', 'awaiting_payment']) // Optimistic Lock
-      .select()
-
-    if (updateError || !updatedAppointments || updatedAppointments.length !== idsToReject.length) {
-       // Check for sync
-       const { data: checkGroup } = await adminClient
-        .from('appointments')
-        .select('id, status, cancelled_reason')
-        .in('id', idsToReject);
-      
-      const allCancelled = checkGroup?.every(a => a.status === 'cancelled' && a.cancelled_reason === 'instructor_rejected');
-      
-      if (allCancelled) {
-        console.log(JSON.stringify({
-          event: "reject_group_sync_success",
-          group_id: appointment.group_id,
-          message: "Group already cancelled"
-        }));
-        return new Response(
-          JSON.stringify({ message: 'Booking rejected successfully (synced)', count: idsToReject.length }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-      }
-
-      console.error(JSON.stringify({
-        event: "CRITICAL_REJECT_SYNC_ERROR",
-        group_id: appointment.group_id,
-        payment_intent_id: appointment.payment_intent_id,
-        error: updateError?.message || "Partial update or status mismatch",
-        expected_ids: idsToReject,
-        actual_status: checkGroup?.map(a => `${a.id}:${a.status}`)
-      }));
-
-      throw new Error('Falha crítica: O pagamento foi cancelado mas o banco de dados não pôde ser atualizado totalmente. Nossa equipe foi notificada para reconciliação manual.');
-    }
-
+    // 5. Return Success (Cancellation Initiated)
+    // We NO LONGER update the database here to avoid race conditions with the Stripe Webhook.
+    // The Webhook (payment_intent.canceled) is now the single source of truth for cancellation.
     console.log(JSON.stringify({
-      event: "reject_group_success",
+      event: "reject_group_initiated",
       group_id: appointment.group_id,
-      count: updatedAppointments.length
+      payment_intent_id: appointment.payment_intent_id,
+      count: appointmentsToReject.length
     }));
 
     return new Response(
       JSON.stringify({ 
-        message: 'Booking group rejected successfully', 
-        count: updatedAppointments.length,
-        appointments: updatedAppointments 
+        message: 'Cancelamento iniciado. A reserva será liberada em instantes.', 
+        status: 'processing',
+        count: appointmentsToReject.length
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

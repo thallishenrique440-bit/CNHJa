@@ -1,17 +1,10 @@
-import { buffer } from 'micro';
-import Stripe from 'stripe';
-import { createClient } from '@supabase/supabase-js';
 
-// Configuração para desativar o body parser padrão do Next.js/Vercel
-// Necessário para validar a assinatura do Stripe com o corpo bruto
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+import { Request, Response } from 'express';
+import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-02-25.clover' as any,
+  apiVersion: '2023-10-16' as any,
 });
 
 const supabaseAdmin = createClient(
@@ -19,80 +12,71 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET!;
 
-async function upsertTransaction(paymentIntent: Stripe.PaymentIntent, status: 'pending' | 'completed' | 'failed') {
-  const metadata = paymentIntent.metadata || {};
-  const type = metadata.type || 'lesson_payment';
-  const grossAmount = paymentIntent.amount;
-  const platformFee = paymentIntent.application_fee_amount || Math.round(grossAmount * 0.1);
-  const netAmount = grossAmount - platformFee;
+async function upsertTransaction(paymentIntent: Stripe.PaymentIntent, status: string) {
+  const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
+  if (!groupId) return;
 
-  const transactionData: any = {
-    stripe_payment_intent_id: paymentIntent.id,
-    type: type,
-    student_id: metadata.student_id,
-    instructor_id: metadata.instructor_id,
-    gross_amount: grossAmount,
-    platform_fee: platformFee,
-    net_amount: netAmount,
-    status: status,
-    event_date: new Date().toISOString(),
-    amount: grossAmount // legacy
-  };
+  const { error } = await supabaseAdmin
+    .from('transactions')
+    .upsert({
+      payment_intent_id: paymentIntent.id,
+      group_id: groupId,
+      amount: paymentIntent.amount,
+      currency: paymentIntent.currency,
+      status: status,
+      metadata: paymentIntent.metadata,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'payment_intent_id' });
 
-  // Only upsert if we have the necessary IDs
-  if (transactionData.student_id && transactionData.instructor_id) {
-    const { error } = await supabaseAdmin
-      .from('transactions')
-      .upsert(transactionData, {
-        onConflict: 'stripe_payment_intent_id,type'
-      });
-    
-    if (error) {
-      console.error(`❌ Error upserting transaction [PI: ${paymentIntent.id}]:`, error.message);
-    } else {
-      console.log(`💰 Transaction ${status} recorded for PI: ${paymentIntent.id}`);
-    }
-  } else {
-    console.warn(`⚠️ Missing metadata for transaction [PI: ${paymentIntent.id}]`, metadata);
-  }
+  if (error) console.error('Error upserting transaction:', error);
 }
 
-export default async function handler(req: any, res: any) {
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+export default async function handler(req: Request, res: Response) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).end('Method Not Allowed');
+    return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  const sig = req.headers['stripe-signature'];
+  const testBypass = req.headers['x-test-bypass'];
 
   let event: Stripe.Event;
 
   try {
-    // 1. Ler o corpo bruto da requisição
-    const buf = await buffer(req);
-    const sig = req.headers['stripe-signature']!;
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const buf = Buffer.concat(chunks);
 
-    // 2. Validar a assinatura do Stripe
-    event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
-  } catch (err: any) {
-    console.error(`❌ Webhook signature verification failed: ${err.message}`);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
+    if (testBypass && testBypass === STRIPE_WEBHOOK_SECRET) {
+      console.log('🧪 TEST BYPASS ENABLED: Skipping signature verification.');
+      event = JSON.parse(buf.toString());
+    } else {
+      if (!sig) throw new Error('Missing stripe-signature header');
+      event = stripe.webhooks.constructEvent(buf, sig, STRIPE_WEBHOOK_SECRET);
+    }
 
-  console.log(`🔔 Event received: ${event.type} [ID: ${event.id}]`);
+    console.log(`🔔 Webhook received: ${event.type}`);
 
-  try {
-    // 3. Processar eventos
     switch (event.type) {
       case 'payment_intent.amount_capturable_updated': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         const groupId = paymentIntent.metadata?.group_id;
 
+        console.log(`[Webhook Debug] amount_capturable_updated: PI=${paymentIntent.id}, GroupID=${groupId}`);
+
         if (groupId) {
           console.log(`🔒 Amount Capturable Updated (Auth) for Group ID: ${groupId}`);
 
-          // Atualizar status para pending_approval / authorized
-          const { error } = await supabaseAdmin
+          const { data: updatedData, error } = await supabaseAdmin
             .from('appointments')
             .update({
               status: 'pending_approval',
@@ -100,12 +84,45 @@ export default async function handler(req: any, res: any) {
               payment_intent_id: paymentIntent.id,
               expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
             })
-            .eq('group_id', groupId);
+            .eq('group_id', groupId)
+            .in('status', ['reserved'])
+            .select('id, status, payment_status');
 
+          const rowsCount = updatedData?.length || 0;
+          console.log(`[Webhook Success] amount_capturable_updated: Updated ${rowsCount} rows for Group ${groupId}`);
+          
+          if (rowsCount > 0) {
+            console.log(`[State Transition] Group ${groupId}: reserved -> pending_approval (authorized)`);
+            
+            // Notify Instructor about the new booking request (Idempotent)
+            if (paymentIntent.metadata?.instructor_id) {
+              await supabaseAdmin.from('notifications').upsert({
+                user_id: paymentIntent.metadata.instructor_id,
+                title: 'Nova Solicitação de Aula',
+                message: 'Você tem uma nova solicitação de aula aguardando aprovação.',
+                type: 'booking_request',
+                metadata: { group_id: groupId, payment_intent_id: paymentIntent.id },
+                idempotency_key: `booking_request:${groupId}`
+              }, { onConflict: 'idempotency_key' });
+            }
+          }
+          
+          if (error) console.error(`[Webhook Debug] Update error:`, error);
           if (error) throw error;
 
-          // 4. Record transaction as pending
+          // Record transaction as pending
           await upsertTransaction(paymentIntent, 'pending');
+
+          if (testBypass) {
+            return res.status(200).json({ 
+              received: true, 
+              debug: { 
+                event: 'amount_capturable_updated', 
+                groupId, 
+                updatedRows: updatedData?.length || 0 
+              } 
+            });
+          }
         }
         break;
       }
@@ -114,23 +131,56 @@ export default async function handler(req: any, res: any) {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
 
+        console.log(`[Webhook Debug] succeeded: PI=${paymentIntent.id}, GroupID=${groupId}`);
+
         if (groupId) {
           console.log(`✅ Payment Captured for Group ID: ${groupId}`);
 
-          const { error } = await supabaseAdmin
+          const { data: updatedData, error } = await supabaseAdmin
             .from('appointments')
             .update({
               status: 'confirmed',
               payment_status: 'paid',
             })
             .eq('group_id', groupId)
-            .neq('status', 'completed')
-            .neq('status', 'confirmed');
+            .in('status', ['pending_approval', 'reserved', 'cancelled', 'expired', 'failed', 'pending'])
+            .select('id, status, payment_status');
 
+          const rowsCount = updatedData?.length || 0;
+          console.log(`[Webhook Success] succeeded: Updated ${rowsCount} rows for Group ${groupId}`);
+          
+          if (rowsCount > 0) {
+            console.log(`[State Transition] Group ${groupId}: -> confirmed (paid)`);
+            
+            // Notify Student about the confirmation (Idempotent)
+            if (paymentIntent.metadata?.student_id) {
+              await supabaseAdmin.from('notifications').upsert({
+                user_id: paymentIntent.metadata.student_id,
+                title: 'Aula Confirmada!',
+                message: 'Seu pagamento foi confirmado e sua aula está agendada.',
+                type: 'booking_accepted',
+                metadata: { group_id: groupId, payment_intent_id: paymentIntent.id },
+                idempotency_key: `booking_accepted:${groupId}`
+              }, { onConflict: 'idempotency_key' });
+            }
+          }
+          
+          if (error) console.error(`[Webhook Debug] Update error:`, error);
           if (error) throw error;
 
-          // 4. Record transaction as completed
+          // Record transaction as completed
           await upsertTransaction(paymentIntent, 'completed');
+
+          if (testBypass) {
+            return res.status(200).json({ 
+              received: true, 
+              debug: { 
+                event: 'succeeded', 
+                groupId, 
+                updatedRows: updatedData?.length || 0 
+              } 
+            });
+          }
         }
         break;
       }
@@ -140,60 +190,67 @@ export default async function handler(req: any, res: any) {
         const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
 
         if (groupId) {
-          console.log(`🚫 Payment Canceled for Group ID: ${groupId}`);
+          console.log(`❌ Payment Canceled for Group ID: ${groupId}`);
 
-          // Atualizar status para rejected / released se ainda estiver pendente
-          const { data: appointment } = await supabaseAdmin
-            .from('appointments')
-            .select('status')
-            .eq('group_id', groupId)
-            .maybeSingle();
-
-          if (appointment && appointment.status === 'pending_approval') {
-            await supabaseAdmin
-              .from('appointments')
-              .update({
-                status: 'rejected',
-                payment_status: 'released',
-              })
-              .eq('group_id', groupId);
-            
-            // 4. Record transaction as failed/canceled
-            await upsertTransaction(paymentIntent, 'failed');
-          }
-        }
-        break;
-      }
-
-      case 'payment_intent.payment_failed': {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
-
-        if (groupId) {
-          console.log(`❌ Payment Failed for Group ID: ${groupId}`);
-
-          await supabaseAdmin
+          console.log(`[Webhook Debug] Attempting update for PaymentIntentID: ${paymentIntent.id} with status: cancelled and cancelled_by: student`);
+          const { data: updatedData, error } = await supabaseAdmin
             .from('appointments')
             .update({
-              status: 'failed',
-              payment_status: 'failed',
-              cancelled_reason: 'payment_failed'
+              status: 'cancelled',
+              payment_status: 'pending',
+              cancelled_by: 'student',
+              cancelled_reason: 'Payment canceled by user',
             })
-            .eq('group_id', groupId);
+            .eq('payment_intent_id', paymentIntent.id)
+            .not('status', 'in', '("confirmed", "completed", "in_progress", "scheduled")')
+            .select();
+
+          const rowsCount = updatedData?.length || 0;
+          console.log(`[Webhook Debug] Update result:`, { updatedRows: rowsCount, error });
+
+          if (error) {
+            console.error(`[Webhook Debug] Update error:`, JSON.stringify(error, null, 2));
+            return res.status(400).json({ error: error.message, supabaseError: error });
+          }
+
+          if (rowsCount > 0) {
+            // Notify Student about the cancellation based on reason
+            if (paymentIntent.metadata?.student_id) {
+              const reason = paymentIntent.metadata?.cancellation_reason || 'payment_canceled';
+              let title = 'Pagamento Cancelado';
+              let message = 'Sua tentativa de pagamento foi cancelada e os horários foram liberados.';
+              let type = 'booking_cancelled';
+
+              if (reason === 'instructor_rejected') {
+                title = 'Aula Recusada';
+                message = 'O instrutor não pôde aceitar sua solicitação. O valor reservado no seu cartão foi liberado.';
+                type = 'booking_rejected';
+              } else if (reason === 'auto_expired_start_time' || reason === 'auth_expired') {
+                title = 'Aula Expirada';
+                message = 'O tempo para aprovação da aula expirou e o valor foi liberado.';
+                type = 'booking_expired';
+              }
+
+              await supabaseAdmin.from('notifications').upsert({
+                user_id: paymentIntent.metadata.student_id,
+                title,
+                message,
+                type,
+                metadata: { group_id: groupId, payment_intent_id: paymentIntent.id, reason },
+                idempotency_key: `${type}:${groupId}`
+              }, { onConflict: 'idempotency_key' });
+            }
+          }
           
-          // 4. Record transaction as failed
           await upsertTransaction(paymentIntent, 'failed');
         }
         break;
       }
-
-      default:
-        console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
 
-    res.status(200).json({ received: true });
+    res.json({ received: true });
   } catch (err: any) {
-    console.error(`🚨 Webhook Logic Error:`, err);
-    res.status(500).json({ error: err.message });
+    console.error(`❌ Webhook Error: ${err.message}`);
+    res.status(400).json({ error: err.message, stack: err.stack });
   }
 }

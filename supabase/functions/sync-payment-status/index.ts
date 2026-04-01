@@ -36,8 +36,17 @@ serve(async (req) => {
       })
     }
 
-    const results = await Promise.allSettled(stuckAppointments.map(async (apt) => {
-        const { id, payment_intent_id, group_id, status } = apt;
+    // Group by group_id
+    const groups = stuckAppointments.reduce((acc, apt) => {
+      const gid = apt.group_id || `single_${apt.id}`;
+      if (!acc[gid]) acc[gid] = [];
+      acc[gid].push(apt);
+      return acc;
+    }, {} as Record<string, typeof stuckAppointments>);
+
+    const results = await Promise.allSettled(Object.entries(groups).map(async ([groupId, groupApts]) => {
+        const firstApt = groupApts[0];
+        const { payment_intent_id } = firstApt;
 
         // Check Stripe Status
         const pi = await stripe.paymentIntents.retrieve(payment_intent_id);
@@ -46,98 +55,91 @@ serve(async (req) => {
         let action = 'none';
 
         if (pi.status === 'requires_capture') {
-            if (status === 'pending_approval') {
-                // Already correct. Skip.
-                return { id, status: 'skipped_valid_state', stripe_status: pi.status };
-            }
-
-            // SUCCESS: Auth happened, but webhook missed it (status is reserved).
-            console.log(`✅ Repairing ${id}: Stripe is authorized (was reserved).`)
+            // SUCCESS: Auth happened, but webhook missed it.
+            console.log(`✅ Repairing Group ${groupId}: Stripe is authorized.`)
             updates = {
                 status: 'pending_approval',
                 payment_status: 'authorized',
-                expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString() // Reset 20 min timer
+                expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString()
             };
             action = 'repaired_authorized';
 
-            // Also ensure transaction exists
-            const { data: existingTx } = await supabaseAdmin
-                .from("transactions")
-                .select("id")
-                .eq("stripe_payment_intent_id", payment_intent_id)
-                .maybeSingle();
-
-            if (!existingTx) {
-                 await supabaseAdmin.from("transactions").insert({
-                     student_id: pi.metadata.student_id,
-                     instructor_id: pi.metadata.instructor_id,
-                     type: "lesson_payment",
-                     amount: pi.amount,
-                     gross_amount: pi.amount,
-                     platform_fee: pi.application_fee_amount || 0,
-                     net_amount: pi.amount - (pi.application_fee_amount || 0),
-                     status: "pending",
-                     stripe_payment_intent_id: payment_intent_id,
-                     description: `Reserva ${group_id} (Recuperada)`,
-                     metadata: pi.metadata,
-                     event_date: new Date().toISOString()
-                 });
-            }
-
-            // Notify Instructor (Idempotent Check)
+            // Notify Instructor (Idempotent)
             if (pi.metadata.instructor_id) {
-                const { data: existingNotif } = await supabaseAdmin
-                    .from("notifications")
-                    .select("id")
-                    .eq("user_id", pi.metadata.instructor_id)
-                    .eq("type", "booking_request")
-                    .contains("metadata", { group_id: group_id })
-                    .maybeSingle();
-
-                if (!existingNotif) {
-                    await supabaseAdmin.from("notifications").insert({
-                        user_id: pi.metadata.instructor_id,
-                        title: "Nova Solicitação de Aula (Sincronizada)",
-                        message: "Uma solicitação pendente foi sincronizada. Aceite em até 20 minutos.",
-                        type: "booking_request",
-                        metadata: { group_id: group_id }
-                    });
-                }
+                await supabaseAdmin.from("notifications").upsert({
+                    user_id: pi.metadata.instructor_id,
+                    title: "Nova Solicitação de Aula (Sincronizada)",
+                    message: "Uma solicitação pendente foi sincronizada. Aceite em até 20 minutos.",
+                    type: "booking_request",
+                    metadata: { group_id: groupId },
+                    idempotency_key: `booking_request:${groupId}`
+                }, { onConflict: 'idempotency_key' });
             }
 
         } else if (pi.status === 'succeeded') {
-            // Already captured?
-            console.log(`✅ Repairing ${id}: Stripe is succeeded.`)
+            console.log(`✅ Repairing Group ${groupId}: Stripe is succeeded.`)
             updates = {
-                status: 'confirmed', // or scheduled
+                status: 'confirmed',
                 payment_status: 'paid'
             };
             action = 'repaired_succeeded';
+
+            // Notify Student (Idempotent)
+            if (pi.metadata.student_id) {
+                await supabaseAdmin.from("notifications").upsert({
+                    user_id: pi.metadata.student_id,
+                    title: "Aula Confirmada! (Sincronizada)",
+                    message: "Seu pagamento foi confirmado e sua aula está agendada.",
+                    type: "booking_accepted",
+                    metadata: { group_id: groupId, payment_intent_id: pi.id },
+                    idempotency_key: `booking_accepted:${groupId}`
+                }, { onConflict: 'idempotency_key' });
+            }
         } else if (pi.status === 'canceled') {
-            // Expired/Cancelled
-            console.log(`🚫 Repairing ${id}: Stripe is canceled.`)
+            console.log(`🚫 Repairing Group ${groupId}: Stripe is canceled.`)
+            const reason = pi.metadata?.cancellation_reason || 'stripe_sync_canceled';
             updates = {
-                status: 'expired',
+                status: 'cancelled',
                 payment_status: 'released',
-                cancelled_reason: 'stripe_sync_canceled'
+                cancelled_reason: reason
             };
             action = 'repaired_canceled';
+
+            // Notify Student (Idempotent)
+            if (pi.metadata.student_id) {
+                const type = reason === 'instructor_rejected' ? 'booking_rejected' : 'booking_cancelled';
+                let title = 'Pagamento Cancelado (Sincronizado)';
+                let message = 'Sua tentativa de pagamento foi cancelada e os horários foram liberados.';
+                
+                if (reason === 'instructor_rejected') {
+                    title = 'Aula Recusada (Sincronizada)';
+                    message = 'O instrutor não pôde aceitar sua solicitação. O valor reservado no seu cartão foi liberado.';
+                }
+
+                await supabaseAdmin.from("notifications").upsert({
+                    user_id: pi.metadata.student_id,
+                    title,
+                    message,
+                    type,
+                    metadata: { group_id: groupId, payment_intent_id: pi.id, reason },
+                    idempotency_key: `${type}:${groupId}`
+                }, { onConflict: 'idempotency_key' });
+            }
         } else {
-            // requires_payment_method, requires_confirmation, etc.
-            // Still in progress or abandoned. Do nothing, let it expire naturally via create-booking cleanup.
-            return { id, status: 'skipped', stripe_status: pi.status };
+            return { groupId, status: 'skipped', stripe_status: pi.status };
         }
 
         if (Object.keys(updates).length > 0) {
             const { error: updateError } = await supabaseAdmin
                 .from('appointments')
                 .update(updates)
-                .eq('id', id);
+                .eq('group_id', groupId)
+                .in('status', ['reserved', 'pending_approval']);
             
             if (updateError) throw updateError;
         }
 
-        return { id, status: 'success', action };
+        return { groupId, status: 'success', action };
     }));
 
     const successCount = results.filter(r => r.status === 'fulfilled').length;
