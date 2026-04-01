@@ -183,6 +183,9 @@ Deno.serve(async (req: Request) => {
         destination: instructor.stripe_account_id,
       },
       
+      // Faz com que as taxas do Stripe sejam descontadas do instrutor (Account of Record)
+      on_behalf_of: instructor.stripe_account_id,
+      
       metadata: {
         type: 'tip',
         appointment_id: String(appointment_id),

@@ -221,15 +221,19 @@ export default async function handler(req: any, res: any) {
     const appointmentsToInsert = lessons.map((lesson: any) => {
       // Check if it's last minute (within 10 mins)
       const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
+      const startTimeUtc = lessonDateTime.toISOString();
       const diffMs = lessonDateTime.getTime() - now.getTime();
       const diffMinutes = diffMs / (1000 * 60);
       const isLastMinute = diffMinutes <= 10;
+
+      console.log(`[DEBUG] Creating appointment: Date=${lesson.date}, Time=${lesson.startTime}, UTC=${startTimeUtc}, isLastMinute=${isLastMinute}`);
 
       return {
         instructor_id: instructorId,
         student_id: studentId,
         date: lesson.date,
         start_time: lesson.startTime,
+        start_time_utc: startTimeUtc,
         end_time: lesson.endTime,
         category: category, // Store the category
         status: 'awaiting_payment',

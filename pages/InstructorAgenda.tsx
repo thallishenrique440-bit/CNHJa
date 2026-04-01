@@ -476,7 +476,14 @@ export const InstructorAgenda: React.FC = () => {
       setRefreshCounter(prev => prev + 1);
     };
     window.addEventListener('refresh-agenda', handleRefresh);
-    return () => window.removeEventListener('refresh-agenda', handleRefresh);
+    
+    // Auto-refresh every 60s to update derived statuses (e.g. confirmed -> in_progress)
+    const interval = setInterval(handleRefresh, 60000);
+    
+    return () => {
+      window.removeEventListener('refresh-agenda', handleRefresh);
+      clearInterval(interval);
+    };
   }, []);
 
   // Debounce mechanism for Realtime
@@ -596,7 +603,7 @@ export const InstructorAgenda: React.FC = () => {
        return a.startMins - b.startMins;
     });
 
-  }, [selectedDate, appointments, lunchConfig, dynamicSlots]);
+  }, [selectedDate, appointments, lunchConfig, dynamicSlots, refreshCounter]);
 
   const handleSlotClick = (slot: TimeSlot, lesson: Lesson, status: DisplayStatus) => {
     if (status === 'lunch' || status === 'past_free' || status === 'unavailable') return;
@@ -1139,13 +1146,6 @@ export const InstructorAgenda: React.FC = () => {
   const formatDateTitle = (date: Date) => {
     return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
   };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setSelectedDate(d => new Date(d)); 
-    }, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col pb-20 sm:max-w-md sm:mx-auto relative">

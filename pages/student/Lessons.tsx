@@ -229,11 +229,88 @@ export const StudentLessons: React.FC = () => {
   const [pendingReviewAptId, setPendingReviewAptId] = useState<string | null>(null);
   const hasPromptedReview = React.useRef(false);
 
-  const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [rawLessons, setRawLessons] = useState<DBAppointment[]>([]);
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [processingStartTimes, setProcessingStartTimes] = useState<Record<string, number>>({});
   const [showVerifyButton, setShowVerifyButton] = useState<Record<string, boolean>>({});
   const [hasAutoRefreshed, setHasAutoRefreshed] = useState<Record<string, boolean>>({});
+
+  // --- DERIVE LESSONS FROM RAW DATA ---
+  const lessons = useMemo(() => {
+    const now = new Date(Date.now() + serverTimeOffset);
+    
+    return rawLessons.map((apt): Lesson | null => {
+      try {
+        const [year, month, day] = apt.date.split('-').map(Number);
+        const [hours, minutes] = apt.start_time.split(':').map(Number);
+        const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+        
+        const endTimeStr = apt.end_time 
+          ? apt.end_time.substring(0, 5) 
+          : addMinutesToTime(timeStr, 50);
+
+        const lessonDate = new Date(year, month - 1, day);
+        
+        const displayStatus = getDerivedStatus(
+          apt.status,
+          apt.date,
+          apt.start_time,
+          apt.end_time || addMinutesToTime(apt.start_time, 50),
+          now
+        );
+        
+        const hasReview = apt.reviews && apt.reviews.length > 0;
+        const instructorData = apt.instructors;
+        const category = apt.category as 'A' | 'B';
+        
+        let vehicleModel = undefined;
+        if (instructorData?.instructor_vehicles) {
+            if (category === 'B') {
+                const car = instructorData.instructor_vehicles.find((v) => v.type === 'car');
+                if (car) vehicleModel = car.model;
+            } else if (category === 'A') {
+                const bike = instructorData.instructor_vehicles.find((v) => v.type === 'bike');
+                if (bike) vehicleModel = bike.model;
+            }
+        }
+
+        return {
+          id: apt.id,
+          instructorId: apt.instructor_id,
+          instructorName: instructorData?.profiles?.full_name || 'Instrutor',
+          instructorPhoto: instructorData?.profiles?.avatar_url,
+          instructorWhatsapp: instructorData?.whatsapp,
+          vehicleModel: vehicleModel,
+          location: instructorData?.meeting_point || 'Local a combinar',
+          lat: instructorData?.meeting_point_lat,
+          lng: instructorData?.meeting_point_lng,
+          placeId: instructorData?.meeting_point_place_id,
+          date: lessonDate,
+          dateStr: apt.date,
+          time: timeStr,
+          endTime: endTimeStr,
+          status: displayStatus,
+          dbStatus: apt.status,
+          price: apt.price,
+          lessonCategory: category,
+          isReviewed: hasReview,
+          rescheduleRequestedAt: apt.reschedule_requested_at ? new Date(apt.reschedule_requested_at) : null,
+          rescheduledAt: apt.rescheduled_at ? new Date(apt.rescheduled_at) : null
+        };
+      } catch (mapErr) {
+        console.error('Error mapping individual lesson:', apt.id, mapErr);
+        return null;
+      }
+    }).filter((l): l is Lesson => l !== null);
+  }, [rawLessons, serverTimeOffset, refreshCounter]);
+
+  // --- AUTO-REFRESH TIMER ---
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRefreshCounter(prev => prev + 1);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // --- FETCH PENDING REVIEW ---
   useEffect(() => {
@@ -336,73 +413,7 @@ export const StudentLessons: React.FC = () => {
         if (error) throw error;
 
         if (data) {
-          const mappedLessons: Lesson[] = (data as unknown as DBAppointment[]).map((apt): Lesson | null => {
-            try {
-              const [year, month, day] = apt.date.split('-').map(Number);
-              const [hours, minutes] = apt.start_time.split(':').map(Number);
-              const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-              
-              // Use end_time from DB if available, fallback to +50min
-              const endTimeStr = apt.end_time 
-                ? apt.end_time.substring(0, 5) 
-                : addMinutesToTime(timeStr, 50);
-
-              const lessonDate = new Date(year, month - 1, day);
-              const now = new Date(Date.now() + serverTimeOffset);
-              
-              const displayStatus = getDerivedStatus(
-                apt.status,
-                apt.date,
-                apt.start_time,
-                apt.end_time || addMinutesToTime(apt.start_time, 50),
-                now
-              );
-              
-              const hasReview = apt.reviews && apt.reviews.length > 0;
-              const instructorData = apt.instructors;
-              const category = apt.category as 'A' | 'B';
-              
-              let vehicleModel = undefined;
-              if (instructorData?.instructor_vehicles) {
-                  if (category === 'B') {
-                      const car = instructorData.instructor_vehicles.find((v) => v.type === 'car');
-                      if (car) vehicleModel = car.model;
-                  } else if (category === 'A') {
-                      const bike = instructorData.instructor_vehicles.find((v) => v.type === 'bike');
-                      if (bike) vehicleModel = bike.model;
-                  }
-              }
-
-              return {
-                id: apt.id,
-                instructorId: apt.instructor_id,
-                instructorName: instructorData?.profiles?.full_name || 'Instrutor',
-                instructorPhoto: instructorData?.profiles?.avatar_url,
-                instructorWhatsapp: instructorData?.whatsapp,
-                vehicleModel: vehicleModel,
-                location: instructorData?.meeting_point || 'Local a combinar',
-                lat: instructorData?.meeting_point_lat,
-                lng: instructorData?.meeting_point_lng,
-                placeId: instructorData?.meeting_point_place_id,
-                date: lessonDate,
-                dateStr: apt.date,
-                time: timeStr,
-                endTime: endTimeStr,
-                status: displayStatus,
-                dbStatus: apt.status,
-                price: apt.price,
-                lessonCategory: category,
-                isReviewed: hasReview,
-                rescheduleRequestedAt: apt.reschedule_requested_at ? new Date(apt.reschedule_requested_at) : null,
-                rescheduledAt: apt.rescheduled_at ? new Date(apt.rescheduled_at) : null
-              };
-            } catch (mapErr) {
-              console.error('Error mapping individual lesson:', apt.id, mapErr);
-              return null;
-            }
-          }).filter((l): l is Lesson => l !== null);
-
-          setLessons(mappedLessons);
+          setRawLessons(data as unknown as DBAppointment[]);
         }
       } catch (err: any) {
         console.error('Error fetching lessons:', err);
@@ -414,10 +425,13 @@ export const StudentLessons: React.FC = () => {
 
     fetchLessons();
 
-    const interval = setInterval(fetchLessons, 30000);
+    const interval = setInterval(fetchLessons, 60000);
     return () => clearInterval(interval);
 
   }, [session, selectedDate, refreshCounter]);
+
+  // --- DERIVE LESSONS FROM RAW DATA ---
+  // (Removed duplicate useMemo block)
 
   // --- UX RESILIENCE FOR PROCESSING STATES ---
   useEffect(() => {
@@ -629,9 +643,9 @@ export const StudentLessons: React.FC = () => {
        if (statusError) throw statusError;
 
        // 3. Update Local State (Optimistic UI)
-       setLessons(prev => prev.map(l => 
+       setRawLessons(prev => prev.map(l => 
           lessonIds.includes(l.id)
-             ? { ...l, isReviewed: rating > 0, status: 'completed' as any } 
+             ? { ...l, reviews: rating > 0 ? [{ id: 'new' }] : [], status: 'completed' } 
              : l
        ));
        
@@ -719,9 +733,9 @@ export const StudentLessons: React.FC = () => {
         .in('id', group.ids);
       
       if (updatedData) {
-        setLessons(prev => prev.map(l => {
+        setRawLessons(prev => prev.map(l => {
           const updated = updatedData.find(u => u.id === l.id);
-          if (updated) return { ...l, rescheduleRequestedAt: new Date(updated.reschedule_requested_at) };
+          if (updated) return { ...l, reschedule_requested_at: updated.reschedule_requested_at };
           return l;
         }));
       }
@@ -914,7 +928,7 @@ export const StudentLessons: React.FC = () => {
       if (error) throw error;
 
       // Optimistic Update
-      setLessons(prev => prev.filter(l => !lessonToCancel.ids.includes(l.id)));
+      setRawLessons(prev => prev.filter(l => !lessonToCancel.ids.includes(l.id)));
       
       addToast("Aula cancelada e horário liberado.", "success");
       setLessonToCancel(null);
