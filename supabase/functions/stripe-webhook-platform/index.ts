@@ -113,7 +113,7 @@ Deno.serve(async (req: Request) => {
                updated_by: studentId
              })
              .eq("group_id", groupId)
-             .in("status", ["reserved"]) // Defensive: Only update if still reserved
+             .in("status", ["reserved", "awaiting_payment"]) // Expanded: Include awaiting_payment
              .select(); // Select to verify update
 
            if (aptError) {
@@ -121,10 +121,20 @@ Deno.serve(async (req: Request) => {
              throw aptError;
            }
 
-           if (!updatedData || updatedData.length === 0) {
-              console.warn(`⚠️ No appointments found/updated for group_id: ${groupId}`);
+           const updatedRows = updatedData?.length || 0;
+           console.log("[WEBHOOK DEBUG]", {
+             groupId,
+             updatedRows,
+             eventType: event.type
+           });
+
+           if (updatedRows === 0) {
+              console.warn(`⚠️ No appointments found/updated for group_id: ${groupId}. Possible reasons: status mismatch (current status not in [reserved, awaiting_payment]) or group_id mismatch.`);
+              // Diagnostic: Check current status of rows with this group_id
+              const { data: currentRows } = await supabaseAdmin.from("appointments").select("id, status").eq("group_id", groupId);
+              console.log(`   Current rows for group_id ${groupId}:`, JSON.stringify(currentRows));
            } else {
-              console.log(`✅ Updated ${updatedData.length} appointments to pending_approval.`);
+              console.log(`✅ Updated ${updatedRows} appointments to pending_approval.`);
            }
 
            // 2. Create Initial Transaction (Authorized) if not exists
@@ -179,7 +189,14 @@ Deno.serve(async (req: Request) => {
                 throw aptError;
             }
 
-            if (!updatedData || updatedData.length === 0) {
+            const updatedRows = updatedData?.length || 0;
+            console.log("[WEBHOOK DEBUG]", {
+              groupId,
+              updatedRows,
+              eventType: event.type
+            });
+
+            if (updatedRows === 0) {
                  console.error(`❌ CRITICAL: Could not find appointment for PI ${paymentIntentId}`);
             } else {
                  console.log(`✅ Recovered & Updated ${updatedData.length} appointments using PI ID.`);
@@ -203,7 +220,10 @@ Deno.serve(async (req: Request) => {
         // A. Validação de Metadata (Exige instructor_id, student_id e [appointment_id OU group_id])
         if (!instructor_id || !student_id || (!appointment_id && !group_id)) {
           console.error(`❌ CRITICAL: Missing metadata for PI ${pi.id}. Metadata:`, JSON.stringify(metadata));
-          return new Response("Missing Metadata", { status: 500 }); // AJUSTE: Status 500 para retry
+          return new Response(JSON.stringify({ error: "Missing Metadata" }), { 
+            status: 200, // Return 200 to avoid Stripe retries on invalid metadata
+            headers: { "Content-Type": "application/json" } 
+          });
         }
 
         // AJUSTE: Tipo fixo para 'lesson_payment' se não for explicitamente 'tip'
@@ -226,14 +246,20 @@ Deno.serve(async (req: Request) => {
 
             if (groupError || !groupApts || groupApts.length === 0) {
               console.error(`❌ ERROR: No appointments found for group_id ${group_id}. PI: ${pi.id}`, groupError);
-              return new Response("Appointments Not Found", { status: 500 });
+              return new Response(JSON.stringify({ error: "Appointments Not Found" }), { 
+                status: 200, 
+                headers: { "Content-Type": "application/json" } 
+              });
             }
 
             // AJUSTE: Validação de Consistência Financeira (Soma das aulas vs Total do PI)
             const totalAptsPrice = groupApts.reduce((sum, apt) => sum + (apt.price || 0), 0);
             if (totalAptsPrice !== pi.amount) {
               console.error(`❌ CRITICAL: Price mismatch for group ${group_id}. Stripe: ${pi.amount}, DB: ${totalAptsPrice}`);
-              return new Response("Price Mismatch", { status: 500 });
+              return new Response(JSON.stringify({ error: "Price Mismatch" }), { 
+                status: 200, 
+                headers: { "Content-Type": "application/json" } 
+              });
             }
             appointmentsToProcess = groupApts;
           }
@@ -338,7 +364,7 @@ Deno.serve(async (req: Request) => {
                 updated_at: new Date().toISOString()
               })
               .eq('id', item.id)
-              .in('status', ['pending_approval', 'reserved']) // Expanded: Handle out-of-order events
+              .in('status', ['pending_approval', 'reserved', 'awaiting_payment']) // Expanded: Handle out-of-order events
               .select();
 
             if (updateError) {
@@ -379,9 +405,9 @@ Deno.serve(async (req: Request) => {
                updated_by: instructorId
              };
              
-             // Only change status to rejected if it's currently pending_approval
+             // Only change status to rejected if it's currently pending_approval or awaiting_payment
              // If it's 'expired', we leave it as 'expired'.
-             if (appointment.status === 'pending_approval') {
+             if (appointment.status === 'pending_approval' || appointment.status === 'awaiting_payment') {
                 updatePayload.status = 'rejected';
              }
              
@@ -389,7 +415,7 @@ Deno.serve(async (req: Request) => {
                 .from("appointments")
                 .update(updatePayload)
                 .eq("group_id", groupId)
-                .in("status", ["pending_approval"]); // Defensive: Only reject if still pending approval
+                .in("status", ["pending_approval", "awaiting_payment"]); // Defensive: Only reject if still pending or awaiting
           }
 
           // 2. Update Transaction -> failed (Voided)

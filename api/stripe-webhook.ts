@@ -69,29 +69,52 @@ export default async function handler(req: Request, res: Response) {
     switch (event.type) {
       case 'payment_intent.amount_capturable_updated': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const groupId = paymentIntent.metadata?.group_id;
+        const metadata = paymentIntent.metadata || {};
+        const groupId = metadata.group_id;
 
         console.log(`[Webhook Debug] amount_capturable_updated: PI=${paymentIntent.id}, GroupID=${groupId}`);
 
         if (groupId) {
           console.log(`🔒 Amount Capturable Updated (Auth) for Group ID: ${groupId}`);
 
+          const updatePayload = {
+            status: 'pending_approval' as const,
+            payment_status: 'authorized' as const,
+            payment_intent_id: paymentIntent.id,
+            expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+          };
+
+          // [Validation] Ensure payment_status is explicitly 'authorized'
+          if (updatePayload.payment_status !== 'authorized') {
+            console.error(`[Webhook Critical] amount_capturable_updated: Invalid payment_status state for PI=${paymentIntent.id}. Expected 'authorized', got:`, updatePayload.payment_status);
+            // Safe return to avoid Stripe retries on logic errors
+            return res.json({ received: true, error: 'invalid_payment_status' });
+          }
+
+          console.log(`[Webhook Debug] amount_capturable_updated: Executing update for PI=${paymentIntent.id} (Group=${groupId}) with payload:`, JSON.stringify(updatePayload, null, 2));
+
           const { data: updatedData, error } = await supabaseAdmin
             .from('appointments')
-            .update({
-              status: 'pending_approval',
-              payment_status: 'authorized',
-              payment_intent_id: paymentIntent.id,
-              expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
-            })
-            .eq('group_id', groupId)
-            .in('status', ['reserved'])
+            .update(updatePayload)
+            .eq('group_id', groupId) // Using group_id is safer due to race condition
+            .in('status', ['reserved', 'awaiting_payment'])
             .select('id, status, payment_status');
 
-          const rowsCount = updatedData?.length || 0;
-          console.log(`[Webhook Success] amount_capturable_updated: Updated ${rowsCount} rows for Group ${groupId}`);
+          const updatedRows = updatedData?.length || 0;
+          console.log("[WEBHOOK DEBUG]", {
+            groupId,
+            updatedRows,
+            eventType: event.type
+          });
           
-          if (rowsCount > 0) {
+          if (updatedRows === 0 && !error) {
+            console.warn(`[Webhook Warning] amount_capturable_updated: No rows matched for PI=${paymentIntent.id}. Possible reasons: status already updated, PI ID mismatch, or rows deleted.`);
+            // Check if rows exist at all with this PI ID to debug mismatch
+            const { data: currentRows } = await supabaseAdmin.from('appointments').select('id, status').eq('group_id', groupId);
+            console.log(`[Webhook Debug] Current rows for group_id ${groupId}:`, JSON.stringify(currentRows));
+          }
+          
+          if (updatedRows > 0) {
             console.log(`[State Transition] Group ${groupId}: reserved -> pending_approval (authorized)`);
             
             // Notify Instructor about the new booking request (Idempotent)
@@ -107,10 +130,10 @@ export default async function handler(req: Request, res: Response) {
             }
           }
           
-          if (error) console.error(`[Webhook Debug] Update error:`, error);
-          if (error) throw error;
-
-          // Record transaction as pending
+          if (error) {
+            console.error(`[Webhook Debug] Update error:`, error);
+            return res.json({ received: true, error: 'db_update_failed' });
+          }
           await upsertTransaction(paymentIntent, 'pending');
 
           if (testBypass) {
@@ -129,33 +152,53 @@ export default async function handler(req: Request, res: Response) {
 
       case 'payment_intent.succeeded': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
+        const metadata = paymentIntent.metadata || {};
+        const groupId = metadata.group_id || metadata.purchase_id;
 
         console.log(`[Webhook Debug] succeeded: PI=${paymentIntent.id}, GroupID=${groupId}`);
 
         if (groupId) {
           console.log(`✅ Payment Captured for Group ID: ${groupId}`);
 
+          const updatePayload = {
+            status: 'confirmed' as const,
+            payment_status: 'paid' as const,
+          };
+
+          // [Validation] Ensure payment_status is explicitly 'paid' and not null/undefined
+          if (updatePayload.payment_status !== 'paid') {
+            console.error(`[Webhook Critical] succeeded: Invalid payment_status state for PI=${paymentIntent.id}. Expected 'paid', got:`, updatePayload.payment_status);
+            // Safe return to avoid Stripe retries on logic errors
+            return res.json({ received: true, error: 'invalid_payment_status' });
+          }
+
+          console.log(`[Webhook Debug] succeeded: Executing update for PI=${paymentIntent.id} (Group=${groupId}) with payload:`, JSON.stringify(updatePayload, null, 2));
+
           const { data: updatedData, error } = await supabaseAdmin
             .from('appointments')
-            .update({
-              status: 'confirmed',
-              payment_status: 'paid',
-            })
-            .eq('group_id', groupId)
-            .in('status', ['pending_approval', 'reserved', 'cancelled', 'expired', 'failed', 'pending'])
-            .select('id, status, payment_status');
+            .update(updatePayload)
+            .eq('group_id', groupId) // Using group_id is safer due to race condition
+            .in('status', ['pending_approval', 'reserved', 'cancelled', 'expired', 'failed', 'pending', 'awaiting_payment'])
+            .select('id, status, payment_status, student_id, date');
 
           const rowsCount = updatedData?.length || 0;
-          console.log(`[Webhook Success] succeeded: Updated ${rowsCount} rows for Group ${groupId}`);
+          console.log(`[Webhook Success] succeeded: Updated ${rowsCount} rows for PI=${paymentIntent.id}`);
+          
+          if (rowsCount === 0 && !error) {
+            console.warn(`[Webhook Warning] succeeded: No rows matched for PI=${paymentIntent.id}. Possible reasons: status already 'confirmed', PI ID mismatch, or rows deleted.`);
+            // Check if rows exist at all with this PI ID to debug mismatch
+            const { count } = await supabaseAdmin.from('appointments').select('*', { count: 'exact', head: true }).eq('payment_intent_id', paymentIntent.id);
+            console.log(`[Webhook Debug] Total rows with PI=${paymentIntent.id}: ${count || 0}`);
+          }
           
           if (rowsCount > 0) {
             console.log(`[State Transition] Group ${groupId}: -> confirmed (paid)`);
             
             // Notify Student about the confirmation (Idempotent)
-            if (paymentIntent.metadata?.student_id) {
+            const studentId = paymentIntent.metadata?.student_id || (updatedData && updatedData.length > 0 ? (updatedData[0] as any).student_id : null);
+            if (studentId) {
               await supabaseAdmin.from('notifications').upsert({
-                user_id: paymentIntent.metadata.student_id,
+                user_id: studentId,
                 title: 'Aula Confirmada!',
                 message: 'Seu pagamento foi confirmado e sua aula está agendada.',
                 type: 'booking_accepted',
@@ -165,10 +208,10 @@ export default async function handler(req: Request, res: Response) {
             }
           }
           
-          if (error) console.error(`[Webhook Debug] Update error:`, error);
-          if (error) throw error;
-
-          // Record transaction as completed
+          if (error) {
+            console.error(`[Webhook Debug] Update error:`, error);
+            return res.json({ received: true, error: 'db_update_failed' });
+          }
           await upsertTransaction(paymentIntent, 'completed');
 
           if (testBypass) {
@@ -181,36 +224,56 @@ export default async function handler(req: Request, res: Response) {
               } 
             });
           }
+        } else {
+          console.warn(`⚠️ Payment Succeeded but no group_id or purchase_id found in metadata for PaymentIntentID: ${paymentIntent.id}`);
         }
         break;
       }
 
       case 'payment_intent.canceled': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const groupId = paymentIntent.metadata?.group_id || paymentIntent.metadata?.purchase_id;
+        const metadata = paymentIntent.metadata || {};
+        const groupId = metadata.group_id || metadata.purchase_id;
 
         if (groupId) {
           console.log(`❌ Payment Canceled for Group ID: ${groupId}`);
 
-          console.log(`[Webhook Debug] Attempting update for PaymentIntentID: ${paymentIntent.id} with status: cancelled and cancelled_by: student`);
+          const updatePayload = {
+            status: 'cancelled' as const,
+            payment_status: 'pending' as const,
+            cancelled_by: 'student' as const,
+            cancelled_reason: 'Payment canceled by user',
+          };
+
+          // [Validation] Ensure payment_status is explicitly 'pending' (or 'released' if we prefer)
+          if (updatePayload.payment_status !== 'pending') {
+            console.error(`[Webhook Critical] canceled: Invalid payment_status state for PI=${paymentIntent.id}. Expected 'pending', got:`, updatePayload.payment_status);
+            // Safe return to avoid Stripe retries on logic errors
+            return res.json({ received: true, error: 'invalid_payment_status' });
+          }
+
+          console.log(`[Webhook Debug] canceled: Executing update for PI=${paymentIntent.id} (Group=${groupId}) with payload:`, JSON.stringify(updatePayload, null, 2));
+          
           const { data: updatedData, error } = await supabaseAdmin
             .from('appointments')
-            .update({
-              status: 'cancelled',
-              payment_status: 'pending',
-              cancelled_by: 'student',
-              cancelled_reason: 'Payment canceled by user',
-            })
-            .eq('payment_intent_id', paymentIntent.id)
+            .update(updatePayload)
+            .eq('group_id', groupId) // Using group_id is safer
             .not('status', 'in', '("confirmed", "completed", "in_progress", "scheduled")')
             .select();
 
           const rowsCount = updatedData?.length || 0;
           console.log(`[Webhook Debug] Update result:`, { updatedRows: rowsCount, error });
 
+          if (rowsCount === 0 && !error) {
+            console.warn(`[Webhook Warning] canceled: No rows matched for PI=${paymentIntent.id}. Possible reasons: status already 'cancelled', PI ID mismatch, or rows deleted.`);
+            // Check if rows exist at all with this PI ID to debug mismatch
+            const { count } = await supabaseAdmin.from('appointments').select('*', { count: 'exact', head: true }).eq('payment_intent_id', paymentIntent.id);
+            console.log(`[Webhook Debug] Total rows with PI=${paymentIntent.id}: ${count || 0}`);
+          }
+
           if (error) {
             console.error(`[Webhook Debug] Update error:`, JSON.stringify(error, null, 2));
-            return res.status(400).json({ error: error.message, supabaseError: error });
+            return res.json({ received: true, error: 'db_update_failed', details: error.message });
           }
 
           if (rowsCount > 0) {

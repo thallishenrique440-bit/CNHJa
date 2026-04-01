@@ -1088,6 +1088,7 @@ export const StudentLessons: React.FC = () => {
       case 'confirmed': 
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Agendada</span>;
       case 'reserved':
+      case 'awaiting_payment':
       case 'pending_approval':
         return (
           <div className="flex flex-col items-end space-y-1">

@@ -333,6 +333,15 @@ export const InstructorAgenda: React.FC = () => {
         if (data) {
             data.forEach((apt: any) => {
                 const timeKey = apt.start_time.substring(0, 5); 
+                
+                console.log("[APPOINTMENT DEBUG]", {
+                  status: apt.status,
+                  time: apt.start_time,
+                  group_id: apt.group_id,
+                  payment_status: apt.payment_status
+                });
+                console.log("[TIME KEY]", timeKey);
+
                 const key = `${dateStr}-${timeKey}`;
                 
                 let uiStatus: LessonStatus | null = null;
@@ -349,8 +358,8 @@ export const InstructorAgenda: React.FC = () => {
                     uiStatus = 'completed';
                 } else if (apt.status === 'cancelled') {
                     uiStatus = 'cancelled';
-                } else if (apt.status === 'reserved') {
-                    // Reserved slots are currently being booked by a student.
+                } else if (apt.status === 'reserved' || apt.status === 'awaiting_payment') {
+                    // Reserved or awaiting_payment slots are currently being booked by a student.
                     // We must show them as occupied to prevent the instructor from trying to block them
                     // and causing a unique constraint violation.
                     uiStatus = 'blocked'; 
@@ -596,7 +605,9 @@ export const InstructorAgenda: React.FC = () => {
     switch (status) {
       case 'free': toggleBlock(slot.start, 'block'); break;
       case 'blocked': 
-        if (lesson.isReserved) {
+      case 'awaiting_payment':
+      case 'reserved':
+        if (lesson.isReserved || status === 'awaiting_payment' || status === 'reserved') {
             addToast("Este horário está reservado por um aluno em processo de pagamento.", "warning");
             return;
         }
@@ -606,6 +617,7 @@ export const InstructorAgenda: React.FC = () => {
       case 'in_progress':
       case 'finished':
       case 'pending':
+      case 'pending_approval':
       case 'past_pending':
       case 'cancelled_view':
         openLessonModal(lesson);
@@ -1248,6 +1260,13 @@ export const InstructorAgenda: React.FC = () => {
               bgColor: "bg-gray-50/50", 
               textColor: "text-gray-500" 
             },
+            awaiting_payment: {
+              label: "Processando pagamento...",
+              borderColor: "border-l-amber-400",
+              bgColor: "bg-amber-50/50",
+              textColor: "text-amber-700",
+              showDot: true
+            },
             lunch: { 
               label: "Almoço", 
               borderColor: "border-l-gray-200", 
@@ -1264,8 +1283,8 @@ export const InstructorAgenda: React.FC = () => {
 
           let config = statusConfig[displayStatus] || statusConfig.free;
           
-          // Special case for reserved or pending_approval slots
-          if (displayStatus === 'reserved' || displayStatus === 'pending_approval' || (displayStatus === 'blocked' && lesson.isReserved)) {
+          // Special case for reserved, awaiting_payment or pending_approval slots
+          if (displayStatus === 'reserved' || displayStatus === 'awaiting_payment' || displayStatus === 'pending_approval' || (displayStatus === 'blocked' && lesson.isReserved)) {
             config = {
               label: displayStatus === 'pending_approval' ? "Aguardando Aprovação" : "Processando...",
               borderColor: "border-l-amber-400",

@@ -21,7 +21,7 @@ serve(async (req) => {
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, group_id, status')
-      .in('status', ['reserved', 'pending_approval'])
+      .in('status', ['reserved', 'pending_approval', 'awaiting_payment'])
       .not('payment_intent_id', 'is', null)
 
     if (fetchError) {
@@ -134,7 +134,7 @@ serve(async (req) => {
                 .from('appointments')
                 .update(updates)
                 .eq('group_id', groupId)
-                .in('status', ['reserved', 'pending_approval']);
+                .in('status', ['reserved', 'pending_approval', 'awaiting_payment']);
             
             if (updateError) throw updateError;
         }
