@@ -21,20 +21,24 @@ export const ProfileGuard: React.FC = () => {
 
       try {
         if (userRole === 'student') {
-          // Check if student has a phone number
+          // Check if student has all required fields
           const { data, error } = await supabase
             .from('profiles')
-            .select('phone')
+            .select('full_name, phone, city, experience_level, cnh_process_type')
             .eq('id', session.user.id)
             .single();
 
           if (error) throw error;
           
-          if (data?.phone && data.phone.length >= 10) {
-            setIsComplete(true);
-          } else {
-            setIsComplete(false);
-          }
+          const isProfileComplete = !!(
+            data?.full_name && 
+            data?.phone && data.phone.length >= 10 && 
+            data?.city && 
+            data?.experience_level && 
+            data?.cnh_process_type
+          );
+
+          setIsComplete(isProfileComplete);
 
         } else if (userRole === 'instructor') {
           // Check if instructor has essential data (whatsapp and price)
@@ -89,10 +93,8 @@ export const ProfileGuard: React.FC = () => {
         return <Outlet />;
       }
       // Otherwise, redirect to profile with a warning
-      // We use a small timeout or check if we just redirected to avoid toast spam, 
-      // but simplistic approach here:
       return <Navigate to={studentProfilePath} state={{ 
-        alertMessage: "Por favor, complete seu cadastro (WhatsApp) para continuar." 
+        alertMessage: "Complete seu perfil para continuar." 
       }} replace />;
     }
 

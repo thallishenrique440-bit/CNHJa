@@ -349,8 +349,8 @@ create table if not exists public.instructor_categories (
   instructor_id uuid not null references public.instructors(id) on delete cascade,
   category text not null check (category in ('A', 'B')),
   
-  price_day integer not null default 0, -- in cents
-  price_night integer not null default 0, -- in cents
+  day_price integer not null default 0, -- in cents
+  night_price integer not null default 0, -- in cents
   
   -- Constraint: One entry per category per instructor
   unique(instructor_id, category)

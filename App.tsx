@@ -3,6 +3,8 @@ import { HashRouter, Routes, Route, Navigate, Outlet, useNavigate } from 'react-
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { Welcome } from './pages/Welcome';
+import { Terms } from './pages/Terms';
+import { Privacy } from './pages/Privacy';
 import { RegisterStudent } from './pages/RegisterStudent';
 import { RegisterInstructor } from './pages/RegisterInstructor';
 import { Login } from './pages/Login';
@@ -109,6 +111,8 @@ const AppRoutes: React.FC = () => {
         <Route path="/i/:publicId" element={<InstructorShortLink />} />
 
         {/* PUBLIC ROUTES */}
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
         <Route element={<PublicGuard />}>
           <Route path="/welcome" element={<Welcome />} />
           <Route path="/login" element={<Login />} />

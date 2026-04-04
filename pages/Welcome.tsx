@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
+import { APP_CONFIG } from '../constants';
 
 export const Welcome: React.FC = () => {
   const navigate = useNavigate();
@@ -16,7 +17,7 @@ export const Welcome: React.FC = () => {
       <div className="flex-1 flex flex-col items-center justify-center relative z-10 -mt-10">
         
         {/* Logo */}
-        <div className="w-full max-w-[260px] mb-8 transform hover:scale-105 transition-transform duration-500">
+        <div className="w-full max-w-[480px] mb-8 transform hover:scale-105 transition-transform duration-500">
           <img 
             src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
             alt="Autoescola do Brasil" 
@@ -70,7 +71,7 @@ export const Welcome: React.FC = () => {
         
         <div className="text-center">
            <p className="text-[10px] text-gray-300 font-medium tracking-wide">
-             © 2024 Autoescola do Brasil
+             © {APP_CONFIG.YEAR} {APP_CONFIG.NAME}
            </p>
         </div>
       </div>

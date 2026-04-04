@@ -320,15 +320,17 @@ export const StudentInstructorProfile: React.FC = () => {
           if (aptData && aptData.length > 0) {
             setCanReview(true);
             
-            // Fetch existing review
-            const { data: myReview } = await supabase
+            // Fetch existing review (get the latest one if multiple exist)
+            const { data: myReviews } = await supabase
               .from('reviews')
               .select('*')
               .eq('student_id', session.user.id)
               .eq('instructor_id', id)
-              .maybeSingle();
+              .order('created_at', { ascending: false })
+              .limit(1);
               
-            if (myReview) {
+            if (myReviews && myReviews.length > 0) {
+              const myReview = myReviews[0];
               setExistingReview(myReview);
               setReviewRating(myReview.rating);
               setReviewComment(myReview.comment || '');
@@ -1011,40 +1013,55 @@ export const StudentInstructorProfile: React.FC = () => {
     setIsSubmittingReview(true);
 
     try {
-      // We need an appointment_id to link the review. 
-      // We can fetch the most recent completed appointment.
-      const { data: latestApt } = await supabase
-        .from('appointments')
-        .select('id')
-        .eq('student_id', session.user.id)
-        .eq('instructor_id', instructor.id)
-        .eq('status', 'completed')
-        .order('date', { ascending: false })
-        .limit(1)
-        .single();
+      let appointmentId = existingReview?.appointment_id;
 
-      if (!latestApt) throw new Error("Nenhuma aula concluída encontrada.");
+      // If no existing review, we need an appointment_id to link the review. 
+      // We fetch the most recent completed appointment.
+      if (!appointmentId) {
+        const { data: latestApt } = await supabase
+          .from('appointments')
+          .select('id')
+          .eq('student_id', session.user.id)
+          .eq('instructor_id', instructor.id)
+          .eq('status', 'completed')
+          .order('date', { ascending: false })
+          .limit(1)
+          .single();
 
-      const { error } = await supabase
+        if (!latestApt) throw new Error("Nenhuma aula concluída encontrada.");
+        appointmentId = latestApt.id;
+      }
+
+      const reviewData: any = {
+        appointment_id: appointmentId,
+        student_id: session.user.id,
+        instructor_id: instructor.id,
+        rating: reviewRating,
+        comment: reviewComment
+      };
+
+      // If editing, include the ID to ensure update
+      if (existingReview?.id) {
+        reviewData.id = existingReview.id;
+      }
+
+      const { error, data: savedReview } = await supabase
         .from('reviews')
-        .upsert({
-          appointment_id: latestApt.id,
-          student_id: session.user.id,
-          instructor_id: instructor.id,
-          rating: reviewRating,
-          comment: reviewComment
-        }, { onConflict: 'student_id,instructor_id' });
+        .upsert(reviewData)
+        .select()
+        .single();
 
       if (error) throw error;
 
       addToast("Avaliação salva com sucesso!", "success");
       setIsSubmitReviewModalOpen(false);
       
-      // Update local state to reflect the new review
-      setExistingReview({
-        rating: reviewRating,
-        comment: reviewComment
-      });
+      // Update local state to reflect the new/updated review
+      if (savedReview) {
+        setExistingReview(savedReview);
+        setReviewRating(savedReview.rating);
+        setReviewComment(savedReview.comment || '');
+      }
 
       // Optionally refresh the instructor's reviews list
       const { data: reviewsData } = await supabase

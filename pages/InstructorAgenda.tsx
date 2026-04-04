@@ -1572,25 +1572,36 @@ export const InstructorAgenda: React.FC = () => {
                     const [y, m, d] = selectedLesson.dateStr!.split('-').map(Number);
                     const [h, min] = selectedLesson.timeStr!.split(':').map(Number);
                     const lessonStart = new Date(y, m - 1, d, h, min);
+                    
+                    // Lesson duration is 50 minutes
+                    const lessonEnd = new Date(lessonStart.getTime() + 50 * 60000);
+                    
+                    // Visibility Rules
+                    const showNoShow = now >= lessonStart && now <= new Date(lessonStart.getTime() + 10 * 60000);
+                    const showCompleted = now >= lessonEnd && now <= new Date(lessonEnd.getTime() + 120 * 60000);
 
-                    if (now >= lessonStart) {
+                    if (showNoShow || showCompleted) {
                         return (
-                            <div className="grid grid-cols-2 gap-3">
-                                <Button 
-                                    fullWidth 
-                                    variant="outline" 
-                                    onClick={handleNoShow}
-                                    className="border-red-200 text-red-600 hover:bg-red-50"
-                                >
-                                    Marcar Falta
-                                </Button>
-                                <Button 
-                                    fullWidth 
-                                    onClick={handleFinalizeLesson}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                >
-                                    Aula Realizada
-                                </Button>
+                            <div className="w-full space-y-3">
+                                {showNoShow && (
+                                    <Button 
+                                        fullWidth 
+                                        variant="outline" 
+                                        onClick={handleNoShow}
+                                        className="border-red-200 text-red-600 hover:bg-red-50"
+                                    >
+                                        Marcar Falta
+                                    </Button>
+                                )}
+                                {showCompleted && (
+                                    <Button 
+                                        fullWidth 
+                                        onClick={handleFinalizeLesson}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    >
+                                        Aula Realizada
+                                    </Button>
+                                )}
                             </div>
                         );
                     }

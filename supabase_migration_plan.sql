@@ -79,7 +79,7 @@ BEGIN
     ON CONFLICT (id) DO NOTHING;
 
     -- Inserir categorias padrão com preços
-    INSERT INTO public.instructor_categories (instructor_id, category, price_day, price_night)
+    INSERT INTO public.instructor_categories (instructor_id, category, day_price, night_price)
     VALUES 
       (NEW.id, 'A', 10000, 11000), -- Moto
       (NEW.id, 'B', 11000, 13000)  -- Carro

@@ -83,8 +83,8 @@ export const InstructorDiscounts: React.FC = () => {
   };
 
   const handleCreateNew = () => {
-    if (discounts.length >= 3) {
-      addToast("Você já atingiu o limite de 3 regras de desconto.", 'warning');
+    if (discounts.length >= 2) {
+      addToast("Você já atingiu o limite de 2 regras de desconto.", 'warning');
       return;
     }
     resetForm();
@@ -170,8 +170,8 @@ export const InstructorDiscounts: React.FC = () => {
         } else {
             // INSERT
             // Double check limit before insert
-            if (discounts.length >= 3) {
-                 throw new Error("Limite de 3 regras atingido.");
+            if (discounts.length >= 2) {
+                 throw new Error("Limite de 2 regras atingido.");
             }
 
             const { error } = await supabase
@@ -209,9 +209,9 @@ export const InstructorDiscounts: React.FC = () => {
           {view === 'list' ? (
              <button 
                onClick={handleCreateNew}
-               disabled={discounts.length >= 3}
+               disabled={discounts.length >= 2}
                className={`text-sm font-semibold px-3 py-2 rounded-lg transition-colors ${
-                 discounts.length >= 3 
+                 discounts.length >= 2 
                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
                    : 'text-blue-600 bg-blue-50 hover:bg-blue-100'
                }`}
@@ -328,9 +328,9 @@ export const InstructorDiscounts: React.FC = () => {
               })
             )}
             
-            {discounts.length > 0 && discounts.length < 3 && (
+            {discounts.length > 0 && discounts.length < 2 && (
                <p className="text-center text-xs text-gray-400 mt-4">
-                 Você pode adicionar mais {3 - discounts.length} regras.
+                 Você pode adicionar mais {2 - discounts.length} regra.
                </p>
             )}
           </div>
@@ -340,7 +340,7 @@ export const InstructorDiscounts: React.FC = () => {
             
             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                <p className="text-sm text-blue-800 leading-relaxed">
-                 Configure até 3 descontos automáticos para incentivar seus alunos a comprarem mais aulas de uma vez.
+                 Configure até 2 descontos automáticos para incentivar seus alunos a comprarem mais aulas de uma vez.
                </p>
             </div>
 

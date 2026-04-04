@@ -854,9 +854,23 @@ export const InstructorProfile: React.FC = () => {
           </button>
 
           <div className="flex items-center justify-center space-x-3 text-xs text-gray-400">
-            <a href="#" className="hover:text-gray-600 transition-colors">Política de Privacidade</a>
+            <a 
+              href="/#/privacy" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="hover:text-gray-600 transition-colors"
+            >
+              Política de Privacidade
+            </a>
             <span className="w-1 h-1 bg-gray-300 rounded-full" />
-            <a href="#" className="hover:text-gray-600 transition-colors">Termos de Uso</a>
+            <a 
+              href="/#/terms" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="hover:text-gray-600 transition-colors"
+            >
+              Termos de Uso
+            </a>
           </div>
         </div>
 
