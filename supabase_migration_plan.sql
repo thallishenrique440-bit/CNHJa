@@ -4,8 +4,8 @@
 
 -- Garante que campos obrigatórios tenham defaults para evitar falhas no trigger
 ALTER TABLE public.instructors 
-  ALTER COLUMN base_price SET DEFAULT 0,
-  ALTER COLUMN night_price SET DEFAULT 0,
+  ALTER COLUMN base_price SET DEFAULT 11000,
+  ALTER COLUMN night_price SET DEFAULT 13000,
   ALTER COLUMN rating SET DEFAULT 5.0;
 
 -- Garante que a coluna role em profiles tenha um default seguro
@@ -73,10 +73,17 @@ BEGIN
       NEW.id,
       COALESCE(NEW.raw_user_meta_data->>'credential', ''),
       NEW.raw_user_meta_data->>'whatsapp',
-      0, -- Default inicial
-      0  -- Default inicial
+      11000, -- Default inicial (Carro B Diurna)
+      13000  -- Default inicial (Carro B Noturna)
     )
     ON CONFLICT (id) DO NOTHING;
+
+    -- Inserir categorias padrão com preços
+    INSERT INTO public.instructor_categories (instructor_id, category, price_day, price_night)
+    VALUES 
+      (NEW.id, 'A', 10000, 11000), -- Moto
+      (NEW.id, 'B', 11000, 13000)  -- Carro
+    ON CONFLICT (instructor_id, category) DO NOTHING;
   END IF;
 
   RETURN NEW;

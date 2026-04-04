@@ -9,6 +9,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { getDerivedStatus as getSharedDerivedStatus, LessonDisplayStatus } from '../lib/lessonStatus';
 
+import { AGENDA_SLOTS } from '../lib/slots';
+
 // --- Types ---
 type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'pending_approval' | 'reserved' | 'cancelled' | 'completed' | 'expired' | 'rejected' | 'no_show';
 type DisplayStatus = LessonDisplayStatus | 'finished' | 'past_free' | 'past_pending' | 'cancelled_view' | 'unavailable';
@@ -37,8 +39,8 @@ interface Lesson {
 }
 
 interface LunchConfig {
-  start: string;
-  end: string;
+  startSlot: string;
+  duration: number;
   isActive: boolean;
 }
 
@@ -46,6 +48,7 @@ interface TimeSlot {
   start: string;
   end: string;
   isLunch?: boolean;
+  lessonId?: string;
 }
 
 // --- Helpers ---
@@ -73,17 +76,6 @@ const formatDateFull = (dateStr: string) => {
     if (!dateStr) return '';
     const [y, m, d] = dateStr.split('-');
     return `${d}/${m}/${y}`;
-};
-
-const timeToMinutes = (time: string) => {
-  const [h, m] = time.split(':').map(Number);
-  return h * 60 + m;
-};
-
-const minutesToTime = (minutes: number) => {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 };
 
 const formatCurrency = (val: number) => {
@@ -116,11 +108,12 @@ export const InstructorAgenda: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [nightLessonsEnabled, setNightLessonsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   
   // Agenda Config State
   const [lunchConfig, setLunchConfig] = useState<LunchConfig>({
-    start: '12:00',
-    end: '13:50',
+    startSlot: '12:00',
+    duration: 2,
     isActive: true
   });
   const [workSaturdayAfternoon, setWorkSaturdayAfternoon] = useState(false);
@@ -182,7 +175,7 @@ export const InstructorAgenda: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('instructors')
-          .select('has_night_lessons, work_saturday_afternoon')
+          .select('has_night_lessons, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active')
           .eq('id', session.user.id)
           .single();
         
@@ -190,6 +183,16 @@ export const InstructorAgenda: React.FC = () => {
           setNightLessonsEnabled(!!data.has_night_lessons);
           setWorkSaturdayAfternoon(!!data.work_saturday_afternoon);
           setTempWorkSaturdayAfternoon(!!data.work_saturday_afternoon);
+          
+          if (data.lunch_start_slot) {
+            const newLunch = {
+              startSlot: data.lunch_start_slot,
+              duration: data.lunch_duration || 2,
+              isActive: data.lunch_active ?? true
+            };
+            setLunchConfig(newLunch);
+            setTempLunchConfig(newLunch);
+          }
         }
       } catch (err) {
         console.error("Error fetching settings:", err);
@@ -229,67 +232,124 @@ export const InstructorAgenda: React.FC = () => {
     };
   }, [session, addToast]);
 
-  const dynamicSlots = useMemo<TimeSlot[]>(() => {
-    const slots: TimeSlot[] = [];
-    let currentMins = timeToMinutes('07:00');
-    
-    // Determine end of day based on day of week and settings
-    const dayOfWeek = selectedDate.getDay(); // 0=Sun, 6=Sat
-    let endOfDayMins = nightLessonsEnabled ? timeToMinutes('22:10') : timeToMinutes('17:10');
-
-    if (dayOfWeek === 0) {
-        // Sunday: Show slots but they will be visually blocked/disabled in UI logic if needed
-        // For now, let's keep showing them so instructor sees the grid, 
-        // OR we could return empty array if we want to hide completely.
-        // Requirement says: "appear visually but blocked". 
-        // So we generate standard slots.
-    } else if (dayOfWeek === 6) {
-        // Saturday
-        if (workSaturdayAfternoon) {
-            endOfDayMins = timeToMinutes('17:10'); // Ends at 18:00
-        } else {
-            endOfDayMins = timeToMinutes('11:10'); // Ends at 12:00
-        }
-    }
-
-    const lessonDuration = 50;
-
-    const lunchStartMins = lunchConfig.isActive ? timeToMinutes(lunchConfig.start) : -1;
-    const lunchEndMins = lunchConfig.isActive ? timeToMinutes(lunchConfig.end) : -1;
-
-    while (currentMins <= endOfDayMins) {
-      if (lunchConfig.isActive && currentMins >= lunchStartMins && currentMins < lunchEndMins) {
-        slots.push({
-          start: minutesToTime(lunchStartMins),
-          end: minutesToTime(lunchEndMins),
-          isLunch: true
-        });
-        currentMins = lunchEndMins; 
-        continue;
-      }
-
-      if (lunchConfig.isActive && currentMins < lunchStartMins && (currentMins + lessonDuration) > lunchStartMins) {
-         currentMins = lunchStartMins;
-         continue;
-      }
-
-      let endMins = currentMins + lessonDuration;
-      if (currentMins > endOfDayMins + 10) break;
-
-      slots.push({
-        start: minutesToTime(currentMins),
-        end: minutesToTime(endMins),
-        isLunch: false
-      });
-
-      currentMins = endMins;
-    }
-    return slots;
-  }, [lunchConfig, nightLessonsEnabled, selectedDate, workSaturdayAfternoon]);
-
   // --- REAL DATA STATE ---
   const [appointments, setAppointments] = useState<Record<string, Lesson>>({});
   const [confirmingLessons, setConfirmingLessons] = useState<Record<string, boolean>>({});
+
+  const dynamicSlots = useMemo<TimeSlot[]>(() => {
+    const slots: TimeSlot[] = [];
+    
+    // Determine day of week
+    const dayOfWeek = selectedDate.getDay(); // 0=Sun, 6=Sat
+    
+    // Sunday: No slots
+    if (dayOfWeek === 0) return [];
+
+    let filteredSlots = [...AGENDA_SLOTS];
+
+    // Saturday Rule
+    if (dayOfWeek === 6) {
+      const limitTime = workSaturdayAfternoon ? '17:10' : '11:10';
+      const limitIndex = filteredSlots.indexOf(limitTime);
+      if (limitIndex !== -1) {
+        filteredSlots = filteredSlots.slice(0, limitIndex + 1);
+      }
+    } else {
+      // Weekday Night Rule
+      if (!nightLessonsEnabled) {
+        const limitIndex = filteredSlots.indexOf('17:10');
+        if (limitIndex !== -1) {
+          filteredSlots = filteredSlots.slice(0, limitIndex + 1);
+        }
+      }
+    }
+
+    const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+    const usedLessonIds = new Set<string>();
+
+    // Identify lunch slots
+    const lunchSlots: string[] = [];
+    if (lunchConfig.isActive) {
+      const startIndex = filteredSlots.indexOf(lunchConfig.startSlot);
+      if (startIndex !== -1) {
+        lunchSlots.push(...filteredSlots.slice(startIndex, startIndex + lunchConfig.duration));
+      }
+    }
+
+    const getEndTime = (time: string) => {
+      const [h, m] = time.split(':').map(Number);
+      const endMins = h * 60 + m + 50;
+      return `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
+    };
+
+    let i = 0;
+    while (i < filteredSlots.length) {
+      const startStr = filteredSlots[i];
+      const lessonKey = `${dateStr}-${startStr}`;
+      const lesson = appointments[lessonKey];
+      const hasLesson = lesson && !usedLessonIds.has(lesson.id);
+      const isLunchTime = lunchSlots.includes(startStr);
+
+      // Priority 1: Real Lesson
+      if (hasLesson && lesson) {
+        slots.push({
+          start: startStr,
+          end: getEndTime(startStr),
+          isLunch: false,
+          lessonId: lesson.id
+        });
+        usedLessonIds.add(lesson.id);
+        i++;
+        continue;
+      }
+
+      // Priority 2: Lunch Block (only if no lesson)
+      if (isLunchTime) {
+          if (startStr === lunchConfig.startSlot) {
+              // Check if ANY slot in the lunch period has a lesson
+              const anyLessonInLunch = lunchSlots.some(slot => {
+                const key = `${dateStr}-${slot}`;
+                return appointments[key] && !usedLessonIds.has(appointments[key].id);
+              });
+              
+              if (!anyLessonInLunch) {
+                  const lastLunchSlot = lunchSlots[lunchSlots.length - 1];
+                  slots.push({
+                    start: lunchConfig.startSlot,
+                    end: getEndTime(lastLunchSlot),
+                    isLunch: true
+                  });
+                  
+                  // Skip all slots covered by lunch
+                  while (i < filteredSlots.length && lunchSlots.includes(filteredSlots[i])) {
+                    i++;
+                  }
+                  continue;
+              }
+          }
+          
+          // If there's a lesson somewhere in the lunch, we render individual lunch slots
+          slots.push({
+            start: startStr,
+            end: getEndTime(startStr),
+            isLunch: true
+          });
+          i++;
+          continue;
+      }
+
+      // Priority 3: Normal Free Slot
+      slots.push({
+        start: startStr,
+        end: getEndTime(startStr),
+        isLunch: false
+      });
+
+      i++;
+    }
+    return slots;
+  }, [lunchConfig.isActive, lunchConfig.startSlot, lunchConfig.duration, nightLessonsEnabled, selectedDate, workSaturdayAfternoon, appointments]);
+
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [processingStartTimes, setProcessingStartTimes] = useState<Record<string, number>>({});
   const [showVerifyButton, setShowVerifyButton] = useState<Record<string, boolean>>({});
@@ -527,9 +587,13 @@ export const InstructorAgenda: React.FC = () => {
   }, [fetchAppointments, fetchAppointmentsDebounced, session]);
 
   const getSlotData = (date: Date, slot: TimeSlot): Lesson => {
+    if (slot.lessonId) {
+      const lesson = Object.values(appointments).find(a => a.id === slot.lessonId);
+      if (lesson) return lesson;
+    }
+
     if (slot.isLunch) return { id: 'lunch', status: 'lunch' };
-    const key = generateKey(date, slot.start);
-    return appointments[key] || { id: 'free', status: 'free' };
+    return { id: 'free', status: 'free' };
   };
 
   const getDerivedStatus = (lesson: Lesson, slot: TimeSlot, now: Date): DisplayStatus => {
@@ -554,9 +618,13 @@ export const InstructorAgenda: React.FC = () => {
     
     // Handle special cases for instructor grid
     if (sharedStatus === 'free') {
-        const [startH, startM] = slot.start.split(':').map(Number);
-        const start = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), startH, startM);
-        if (now > start) return 'past_free';
+        const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const isToday = selectedDate.toDateString() === now.toDateString();
+        if (isToday) {
+            if (nowStr > slot.start) return 'past_free';
+        } else if (selectedDate < now) {
+            return 'past_free';
+        }
         return 'free';
     }
 
@@ -567,43 +635,36 @@ export const InstructorAgenda: React.FC = () => {
     const now = new Date(Date.now() + serverTimeOffset);
     const isToday = selectedDate.toDateString() === now.toDateString();
     
-    let currentMins = -1;
-    if (isToday) {
-        currentMins = now.getHours() * 60 + now.getMinutes();
-    }
+    const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     const processed = dynamicSlots.map(slot => {
        const lesson = getSlotData(selectedDate, slot);
-       const startMins = timeToMinutes(slot.start);
-       const endMins = timeToMinutes(slot.end);
+       const startStr = slot.start;
+       const endStr = slot.end;
 
        let queueGroup = 1; 
-       let timeState: 'current' | 'future' | 'past' = 'future';
 
        if (isToday) {
-           if (endMins <= currentMins) {
+           if (endStr <= nowStr) {
                queueGroup = 2; 
-               timeState = 'past';
-           } else if (startMins <= currentMins && currentMins < endMins) {
+           } else if (startStr <= nowStr && nowStr < endStr) {
                queueGroup = 0; 
-               timeState = 'current';
            }
        } else if (selectedDate < now) {
             queueGroup = 2;
-            timeState = 'past';
        }
 
        const displayStatus = getDerivedStatus(lesson, slot, now);
 
-       return { slot, lesson, displayStatus, startMins, queueGroup };
+       return { slot, lesson, displayStatus, startStr, queueGroup };
     });
 
     return processed.sort((a, b) => {
        if (a.queueGroup !== b.queueGroup) return a.queueGroup - b.queueGroup;
-       return a.startMins - b.startMins;
+       return a.startStr.localeCompare(b.startStr);
     });
 
-  }, [selectedDate, appointments, lunchConfig, dynamicSlots, refreshCounter]);
+  }, [selectedDate, appointments, lunchConfig, dynamicSlots, refreshCounter, serverTimeOffset]);
 
   const handleSlotClick = (slot: TimeSlot, lesson: Lesson, status: DisplayStatus) => {
     if (status === 'lunch' || status === 'past_free' || status === 'unavailable') return;
@@ -679,9 +740,9 @@ export const InstructorAgenda: React.FC = () => {
 
      try {
        if (action === 'block') {
-          const startMins = timeToMinutes(time);
-          const endMins = startMins + 50;
-          const endTime = minutesToTime(endMins);
+          const [h, m] = time.split(':').map(Number);
+          const endMins = h * 60 + m + 50;
+          const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 
           const { data, error } = await supabase
             .from('appointments')
@@ -966,7 +1027,9 @@ export const InstructorAgenda: React.FC = () => {
     setIsActionLoading(true);
     try {
       const dateStr = rescheduleDate.toISOString().split('T')[0];
-      const endTime = minutesToTime(timeToMinutes(rescheduleTime) + 50);
+      const [h, m] = rescheduleTime.split(':').map(Number);
+      const endMins = h * 60 + m + 50;
+      const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 
       // 1. Double check past time
       const now = new Date(Date.now() + serverTimeOffset);
@@ -1111,20 +1174,17 @@ export const InstructorAgenda: React.FC = () => {
   };
 
   const handleSaveAgenda = async () => {
-    const s = timeToMinutes(tempLunchConfig.start);
-    const e = timeToMinutes(tempLunchConfig.end);
-    
-    if(tempLunchConfig.isActive && s >= e) {
-      addToast("O horário de início do almoço deve ser anterior ao fim.", 'warning');
-      return;
-    }
-
-    setLoading(true);
+    setIsSavingSettings(true);
     try {
         // Save to DB
         const { error } = await supabase
             .from('instructors')
-            .update({ work_saturday_afternoon: tempWorkSaturdayAfternoon })
+            .update({ 
+                work_saturday_afternoon: tempWorkSaturdayAfternoon,
+                lunch_start_slot: tempLunchConfig.startSlot,
+                lunch_duration: tempLunchConfig.duration,
+                lunch_active: tempLunchConfig.isActive
+            })
             .eq('id', session?.user?.id);
 
         if (error) throw error;
@@ -1135,11 +1195,14 @@ export const InstructorAgenda: React.FC = () => {
         setShowAgendaModal(false);
         addToast("Configurações da agenda atualizadas.", 'success');
 
+        // Trigger refetch to ensure everything is in sync
+        fetchAppointments();
+
     } catch (err: any) {
         console.error("Error saving agenda settings:", err);
         addToast("Erro ao salvar configurações.", 'error');
     } finally {
-        setLoading(false);
+        setIsSavingSettings(false);
     }
   };
 
@@ -1296,10 +1359,10 @@ export const InstructorAgenda: React.FC = () => {
           }
 
           const showPastDivider = queueGroup === 2 && sortedSlots.find(s => s.queueGroup === 2)?.slot.start === slot.start;
-          const isNightStart = timeToMinutes(slot.start) >= timeToMinutes('18:00');
+          const isNightStart = slot.start >= '18:00';
           const showNightDivider = isNightStart && 
                                    (queueGroup === 0 || queueGroup === 1) && 
-                                   !sortedSlots.find(s => s.queueGroup === queueGroup && s.startMins < timeToMinutes(slot.start) && s.startMins >= timeToMinutes('18:00'));
+                                   !sortedSlots.find(s => s.queueGroup === queueGroup && s.slot.start < slot.start && s.slot.start >= '18:00');
 
           return (
             <React.Fragment key={slot.start}>
@@ -1759,7 +1822,7 @@ export const InstructorAgenda: React.FC = () => {
         footer={
           <div className="flex space-x-3 w-full">
             <Button variant="outline" onClick={() => setShowAgendaModal(false)} fullWidth>Cancelar</Button>
-            <Button onClick={handleSaveAgenda} loading={loading} fullWidth>Salvar</Button>
+            <Button onClick={handleSaveAgenda} loading={isSavingSettings} fullWidth>Salvar</Button>
           </div>
         }
       >
@@ -1785,20 +1848,25 @@ export const InstructorAgenda: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4 animate-fade-in">
                     <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Início</label>
-                        <input 
-                            type="time" 
+                        <select 
                             className="w-full p-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            value={tempLunchConfig.start}
-                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, start: e.target.value})}
-                        />
+                            value={tempLunchConfig.startSlot}
+                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, startSlot: e.target.value})}
+                        >
+                            {AGENDA_SLOTS.map(slot => (
+                                <option key={slot} value={slot}>{slot}</option>
+                            ))}
+                        </select>
                     </div>
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Fim</label>
+                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Duração (Aulas)</label>
                         <input 
-                            type="time" 
+                            type="number" 
+                            min="1"
+                            max="5"
                             className="w-full p-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            value={tempLunchConfig.end}
-                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, end: e.target.value})}
+                            value={tempLunchConfig.duration}
+                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, duration: parseInt(e.target.value) || 1})}
                         />
                     </div>
                 </div>

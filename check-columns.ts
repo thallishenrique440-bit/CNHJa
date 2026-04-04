@@ -12,19 +12,19 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function checkColumns() {
   console.log('Checking columns of appointments table:');
-
-  const { data, error } = await supabase.rpc('get_table_columns', { table_name: 'appointments' });
-
-  if (error) {
-    // If RPC doesn't exist, try a simple query and check the keys of the first row
-    const { data: firstRow, error: rowError } = await supabase.from('appointments').select('*').limit(1).single();
-    if (rowError) {
-      console.error('Error fetching row:', rowError);
-      return;
-    }
-    console.log('Columns found in first row:', Object.keys(firstRow));
+  const { data: appointmentsData, error: appointmentsError } = await supabase.from('appointments').select('*').limit(1).single();
+  if (appointmentsError) {
+    console.error('Error fetching appointments row:', appointmentsError);
   } else {
-    console.log('Columns:', data);
+    console.log('Appointments Columns:', Object.keys(appointmentsData));
+  }
+
+  console.log('\nChecking columns of instructors table:');
+  const { data: instructorsData, error: instructorsError } = await supabase.from('instructors').select('*').limit(1).single();
+  if (instructorsError) {
+    console.error('Error fetching instructors row:', instructorsError);
+  } else {
+    console.log('Instructors Columns:', Object.keys(instructorsData));
   }
 }
 

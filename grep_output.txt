@@ -1,0 +1,13 @@
+./supabase/migrations/20260403_update_lunch_config_to_slots.sql:ALTER TABLE public.instructors
+./supabase/migrations/20260307_add_work_saturday_afternoon.sql:ALTER TABLE public.instructors
+./supabase/migrations/20260402_add_lunch_config.sql:ALTER TABLE public.instructors
+./supabase_schema.sql:  instructor_id uuid not null references public.instructors(id),
+./supabase_schema.sql:  instructor_id uuid not null references public.instructors(id),
+./supabase_schema.sql:  instructor_id uuid not null references public.instructors(id),
+./supabase_schema.sql:ALTER TABLE public.instructors
+./supabase_schema.sql:  instructor_id uuid not null references public.instructors(id) on delete cascade,
+./supabase_schema.sql:  instructor_id uuid not null references public.instructors(id) on delete cascade,
+./supabase_schema.sql:ALTER TABLE public.instructors
+./supabase_migration_plan.sql:ALTER TABLE public.instructors 
+./supabase_migration_plan.sql:INSERT INTO public.instructors (id, credential_number, whatsapp)
+./supabase_migration_plan.sql:    INSERT INTO public.instructors (id, credential_number, whatsapp, base_price, night_price)

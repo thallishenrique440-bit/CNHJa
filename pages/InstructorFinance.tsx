@@ -73,20 +73,11 @@ export const InstructorFinance: React.FC = () => {
   // Financial Metrics
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
-  const [totalTips, setTotalTips] = useState(0);
-  const [monthlyTips, setMonthlyTips] = useState(0);
-  
-  // New Balance Metrics
-  const [pendingBalance, setPendingBalance] = useState(0);
-  const [availableBalance, setAvailableBalance] = useState(0);
-  const [paidOutTotal, setPaidOutTotal] = useState(0);
   
   // Stripe State
   const [stripeStatus, setStripeStatus] = useState<StripeStatus>('none');
   
   // UI States
-  const [showTipsInfoModal, setShowTipsInfoModal] = useState(false);
-  const [showPaymentsInfoModal, setShowPaymentsInfoModal] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Helper to format currency from cents
@@ -159,11 +150,6 @@ export const InstructorFinance: React.FC = () => {
         // --- Financial Calculations (Strictly from transactions) ---
         let totalRev = 0;
         let monthRev = 0;
-        let totalTip = 0;
-        let monthTip = 0;
-        
-        let toReceiveBal = 0;
-        let transferredBal = 0;
 
         const now = new Date();
         const currentMonth = now.getMonth();
@@ -175,14 +161,7 @@ export const InstructorFinance: React.FC = () => {
 
             const val = t.net_amount || 0;
 
-            // 1. Payout-based balances
-            if (t.stripe_payout_id) {
-                transferredBal += val;
-            } else {
-                toReceiveBal += val;
-            }
-
-            // 2. Earnings Summary (Total historical earnings)
+            // Earnings Summary (Total historical earnings)
             const tDate = new Date(t.event_date || t.created_at);
             const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
             
@@ -191,10 +170,8 @@ export const InstructorFinance: React.FC = () => {
                 if (isCurrentMonth) monthRev += val;
             } else if (t.type === 'tip') {
                 totalRev += val;
-                totalTip += val;
                 if (isCurrentMonth) {
                     monthRev += val;
-                    monthTip += val;
                 }
             } else if (t.type === 'refund') {
                 totalRev += val; // val is negative for refunds
@@ -204,13 +181,7 @@ export const InstructorFinance: React.FC = () => {
 
         setTotalRevenue(totalRev);
         setMonthlyRevenue(monthRev);
-        setTotalTips(totalTip);
-        setMonthlyTips(monthTip);
         
-        setPendingBalance(0); // We no longer show pending in the main metrics
-        setAvailableBalance(toReceiveBal);
-        setPaidOutTotal(transferredBal);
-
         // --- Build History (Transactions ONLY) ---
         const items: HistoryItem[] = typedTrans.map(t => {
             const logicalDate = t.event_date || t.created_at;
@@ -327,13 +298,6 @@ export const InstructorFinance: React.FC = () => {
       <div className="px-6 py-6 bg-white border-b border-gray-100 sticky top-0 z-20">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-900">Financeiro</h1>
-          <button 
-            onClick={() => setShowPaymentsInfoModal(true)}
-            className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
-            title="Como funcionam os pagamentos"
-          >
-            <Info className="w-5 h-5" />
-          </button>
         </div>
         <div className="flex items-center justify-between mt-1">
             <p className="text-xs text-gray-500">Gestão de repasses</p>
@@ -360,57 +324,26 @@ export const InstructorFinance: React.FC = () => {
 
       <div className="flex-1 px-6 py-6 space-y-6">
         
-        <div className="grid grid-cols-2 gap-4">
-          {/* Main Balance - Full Width */}
-          <div className="col-span-2 bg-indigo-600 p-5 rounded-2xl shadow-md flex flex-col justify-center text-white">
-            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-wide mb-1 block">A Receber</span>
-            <span className="text-3xl font-bold truncate block">
-                {loading ? '...' : formatCurrency(availableBalance)}
+        <div className="space-y-4">
+          {/* Main Card: Este mês */}
+          <div className="bg-indigo-600 p-6 rounded-3xl shadow-lg shadow-indigo-100 flex flex-col text-white">
+            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-widest mb-1 block">Este mês</span>
+            <span className="text-4xl font-bold block mb-1">
+                {loading ? '...' : formatCurrency(monthlyRevenue)}
             </span>
-            <div className="flex justify-between items-center mt-3 pt-3 border-t border-indigo-500/50">
-                <span className="text-[10px] text-indigo-200">Ganhos totais: <span className="text-white font-semibold">{formatCurrency(totalRevenue)}</span></span>
-                <span className="text-[10px] text-indigo-200 font-medium">Este mês: {formatCurrency(monthlyRevenue)}</span>
+            <p className="text-[10px] text-indigo-200 font-medium mb-4">Valor líquido após taxas</p>
+            
+            <div className="pt-4 border-t border-indigo-500/50 flex justify-between items-center">
+                <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider">Ganhos totais</span>
+                <span className="text-sm font-bold">{formatCurrency(totalRevenue)}</span>
             </div>
           </div>
 
-          {/* Fee Transparency Message */}
-          <div className="col-span-2 bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex items-center space-x-3">
-            <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-indigo-600 text-xs font-bold">ℹ️</span>
-            </div>
-            <p className="text-[10px] text-indigo-800 leading-tight">
-              Você recebe <span className="font-bold text-indigo-900">90%</span> do valor de cada aula. 
-              A plataforma retém <span className="font-bold text-indigo-900">10%</span> para custos operacionais e de processamento.
+          {/* Info Card */}
+          <div className="bg-gray-50 border border-gray-100 p-3.5 rounded-2xl">
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Os repasses são feitos automaticamente pela Stripe direto para sua conta bancária. As primeiras transferências podem levar até 7 dias úteis.
             </p>
-          </div>
-
-          {/* Tips Card */}
-          <div 
-            onClick={() => setShowTipsInfoModal(true)}
-            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center cursor-pointer active:scale-[0.98] transition-all"
-          >
-             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 flex items-center">
-                Caixinha 🎁
-             </span>
-             <span className="text-xl font-bold text-amber-600 truncate">
-                {loading ? '...' : formatCurrency(totalTips)}
-             </span>
-             <span className="text-[10px] text-gray-400 mt-2 font-medium">
-                Este mês: {formatCurrency(monthlyTips)}
-             </span>
-          </div>
-
-          {/* Paid Out Card */}
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
-             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1 flex items-center">
-                Transferido 🏦
-             </span>
-             <span className="text-xl font-bold text-gray-900 truncate">
-                {loading ? '...' : formatCurrency(paidOutTotal)}
-             </span>
-             <span className="text-[10px] text-gray-400 mt-2 font-medium">
-                Repasses automáticos
-             </span>
           </div>
         </div>
 
@@ -485,16 +418,6 @@ export const InstructorFinance: React.FC = () => {
                 }`}></div>
         </div>
 
-        <Button 
-          variant="outline" 
-          fullWidth 
-          onClick={() => setShowPaymentsInfoModal(true)}
-          className="bg-white border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 py-4 shadow-sm"
-        >
-          <Info className="w-4 h-4" />
-          Como funcionam os pagamentos
-        </Button>
-
         <div className="space-y-4 pt-2">
           <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Histórico de Aulas</h2>
           
@@ -561,9 +484,6 @@ export const InstructorFinance: React.FC = () => {
                                     <span className="text-[10px] text-gray-400">
                                         {item.status === 'pending' && 'Pendente'}
                                         {item.status === 'completed' && (
-                                            <span className="text-blue-500 font-bold">Em processamento</span>
-                                        )}
-                                        {item.status === 'completed' && (
                                             item.stripePayoutId 
                                                 ? 'Transferido' 
                                                 : <span className="text-green-600 font-bold">Concluído</span>
@@ -585,8 +505,12 @@ export const InstructorFinance: React.FC = () => {
                                                 <div className="text-gray-400">Valor Bruto:</div>
                                                 <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
                                                 
-                                                <div className="text-gray-400">Taxa Plataforma (10%):</div>
-                                                <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee || 0))}</div>
+                                                {item.type === 'lesson' && item.platformFee !== undefined && item.platformFee > 0 && (
+                                                    <>
+                                                        <div className="text-gray-400">Taxa Plataforma (10%):</div>
+                                                        <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee))}</div>
+                                                    </>
+                                                )}
                                                 
                                                 <div className="text-gray-400 font-bold">Valor Líquido:</div>
                                                 <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
@@ -606,104 +530,6 @@ export const InstructorFinance: React.FC = () => {
         </div>
 
       </div>
-
-      <Modal
-        isOpen={showPaymentsInfoModal}
-        onClose={() => setShowPaymentsInfoModal(false)}
-        title="💰 Como funcionam os pagamentos"
-        footer={
-           <Button fullWidth onClick={() => setShowPaymentsInfoModal(false)}>
-              Entendi
-            </Button>
-        }
-      >
-        <div className="space-y-6 text-left pb-4">
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              📊 Onde acompanhar seu saldo
-            </h4>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              Você pode acompanhar valores disponíveis e repasses diretamente no painel do Stripe (sua conta digital conectada à plataforma).
-            </p>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              ⚙️ Taxa da plataforma
-            </h4>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              A plataforma cobra uma taxa fixa de 10% por aula. Essa taxa é vitalícia e não está sujeita a alterações.
-            </p>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              💳 Pagamento das aulas
-            </h4>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              O pagamento das aulas é feito pelo aluno e cai diretamente na sua conta Stripe Express (sua carteira digital).
-            </p>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              🏦 Repasse para sua conta
-            </h4>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              O Stripe realiza automaticamente os repasses para sua conta bancária cadastrada, conforme as regras da sua conta Stripe.
-            </p>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              💵 Quanto você recebe
-            </h4>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              Você recebe exatamente 90% do valor de cada aula. As taxas de processamento do cartão são pagas pela plataforma. 
-              <span className="block mt-1 font-medium text-indigo-600">Exemplo: Se a aula custa R$ 100, R$ 90 são seus.</span>
-            </p>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              📈 Ajuste de preço
-            </h4>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              Se quiser manter um valor líquido específico, você pode ajustar o preço da aula em aproximadamente 10%.
-            </p>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-gray-900 flex items-center gap-2 mb-1">
-              🔐 Confirmação de pagamentos
-            </h4>
-            <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
-              <p>📌 Os pagamentos são reservados no momento do agendamento e confirmados quando você aceita a aula.</p>
-              <p>📌 Em pacotes, o valor total é processado de uma vez para garantir todas as aulas.</p>
-            </div>
-          </section>
-        </div>
-      </Modal>
-
-      <Modal
-        isOpen={showTipsInfoModal}
-        onClose={() => setShowTipsInfoModal(false)}
-        title="Sobre as caixinhas"
-        footer={
-           <Button fullWidth onClick={() => setShowTipsInfoModal(false)}>
-              Entendi
-            </Button>
-        }
-      >
-        <div className="text-center">
-            <div className="w-12 h-12 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">
-              🎁
-            </div>
-            <p className="text-sm text-gray-500 mb-2 leading-relaxed">
-              A plataforma não cobra comissão sobre a caixinha (gorjeta), apenas as taxas do Stripe.
-            </p>
-          </div>
-      </Modal>
 
       <InstructorBottomNav />
     </div>

@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
 import Stripe from 'stripe';
 import { calculateDiscount, getInstructorDiscounts } from '../lib/discount-utils.js';
+import { AGENDA_SLOTS } from '../lib/slots.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -75,7 +76,7 @@ export default async function handler(req: any, res: any) {
     // 1. Fetch instructor details (Stripe Account ID)
     const { data: instructor, error: instructorError } = await supabase
       .from('instructors')
-      .select('stripe_account_id, work_saturday_afternoon')
+      .select('stripe_account_id, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons')
       .eq('id', instructorId)
       .single();
 
@@ -126,6 +127,17 @@ export default async function handler(req: any, res: any) {
                     ? 'Aos sábados, o horário limite é 17:10.' 
                     : 'Aos sábados, o horário limite é 11:10.' 
              });
+          }
+      }
+
+      // NEW: Lunch Check (Slot-based)
+      if (instructor.lunch_active) {
+          const startIndex = AGENDA_SLOTS.indexOf(instructor.lunch_start_slot || '12:00');
+          if (startIndex !== -1) {
+            const lunchSlots = AGENDA_SLOTS.slice(startIndex, startIndex + (instructor.lunch_duration || 2));
+            if (lunchSlots.includes(lesson.startTime)) {
+              return res.status(400).json({ error: `O horário ${lesson.startTime} está dentro do intervalo de almoço do instrutor.` });
+            }
           }
       }
       

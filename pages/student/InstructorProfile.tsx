@@ -8,6 +8,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getGoogleMapsUrl } from '../../src/utils/maps';
+import { AGENDA_SLOTS } from '../../lib/slots';
 
 // Define Interface for the State matches DB structure
 interface DiscountRule {
@@ -47,6 +48,9 @@ interface InstructorProfileData {
   priceNight: number; // Legacy Fallback
   hasNightLessons: boolean;
   workSaturdayAfternoon: boolean; // New Field
+  lunchStartSlot: string;
+  lunchDuration: number;
+  lunchActive: boolean;
   category: 'A' | 'B' | 'AB';
   discounts: DiscountRule[]; 
   reviews: any[];
@@ -121,6 +125,12 @@ export const StudentInstructorProfile: React.FC = () => {
   const timeToMinutes = (time: string) => {
     const [h, m] = time.split(':').map(Number);
     return h * 60 + m;
+  };
+
+  const minutesToTime = (mins: number) => {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   };
 
   const formatCurrency = (value: number) => {
@@ -240,6 +250,9 @@ export const StudentInstructorProfile: React.FC = () => {
             night_price,
             has_night_lessons,
             work_saturday_afternoon,
+            lunch_start_slot,
+            lunch_duration,
+            lunch_active,
             whatsapp,
             credential_number,
             meeting_point,
@@ -398,6 +411,9 @@ export const StudentInstructorProfile: React.FC = () => {
             priceNight: data.night_price || basePrice,
             hasNightLessons: !!data.has_night_lessons,
             workSaturdayAfternoon: !!data.work_saturday_afternoon,
+            lunchStartSlot: data.lunch_start_slot || '12:00',
+            lunchDuration: data.lunch_duration || 2,
+            lunchActive: !!data.lunch_active,
             category: cat,
             discounts: discountsData || [], // Using REAL discounts from DB
             reviews: formattedReviews,
@@ -548,21 +564,82 @@ export const StudentInstructorProfile: React.FC = () => {
   }, [instructor, selectedLessonCategory]);
 
   const timeSlots = useMemo(() => {
-    const slots = [
-      '07:00', '07:50', '08:40', '09:30', '10:20', '11:10', // Morning
-      // Lunch 12:00 - 13:50 Skipped
-      '13:50', '14:40', '15:30', '16:20', '17:10' // Afternoon
-    ];
+    if (!instructor) return [];
+    
+    let filteredSlots = [...AGENDA_SLOTS];
 
-    if (instructor?.hasNightLessons) {
-      slots.push('18:00', '18:50', '19:40', '20:30', '21:20', '22:10');
+    // Filter based on night lessons
+    if (!instructor.hasNightLessons) {
+      const limitIndex = filteredSlots.indexOf('17:10');
+      if (limitIndex !== -1) {
+        filteredSlots = filteredSlots.slice(0, limitIndex + 1);
+      }
     }
-    return slots;
-  }, [instructor?.hasNightLessons]);
+
+    // Saturday Rule
+    if (selectedDate.getDay() === 6) {
+      const limitTime = instructor.workSaturdayAfternoon ? '17:10' : '11:10';
+      const limitIndex = filteredSlots.indexOf(limitTime);
+      if (limitIndex !== -1) {
+        filteredSlots = filteredSlots.slice(0, limitIndex + 1);
+      }
+    }
+    
+    if (!instructor.lunchActive) {
+      return filteredSlots;
+    }
+
+    // Identify lunch slots
+    const lunchSlots: string[] = [];
+    const startIndex = filteredSlots.indexOf(instructor.lunchStartSlot);
+    
+    if (startIndex !== -1) {
+      for (let i = 0; i < instructor.lunchDuration; i++) {
+        if (filteredSlots[startIndex + i]) {
+          lunchSlots.push(filteredSlots[startIndex + i]);
+        }
+      }
+    }
+
+    const items: (string | { type: 'lunch', start: string, end: string })[] = [];
+    let lunchInserted = false;
+
+    for (const time of filteredSlots) {
+      if (lunchSlots.includes(time)) {
+        if (!lunchInserted) {
+          const lastLunchSlot = lunchSlots[lunchSlots.length - 1];
+          const [h, m] = lastLunchSlot.split(':').map(Number);
+          const endMins = h * 60 + m + 50;
+          const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
+          
+          items.push({ 
+            type: 'lunch', 
+            start: instructor.lunchStartSlot, 
+            end: endTime 
+          });
+          lunchInserted = true;
+        }
+        // Skip other lunch slots
+        continue;
+      }
+      items.push(time);
+    }
+
+    return items;
+  }, [instructor, instructor?.lunchActive, instructor?.lunchStartSlot, instructor?.lunchDuration, selectedDate, instructor?.hasNightLessons, instructor?.workSaturdayAfternoon]);
 
   // --- CHECK REAL AVAILABILITY ---
   const isSlotAvailable = (time: string) => {
-      // 1. Check if DB says it's busy
+      // 0. Check Lunch Overlap (Slot-based)
+      if (instructor?.lunchActive) {
+          const startIndex = AGENDA_SLOTS.indexOf(instructor.lunchStartSlot);
+          if (startIndex !== -1) {
+            const lunchSlots = AGENDA_SLOTS.slice(startIndex, startIndex + instructor.lunchDuration);
+            if (lunchSlots.includes(time)) return false;
+          }
+      }
+
+      // 1. Check DB says it's busy
       if (busySlots.includes(time)) return false;
 
       // 2. Check Sunday Rule (Always OFF)
@@ -582,6 +659,7 @@ export const StudentInstructorProfile: React.FC = () => {
 
       return true;
   };
+
 
   const toggleSlot = (time: string) => {
     // 1. CRITICAL VALIDATION: Ensure category is selected
@@ -1327,7 +1405,21 @@ export const StudentInstructorProfile: React.FC = () => {
              </div>
 
              <div className="grid grid-cols-4 gap-2">
-                {timeSlots.map((time) => {
+                {timeSlots.map((item, index) => {
+                  if (typeof item === 'object' && item.type === 'lunch') {
+                    return (
+                      <button
+                        key={`lunch-${index}`}
+                        disabled={true}
+                        className="py-2 rounded-lg text-xs font-medium bg-orange-50 text-orange-400 border border-orange-100 cursor-not-allowed flex flex-col items-center leading-tight min-h-[44px] justify-center"
+                      >
+                        <span className="text-[10px]">{item.start}</span>
+                        <span className="text-[8px] font-bold uppercase tracking-tighter">Almoço</span>
+                      </button>
+                    );
+                  }
+
+                  const time = item as string;
                   const isAvailable = isSlotAvailable(time);
                   const dateKey = getDateKey(selectedDate);
                   const slotKey = `${dateKey}|${time}`;
@@ -1365,7 +1457,7 @@ export const StudentInstructorProfile: React.FC = () => {
                       onClick={() => toggleSlot(time)}
                       disabled={isDisabled}
                       className={`
-                        py-2 rounded-lg text-sm font-medium transition-all duration-200 relative
+                        py-2 rounded-lg text-sm font-medium transition-all duration-200 relative min-h-[44px] flex items-center justify-center
                         ${isSelected 
                           ? 'bg-blue-600 text-white shadow-md transform scale-105 z-10' 
                           : !isDisabled 
@@ -1374,9 +1466,9 @@ export const StudentInstructorProfile: React.FC = () => {
                         }
                       `}
                     >
-                      {time}
+                      <span>{time}</span>
                       {isNight && !isDisabled && !isSelected && (
-                         <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-indigo-400 rounded-full"></span>
+                        <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-indigo-400 rounded-full"></span>
                       )}
                     </button>
                   );

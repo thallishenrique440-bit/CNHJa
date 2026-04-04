@@ -340,7 +340,7 @@ export const StudentFinance: React.FC = () => {
                         </p>
                         {!item.isFinancial && isLesson && (
                             <p className={`text-[9px] font-bold uppercase mt-1 ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
-                                {item.isPast ? 'Realizada (Processando)' : 'Agendada'}
+                                {item.isPast ? 'Realizada' : 'Agendada'}
                             </p>
                         )}
                         <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(item.sortDate)}</p>
@@ -358,11 +358,6 @@ export const StudentFinance: React.FC = () => {
                       {item.status === 'failed' && (
                           <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
                               Falhou
-                          </span>
-                      )}
-                      {item.isFinancial && item.status === 'completed' && (
-                          <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
-                              Em processamento
                           </span>
                       )}
                       {item.isFinancial && item.status === 'completed' && (
