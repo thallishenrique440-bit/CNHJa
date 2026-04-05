@@ -97,23 +97,25 @@ export const RegisterInstructor: React.FC = () => {
 
     setLoading(true);
 
+    const signupData = {
+      full_name: name,
+      city: city,
+      phone: whatsapp,
+      whatsapp: whatsapp,
+      credential: detranCredential,
+      role: 'instructor',
+      terms_accepted_at: new Date().toISOString(),
+      privacy_accepted_at: new Date().toISOString()
+    };
+
+    console.log('RegisterInstructor: Initiating signup with metadata:', signupData);
+
     // SUPABASE SIGN UP
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: {
-          full_name: name,
-          city: city, // Standardized via CitySelect
-          phone: whatsapp,
-          whatsapp: whatsapp,
-          credential: detranCredential,
-          role: 'instructor',
-          terms_accepted_at: new Date().toISOString(),
-          terms_version: TERMS_VERSION,
-          privacy_accepted_at: new Date().toISOString(),
-          privacy_version: PRIVACY_VERSION
-        }
+        data: signupData
       }
     });
 

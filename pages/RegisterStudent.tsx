@@ -90,21 +90,23 @@ export const RegisterStudent: React.FC = () => {
 
     setLoading(true);
 
+    const signupData = {
+      full_name: name,
+      city: city, 
+      role: 'student',
+      phone: whatsapp,
+      terms_accepted_at: new Date().toISOString(),
+      privacy_accepted_at: new Date().toISOString()
+    };
+
+    console.log('RegisterStudent: Initiating signup with metadata:', signupData);
+
     // SUPABASE SIGN UP
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: {
-          full_name: name,
-          city: city, 
-          role: 'student',
-          phone: whatsapp, // Pass phone in metadata too
-          terms_accepted_at: new Date().toISOString(),
-          terms_version: TERMS_VERSION,
-          privacy_accepted_at: new Date().toISOString(),
-          privacy_version: PRIVACY_VERSION
-        }
+        data: signupData
       }
     });
 
