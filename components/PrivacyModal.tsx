@@ -1,6 +1,7 @@
 import React from 'react';
 import { Modal } from './Modal';
 import { Button } from './Button';
+import { Link } from 'react-router-dom';
 
 interface PrivacyModalProps {
   isOpen: boolean;
@@ -120,17 +121,15 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onA
         </div>
 
         <div className="pt-4 flex justify-center">
-          <a 
-            href="/#/privacy" 
-            target="_blank" 
-            rel="noopener noreferrer"
+          <Link 
+            to="/privacy?from=register" 
             className="text-blue-600 font-bold hover:underline flex items-center gap-1.5"
           >
             Ver versão completa da Política de Privacidade
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
-          </a>
+          </Link>
         </div>
 
         <div className="pt-4 border-t border-gray-100 italic text-xs text-gray-400">

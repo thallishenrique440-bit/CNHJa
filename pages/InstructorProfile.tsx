@@ -15,7 +15,7 @@ import {
   Pencil,
   Copy
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { CitySelect } from '../components/CitySelect';
@@ -854,23 +854,19 @@ export const InstructorProfile: React.FC = () => {
           </button>
 
           <div className="flex items-center justify-center space-x-3 text-xs text-gray-400">
-            <a 
-              href="/#/privacy" 
-              target="_blank" 
-              rel="noopener noreferrer"
+            <Link 
+              to="/privacy" 
               className="hover:text-gray-600 transition-colors"
             >
               Política de Privacidade
-            </a>
+            </Link>
             <span className="w-1 h-1 bg-gray-300 rounded-full" />
-            <a 
-              href="/#/terms" 
-              target="_blank" 
-              rel="noopener noreferrer"
+            <Link 
+              to="/terms" 
               className="hover:text-gray-600 transition-colors"
             >
               Termos de Uso
-            </a>
+            </Link>
           </div>
         </div>
 

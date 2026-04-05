@@ -1,11 +1,20 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { APP_CONFIG } from '../constants';
 
 export const Privacy: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const fromRegister = searchParams.get('from') === 'register';
   const lastUpdate = "04 de abril de 2026";
+
+  const handleAgree = () => {
+    if (fromRegister) {
+      localStorage.setItem('ab_privacy_agreed', 'true');
+    }
+    navigate(-1);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50/50 via-white to-white flex flex-col px-6 py-10 sm:justify-center items-center">
@@ -143,7 +152,7 @@ export const Privacy: React.FC = () => {
         </div>
 
         <div className="pt-8 border-t border-gray-100 flex justify-center">
-          <Button onClick={() => navigate(-1)} className="px-12 py-3.5">
+          <Button onClick={handleAgree} className="px-12 py-3.5">
             Entendi e concordo
           </Button>
         </div>

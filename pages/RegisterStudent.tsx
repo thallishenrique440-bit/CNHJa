@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -15,7 +15,7 @@ export const RegisterStudent: React.FC = () => {
   
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [whatsapp, setWhatsapp] = useState(''); // NEW STATE
+  const [whatsapp, setWhatsapp] = useState('');
   const [city, setCity] = useState(''); 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -23,6 +23,35 @@ export const RegisterStudent: React.FC = () => {
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Persist form data to sessionStorage to avoid loss when navigating to terms/privacy
+  useEffect(() => {
+    const savedData = sessionStorage.getItem('ab_student_register_data');
+    if (savedData) {
+      const data = JSON.parse(savedData);
+      setName(data.name || '');
+      setEmail(data.email || '');
+      setWhatsapp(data.whatsapp || '');
+      setCity(data.city || '');
+    }
+  }, []);
+
+  useEffect(() => {
+    const data = { name, email, whatsapp, city };
+    sessionStorage.setItem('ab_student_register_data', JSON.stringify(data));
+  }, [name, email, whatsapp, city]);
+
+  // Check for terms/privacy acceptance from full page
+  useEffect(() => {
+    const termsAgreed = localStorage.getItem('ab_terms_agreed');
+    const privacyAgreed = localStorage.getItem('ab_privacy_agreed');
+    
+    if (termsAgreed === 'true' || privacyAgreed === 'true') {
+      setAcceptedTerms(true);
+      if (termsAgreed) localStorage.removeItem('ab_terms_agreed');
+      if (privacyAgreed) localStorage.removeItem('ab_privacy_agreed');
+    }
+  }, []);
 
   const isPasswordStrong = (pwd: string) => {
     const minLength = 8;

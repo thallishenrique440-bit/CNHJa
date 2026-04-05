@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -12,7 +12,7 @@ import { useToast } from '../contexts/ToastContext';
 export const RegisterInstructor: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
-
+ 
   const [name, setName] = useState('');
   const [detranCredential, setDetranCredential] = useState('');
   const [email, setEmail] = useState('');
@@ -24,6 +24,36 @@ export const RegisterInstructor: React.FC = () => {
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Persist form data to sessionStorage to avoid loss when navigating to terms/privacy
+  useEffect(() => {
+    const savedData = sessionStorage.getItem('ab_instructor_register_data');
+    if (savedData) {
+      const data = JSON.parse(savedData);
+      setName(data.name || '');
+      setDetranCredential(data.detranCredential || '');
+      setEmail(data.email || '');
+      setWhatsapp(data.whatsapp || '');
+      setCity(data.city || '');
+    }
+  }, []);
+
+  useEffect(() => {
+    const data = { name, detranCredential, email, whatsapp, city };
+    sessionStorage.setItem('ab_instructor_register_data', JSON.stringify(data));
+  }, [name, detranCredential, email, whatsapp, city]);
+
+  // Check for terms/privacy acceptance from full page
+  useEffect(() => {
+    const termsAgreed = localStorage.getItem('ab_terms_agreed');
+    const privacyAgreed = localStorage.getItem('ab_privacy_agreed');
+    
+    if (termsAgreed === 'true' || privacyAgreed === 'true') {
+      setAcceptedTerms(true);
+      if (termsAgreed) localStorage.removeItem('ab_terms_agreed');
+      if (privacyAgreed) localStorage.removeItem('ab_privacy_agreed');
+    }
+  }, []);
 
   const isPasswordStrong = (pwd: string) => {
     const minLength = 8;

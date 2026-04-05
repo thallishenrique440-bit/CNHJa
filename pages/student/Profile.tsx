@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { 
   Camera, 
   Pencil, 
@@ -416,17 +416,15 @@ export const StudentProfile: React.FC = () => {
             Última atualização: Abril de 2026.
           </p>
           <div className="pt-4 flex justify-center">
-            <a 
-              href="/#/privacy" 
-              target="_blank" 
-              rel="noopener noreferrer"
+            <Link 
+              to="/privacy" 
               className="text-blue-600 font-bold hover:underline flex items-center gap-1.5"
             >
               Ver versão completa da Política de Privacidade
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
-            </a>
+            </Link>
           </div>
         </div>
       </Modal>
@@ -458,17 +456,15 @@ export const StudentProfile: React.FC = () => {
             Última atualização: Março de 2026.
           </p>
           <div className="pt-4 flex justify-center">
-            <a 
-              href="/#/terms" 
-              target="_blank" 
-              rel="noopener noreferrer"
+            <Link 
+              to="/terms" 
               className="text-blue-600 font-bold hover:underline flex items-center gap-1.5"
             >
               Ver versão completa dos Termos de Uso
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
-            </a>
+            </Link>
           </div>
         </div>
       </Modal>
