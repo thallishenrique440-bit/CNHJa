@@ -6,23 +6,50 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   userRole: 'student' | 'instructor' | null;
+  isProfileComplete: boolean;
   serverTimeOffset: number;
   signOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   session: null,
   loading: true,
   userRole: null,
+  isProfileComplete: false,
   serverTimeOffset: 0,
   signOut: async () => {},
+  refreshProfile: async () => {},
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<'student' | 'instructor' | null>(null);
+  const [isProfileComplete, setIsProfileComplete] = useState(false);
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
+
+  const fetchProfile = React.useCallback(async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('is_profile_complete')
+        .eq('id', userId)
+        .single();
+      
+      if (!error && data) {
+        setIsProfileComplete(data.is_profile_complete);
+      }
+    } catch (err) {
+      console.error('[Auth] Erro ao buscar perfil:', err);
+    }
+  }, []);
+
+  const refreshProfile = React.useCallback(async () => {
+    if (session?.user?.id) {
+      await fetchProfile(session.user.id);
+    }
+  }, [session, fetchProfile]);
 
   useEffect(() => {
     let mounted = true;
@@ -55,6 +82,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (data.session.user?.user_metadata?.role) {
               setUserRole(data.session.user.user_metadata.role);
             }
+            await fetchProfile(data.session.user.id);
           }
           setLoading(false);
         }
@@ -67,13 +95,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initSession();
 
     // 2. Listen for changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (mounted) {
         setSession(session);
-        if (session?.user?.user_metadata?.role) {
-          setUserRole(session.user.user_metadata.role);
+        if (session?.user) {
+          if (session.user.user_metadata?.role) {
+            setUserRole(session.user.user_metadata.role);
+          }
+          await fetchProfile(session.user.id);
         } else {
           setUserRole(null);
+          setIsProfileComplete(false);
         }
         setLoading(false);
       }
@@ -103,7 +135,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ session, loading, userRole, serverTimeOffset, signOut }}>
+    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, serverTimeOffset, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

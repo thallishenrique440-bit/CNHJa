@@ -23,7 +23,7 @@ import { useToast } from '../../contexts/ToastContext';
 export const StudentProfile: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { session, signOut } = useAuth();
+  const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -137,6 +137,8 @@ export const StudentProfile: React.FC = () => {
           .eq('id', userId);
 
         if (error) throw error;
+
+        await refreshProfile();
 
         addToast("Informações salvas com sucesso!", 'success');
     } catch (error: any) {

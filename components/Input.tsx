@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label: string;
+  icon?: React.ReactNode;
 }
 
-export const Input: React.FC<InputProps> = ({ label, className = '', type, ...props }) => {
+export const Input: React.FC<InputProps> = ({ label, className = '', type, icon, ...props }) => {
   const [showPassword, setShowPassword] = useState(false);
   const isPassword = type === 'password';
   const inputType = isPassword ? (showPassword ? 'text' : 'password') : type;
@@ -15,9 +16,14 @@ export const Input: React.FC<InputProps> = ({ label, className = '', type, ...pr
         {label}
       </label>
       <div className="relative group">
+        {icon && (
+          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none group-focus-within:text-blue-500 transition-colors">
+            {icon}
+          </div>
+        )}
         <input
           type={inputType}
-          className={`w-full px-4 py-3.5 rounded-xl bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all duration-200 ${isPassword ? 'pr-12' : ''} ${className}`}
+          className={`w-full ${icon ? 'pl-11' : 'px-4'} py-3.5 rounded-xl bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all duration-200 ${isPassword ? 'pr-12' : ''} ${className}`}
           {...props}
         />
         {isPassword && (

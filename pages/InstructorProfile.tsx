@@ -27,7 +27,7 @@ import { useToast } from '../contexts/ToastContext';
 
 export const InstructorProfile: React.FC = () => {
   const navigate = useNavigate();
-  const { session, signOut } = useAuth();
+  const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -394,6 +394,7 @@ export const InstructorProfile: React.FC = () => {
       }
 
       addToast("Perfil salvo com sucesso!", 'success');
+      await refreshProfile();
 
       localStorage.setItem('ab_instructor_preferences', JSON.stringify({
         nightLessonsEnabled,
