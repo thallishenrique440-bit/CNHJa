@@ -18,15 +18,18 @@ DECLARE
 BEGIN
   -- Extrai a role dos metadados ou assume 'student'
   user_role := COALESCE(NEW.raw_user_meta_data->>'role', 'student');
-  terms_accepted := NEW.raw_user_meta_data->>'terms_accepted_at';
-  privacy_accepted := NEW.raw_user_meta_data->>'privacy_accepted_at';
+  
+  -- Extração segura dos timestamps de aceite
+  terms_accepted := COALESCE(NEW.raw_user_meta_data->>'terms_accepted_at', NULL);
+  privacy_accepted := COALESCE(NEW.raw_user_meta_data->>'privacy_accepted_at', NULL);
 
   -- SECURITY: Enforce terms and privacy acceptance at the database level for new accounts
-  IF (terms_accepted IS NULL) THEN
+  -- Validamos tanto NULL quanto string vazia para maior resiliência
+  IF (terms_accepted IS NULL OR terms_accepted = '') THEN
     RAISE EXCEPTION 'Terms of Use must be accepted to create an account.';
   END IF;
 
-  IF (privacy_accepted IS NULL) THEN
+  IF (privacy_accepted IS NULL OR privacy_accepted = '') THEN
     RAISE EXCEPTION 'Privacy Policy must be accepted to create an account.';
   END IF;
 
@@ -67,11 +70,13 @@ BEGIN
     VALUES (
       NEW.id,
       COALESCE(NEW.raw_user_meta_data->>'credential', ''),
-      NEW.raw_user_meta_data->>'whatsapp',
+      COALESCE(NEW.raw_user_meta_data->>'whatsapp', NEW.raw_user_meta_data->>'phone', ''),
       11000, -- Default inicial (Carro B Diurna)
       13000  -- Default inicial (Carro B Noturna)
     )
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT (id) DO UPDATE SET
+      credential_number = EXCLUDED.credential_number,
+      whatsapp = EXCLUDED.whatsapp;
 
     -- Inserir categorias padrão com preços
     INSERT INTO public.instructor_categories (instructor_id, category, day_price, night_price)
