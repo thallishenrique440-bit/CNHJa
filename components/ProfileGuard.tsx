@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 export const ProfileGuard: React.FC = () => {
-  const { session, isProfileComplete, loading } = useAuth();
+  const { session, isProfileComplete, loading, userRole } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -16,11 +16,13 @@ export const ProfileGuard: React.FC = () => {
     );
   }
 
-  const completeProfilePath = '/complete-profile';
-
   if (!isProfileComplete && session) {
-    if (location.pathname !== completeProfilePath) {
-      return <Navigate to={completeProfilePath} replace />;
+    const studentProfilePath = '/student/profile';
+    const instructorProfilePath = '/instructor/profile';
+    const targetPath = userRole === 'instructor' ? instructorProfilePath : studentProfilePath;
+
+    if (location.pathname !== targetPath) {
+      return <Navigate to={targetPath} replace />;
     }
   }
 

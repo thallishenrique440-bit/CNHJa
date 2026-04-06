@@ -13,7 +13,9 @@ import {
   LogOut,
   Navigation,
   Pencil,
-  Copy
+  Copy,
+  User,
+  Phone
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '../components/Button';
@@ -27,7 +29,7 @@ import { useToast } from '../contexts/ToastContext';
 
 export const InstructorProfile: React.FC = () => {
   const navigate = useNavigate();
-  const { session, signOut, refreshProfile } = useAuth();
+  const { session, signOut, refreshProfile, isProfileComplete } = useAuth();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -441,6 +443,91 @@ export const InstructorProfile: React.FC = () => {
     return <div className="min-h-screen flex items-center justify-center bg-white text-gray-500">Carregando perfil...</div>;
   }
 
+  // --- ONBOARDING VIEW (INCOMPLETE PROFILE) ---
+  if (!isProfileComplete) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 sm:p-6">
+        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
+          {/* Header */}
+          <div className="bg-blue-600 px-6 py-10 text-center relative">
+            <div className="absolute top-4 right-4">
+              <button 
+                onClick={handleLogout}
+                className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"
+                title="Sair"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-white/20 rounded-full mb-4 backdrop-blur-sm">
+              <User className="w-10 h-10 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-white">Complete seu perfil</h1>
+            <p className="text-blue-100 mt-2 text-sm">
+              Falta pouco! Precisamos de apenas alguns dados para você começar.
+            </p>
+          </div>
+
+          {/* Form */}
+          <div className="p-6 space-y-6">
+            <div className="space-y-4">
+              <Input 
+                label="Nome completo"
+                placeholder="Como você quer ser chamado?"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                icon={<User className="w-4 h-4 text-gray-400" />}
+              />
+
+              <Input 
+                label="WhatsApp"
+                type="tel"
+                placeholder="(11) 99999-9999"
+                value={formatPhone(whatsapp)}
+                onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                icon={<Phone className="w-4 h-4 text-gray-400" />}
+                inputMode="numeric"
+              />
+
+              <Input 
+                label="Sua credencial profissional" 
+                placeholder="Digite apenas números"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value.replace(/\D/g, ''))}
+                icon={<IdCard className="w-4 h-4 text-gray-400" />}
+                inputMode="numeric"
+              />
+
+              <CitySelect 
+                label="Cidade"
+                value={city}
+                onChange={setCity}
+                placeholder="Onde você está?"
+              />
+            </div>
+
+            <div className="pt-4">
+              <Button 
+                variant="primary" 
+                fullWidth 
+                onClick={handleSave} 
+                disabled={saving}
+                className="py-4 text-base font-bold shadow-lg shadow-blue-100"
+              >
+                {saving ? 'Salvando...' : 'Finalizar cadastro'}
+              </Button>
+            </div>
+
+            <p className="text-center text-xs text-gray-400 px-4">
+              Ao continuar, você concorda com nossos Termos de Uso e Política de Privacidade.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- FULL PROFILE VIEW (COMPLETE PROFILE) ---
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col pb-24 sm:max-w-md sm:mx-auto relative">
       
@@ -461,6 +548,7 @@ export const InstructorProfile: React.FC = () => {
           </div>
           
           <div className="w-full text-center px-4 group relative">
+            <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-1 block">Perfil</span>
             <div className="flex items-center justify-center space-x-2">
               <input
                 type="text"

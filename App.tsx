@@ -25,7 +25,6 @@ import { supabase } from './lib/supabase';
 import { ProfileGuard } from './components/ProfileGuard';
 import { PushNotificationManager } from './components/PushNotificationManager';
 
-import { CompleteProfile } from './pages/CompleteProfile';
 import { InstructorStripeBanner } from './components/InstructorStripeBanner';
 
 // --- GUARDS ---
@@ -143,11 +142,6 @@ const AppRoutes: React.FC = () => {
 
         {/* RECOVERY ROUTE (Accessible when authenticated via recovery link) */}
         <Route path="/update-password" element={<UpdatePassword />} />
-
-        {/* ONBOARDING ROUTE */}
-        <Route element={<AuthGuard allowedRole="any" />}>
-          <Route path="/complete-profile" element={<CompleteProfile />} />
-        </Route>
 
         {/* INSTRUCTOR ROUTES */}
         <Route element={<AuthGuard allowedRole="instructor" />}>
