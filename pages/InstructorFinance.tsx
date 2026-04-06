@@ -376,7 +376,7 @@ export const InstructorFinance: React.FC = () => {
                         ? 'Acesse seu painel Stripe para ver seu saldo disponível, acompanhar os repasses automáticos para sua conta bancária e consultar seus extratos de pagamento.' 
                         : stripeStatus === 'processing'
                             ? 'O Stripe está verificando seus documentos. Isso pode levar alguns minutos ou horas. Clique em atualizar para checar.'
-                            : 'Configure sua conta para receber pagamentos via Pix e Cartão com repasse automático.'}
+                            : 'Configure sua conta Stripe e comece a receber seus ganhos automaticamente na sua conta bancária.'}
                 </p>
                 
                 <div className="flex flex-col space-y-2">
