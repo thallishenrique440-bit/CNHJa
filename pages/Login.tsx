@@ -12,6 +12,8 @@ export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState(false);
+  const [resending, setResending] = useState(false);
 
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -21,6 +23,7 @@ export const Login: React.FC = () => {
     }
 
     setLoading(true);
+    setUnconfirmedEmail(false);
     
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -30,7 +33,12 @@ export const Login: React.FC = () => {
     setLoading(false);
 
     if (error) {
-      addToast("Erro ao entrar: " + error.message, 'error');
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        setUnconfirmedEmail(true);
+        addToast("Por favor, confirme seu email antes de entrar.", 'warning');
+      } else {
+        addToast("Erro ao entrar: " + error.message, 'error');
+      }
       return;
     }
 
@@ -46,6 +54,24 @@ export const Login: React.FC = () => {
       } else {
         addToast("Erro: Tipo de usuário desconhecido.", 'error');
       }
+    }
+  };
+
+  const handleResendEmail = async () => {
+    if (!email) return;
+    setResending(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email,
+      });
+      if (error) throw error;
+      addToast("Email de confirmação reenviado!", 'success');
+      setUnconfirmedEmail(false);
+    } catch (err: any) {
+      addToast("Erro ao reenviar: " + err.message, 'error');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -125,6 +151,22 @@ export const Login: React.FC = () => {
             >
               {loading ? 'Entrando na conta...' : 'Entrar na conta'}
             </Button>
+
+            {unconfirmedEmail && (
+              <div className="mt-4 p-4 bg-yellow-50 border border-yellow-100 rounded-2xl text-center space-y-3 animate-fade-in">
+                <p className="text-xs text-yellow-800 font-medium leading-relaxed">
+                  Parece que você ainda não confirmou seu email. Verifique sua caixa de entrada (e a pasta de spam).
+                </p>
+                <button
+                  type="button"
+                  onClick={handleResendEmail}
+                  disabled={resending}
+                  className="text-xs font-bold text-yellow-900 underline hover:text-yellow-700 transition-colors disabled:opacity-50"
+                >
+                  {resending ? 'Reenviando...' : 'Reenviar email de confirmação'}
+                </button>
+              </div>
+            )}
           </div>
 
         </form>

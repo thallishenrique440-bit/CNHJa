@@ -61,7 +61,7 @@ interface HistoryItem {
 type StripeStatus = 'none' | 'pending' | 'processing' | 'active';
 
 export const InstructorFinance: React.FC = () => {
-  const { session, signOut } = useAuth();
+  const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -264,6 +264,9 @@ export const InstructorFinance: React.FC = () => {
         }
 
         if (data?.status === 'synced') {
+            // Refresh profile to update isStripeConnected in AuthContext
+            await refreshProfile();
+
             // OPTIMISTIC UPDATE: Use response directly instead of waiting for DB read
             // This prevents race conditions where the read happens before the write propagates
             if (data.payouts_enabled === true) {

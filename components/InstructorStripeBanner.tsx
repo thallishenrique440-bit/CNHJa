@@ -5,43 +5,25 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 export const InstructorStripeBanner: React.FC = () => {
-  const { session, userRole } = useAuth();
+  const { session, userRole, isStripeConnected } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [showBanner, setShowBanner] = useState(false);
 
   useEffect(() => {
-    const checkStripeStatus = async () => {
-      if (userRole !== 'instructor' || !session?.user) {
-        setShowBanner(false);
-        return;
-      }
+    if (userRole !== 'instructor' || !session?.user) {
+      setShowBanner(false);
+      return;
+    }
 
-      // Don't show banner on the finance page itself to avoid redundancy
-      if (location.pathname === '/instructor/finance') {
-        setShowBanner(false);
-        return;
-      }
+    // Don't show banner on the finance page itself to avoid redundancy
+    if (location.pathname === '/instructor/finance') {
+      setShowBanner(false);
+      return;
+    }
 
-      try {
-        const { data, error } = await supabase
-          .from('instructors')
-          .select('payouts_enabled')
-          .eq('id', session.user.id)
-          .single();
-
-        if (error) throw error;
-        
-        // Show banner if payouts are not enabled
-        setShowBanner(data?.payouts_enabled !== true);
-      } catch (error) {
-        console.error('Error checking stripe status:', error);
-        setShowBanner(false);
-      }
-    };
-
-    checkStripeStatus();
-  }, [session, userRole, location.pathname]);
+    setShowBanner(!isStripeConnected);
+  }, [session, userRole, location.pathname, isStripeConnected]);
 
   if (!showBanner) return null;
 

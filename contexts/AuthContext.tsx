@@ -7,6 +7,7 @@ interface AuthContextType {
   loading: boolean;
   userRole: 'student' | 'instructor' | null;
   isProfileComplete: boolean;
+  isStripeConnected: boolean;
   serverTimeOffset: number;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -17,6 +18,7 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   userRole: null,
   isProfileComplete: false,
+  isStripeConnected: true, // Default to true so it doesn't block notifications for students
   serverTimeOffset: 0,
   signOut: async () => {},
   refreshProfile: async () => {},
@@ -27,6 +29,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<'student' | 'instructor' | null>(null);
   const [isProfileComplete, setIsProfileComplete] = useState(false);
+  const [isStripeConnected, setIsStripeConnected] = useState(true);
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
 
   const fetchProfile = React.useCallback(async (userId: string) => {
@@ -39,6 +42,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       if (!error && data) {
         setIsProfileComplete(data.is_profile_complete);
+      }
+
+      // If instructor, fetch stripe status
+      const { data: userData } = await supabase.auth.getUser();
+      const role = userData.user?.user_metadata?.role;
+      
+      if (role === 'instructor') {
+        const { data: instructorData } = await supabase
+          .from('instructors')
+          .select('payouts_enabled')
+          .eq('id', userId)
+          .single();
+        
+        if (instructorData) {
+          setIsStripeConnected(instructorData.payouts_enabled === true);
+        }
+      } else {
+        setIsStripeConnected(true);
       }
     } catch (err) {
       console.error('[Auth] Erro ao buscar perfil:', err);
@@ -135,7 +156,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, serverTimeOffset, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, isStripeConnected, serverTimeOffset, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

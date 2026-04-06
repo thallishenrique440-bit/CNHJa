@@ -141,7 +141,7 @@ export const RegisterInstructor: React.FC = () => {
         addToast("Cadastro realizado! Verifique seu email para confirmar a conta.", 'success');
         navigate('/login');
       } else {
-        navigate('/instructor/agenda');
+        navigate('/complete-profile');
       }
     }
   };

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { HashRouter, Routes, Route, Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { Welcome } from './pages/Welcome';
@@ -46,7 +46,8 @@ const LoadingScreen = () => (
 );
 
 const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) => {
-  const { session, userRole, loading } = useAuth();
+  const { session, userRole, loading, isStripeConnected } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return <LoadingScreen />;
@@ -62,9 +63,14 @@ const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) =
     return <Navigate to={userRole === 'student' ? '/student/home' : '/instructor/agenda'} replace />;
   }
 
+  // Determine if Stripe banner is showing (or would show)
+  const isInstructor = userRole === 'instructor';
+  const isFinancePage = location.pathname === '/instructor/finance';
+  const stripeBannerShowing = isInstructor && !isStripeConnected && !isFinancePage;
+
   return (
     <>
-      <PushNotificationManager />
+      <PushNotificationManager disabled={stripeBannerShowing} />
       <Outlet />
     </>
   );

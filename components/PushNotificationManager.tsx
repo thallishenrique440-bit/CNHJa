@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 import { Bell, X } from 'lucide-react';
 
-export const PushNotificationManager: React.FC = () => {
+export const PushNotificationManager: React.FC<{ disabled?: boolean }> = ({ disabled }) => {
   const { permissionStatus, isSupported, requestPermission } = usePushNotifications();
   const [dismissed, setDismissed] = useState(false);
 
-  // Não mostra nada se não suportar, se já deu permissão, se negou, ou se o usuário fechou o banner
-  if (!isSupported || permissionStatus !== 'default' || dismissed) {
+  // Não mostra nada se não suportar, se já deu permissão, se negou, ou se o usuário fechou o banner, ou se estiver desativado
+  if (!isSupported || permissionStatus !== 'default' || dismissed || disabled) {
     return null;
   }
 
