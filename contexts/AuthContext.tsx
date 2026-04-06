@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 
@@ -31,6 +31,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isProfileComplete, setIsProfileComplete] = useState(false);
   const [isStripeConnected, setIsStripeConnected] = useState(true);
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
+  const loadingFinalized = useRef(false);
 
   const fetchProfile = React.useCallback(async (userId: string) => {
     try {
@@ -40,8 +41,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .eq('id', userId)
         .single();
       
-      if (!error && data) {
+      if (error) {
+        console.warn('[Auth] Perfil não encontrado ou erro:', error.message);
+        setIsProfileComplete(false); // Fallback: treat as incomplete
+      } else if (data) {
         setIsProfileComplete(data.is_profile_complete);
+      } else {
+        setIsProfileComplete(false);
       }
 
       // If instructor, fetch stripe status
@@ -49,20 +55,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const role = userData.user?.user_metadata?.role;
       
       if (role === 'instructor') {
-        const { data: instructorData } = await supabase
+        const { data: instructorData, error: instError } = await supabase
           .from('instructors')
           .select('payouts_enabled')
           .eq('id', userId)
           .single();
         
-        if (instructorData) {
+        if (!instError && instructorData) {
           setIsStripeConnected(instructorData.payouts_enabled === true);
+        } else {
+          setIsStripeConnected(false); // Fallback for instructors
         }
       } else {
         setIsStripeConnected(true);
       }
     } catch (err) {
       console.error('[Auth] Erro ao buscar perfil:', err);
+      setIsProfileComplete(false); // Safe fallback
     }
   }, []);
 
@@ -75,22 +84,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let mounted = true;
 
+    const finalizeLoading = () => {
+      if (mounted && !loadingFinalized.current) {
+        loadingFinalized.current = true;
+        setLoading(false);
+        if (failSafeTimer) clearTimeout(failSafeTimer);
+      }
+    };
+    
+    // 0. Fail-safe timeout (8 seconds)
+    const failSafeTimer = setTimeout(() => {
+      if (mounted && !loadingFinalized.current) {
+        console.warn('[Auth] Fail-safe timeout reached. Forcing loading to stop.');
+        finalizeLoading();
+      }
+    }, 8000);
+
     const initSession = async () => {
       try {
-        // 0. Fetch server time to calculate offset
-        const t0 = Date.now();
-        const { data: timeData, error: timeError } = await supabase.rpc('get_server_time');
-        const t1 = Date.now();
-        
-        if (!timeError && timeData) {
-          const serverTime = new Date(timeData).getTime();
-          const rtt = t1 - t0;
-          const estimatedServerTime = serverTime + (rtt / 2);
-          const offset = estimatedServerTime - t1;
-          if (mounted) setServerTimeOffset(offset);
-        }
+        // 1. Fetch server time (Non-blocking)
+        const fetchServerTime = async () => {
+          try {
+            const t0 = Date.now();
+            const { data: timeData, error: timeError } = await supabase.rpc('get_server_time');
+            const t1 = Date.now();
+            
+            if (!timeError && timeData && mounted) {
+              const serverTime = new Date(timeData).getTime();
+              const rtt = t1 - t0;
+              const estimatedServerTime = serverTime + (rtt / 2);
+              const offset = estimatedServerTime - t1;
+              setServerTimeOffset(offset);
+            }
+          } catch (e) {
+            console.error('[Auth] Erro ao sincronizar tempo:', e);
+          }
+        };
 
-        // 1. Check active session safely
+        const timeSyncPromise = fetchServerTime();
+
+        // 2. Check active session safely
         const { data, error } = await supabase.auth.getSession();
         
         if (error) {
@@ -100,42 +133,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (mounted) {
           if (data?.session) {
             setSession(data.session);
-            if (data.session.user?.user_metadata?.role) {
-              setUserRole(data.session.user.user_metadata.role);
+            const role = data.session.user?.user_metadata?.role;
+            if (role) {
+              setUserRole(role);
             }
+            // CRITICAL: Await profile fetch before releasing loading state
+            // This prevents ProfileGuard from redirecting prematurely
             await fetchProfile(data.session.user.id);
           }
-          setLoading(false);
         }
+        
+        await timeSyncPromise;
+
       } catch (err) {
         console.error('[Auth] Falha crítica na inicialização:', err);
-        if (mounted) setLoading(false); // Ensure loading stops even on crash
+      } finally {
+        finalizeLoading();
       }
     };
 
     initSession();
 
-    // 2. Listen for changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    // 3. Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (mounted) {
         setSession(session);
         if (session?.user) {
-          if (session.user.user_metadata?.role) {
-            setUserRole(session.user.user_metadata.role);
+          const role = session.user.user_metadata?.role;
+          if (role) {
+            setUserRole(role);
           }
-          await fetchProfile(session.user.id);
+          // Await profile fetch if we are still in the initial loading phase
+          if (!loadingFinalized.current) {
+            await fetchProfile(session.user.id);
+          } else {
+            fetchProfile(session.user.id);
+          }
         } else {
           setUserRole(null);
           setIsProfileComplete(false);
         }
-        setLoading(false);
+        
+        // Only finalize loading on initial events or specific auth changes
+        if (!loadingFinalized.current) {
+          finalizeLoading();
+        }
       }
     });
 
-    // 3. Proactively check session when app returns to foreground (Mobile/PWA)
+    // 4. Proactively check session when app returns to foreground (Mobile/PWA)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        console.log('[Auth] App returned to foreground, checking session...');
+        // Only trigger background check, never re-enable global loading state here
         supabase.auth.getSession();
       }
     };
@@ -143,6 +192,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => {
       mounted = false;
+      clearTimeout(failSafeTimer);
       subscription.unsubscribe();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };

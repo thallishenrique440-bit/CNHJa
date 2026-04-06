@@ -27,6 +27,7 @@ interface Vehicle {
   type: 'car' | 'bike';
   model: string;
   year: number;
+  transmission?: string;
 }
 
 interface InstructorProfileData {
@@ -273,7 +274,8 @@ export const StudentInstructorProfile: React.FC = () => {
             instructor_vehicles (
               type,
               model,
-              year
+              year,
+              transmission
             )
           `)
           .eq('id', id)
@@ -1265,6 +1267,11 @@ export const StudentInstructorProfile: React.FC = () => {
                         <span className="mr-2 text-lg">{v.type === 'car' ? '🚘' : '🏍️'}</span>
                         {v.model || (v.type === 'car' ? 'Carro' : 'Moto')}
                         {v.year ? <span className="text-gray-500 font-normal ml-1">({v.year})</span> : null}
+                        {v.transmission && (
+                          <span className="text-gray-400 font-normal ml-1.5">
+                            • {v.transmission === 'automatic' ? 'Automático' : 'Manual'}
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>

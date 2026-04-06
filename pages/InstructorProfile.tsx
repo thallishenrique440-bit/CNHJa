@@ -93,7 +93,7 @@ export const InstructorProfile: React.FC = () => {
   const [meetingPointPlaceId, setMeetingPointPlaceId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const profileUrl = `${window.location.origin}/#/i/${publicId}`;
+  const profileUrl = `${window.location.origin}/i/${publicId}`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(profileUrl).then(() => {
