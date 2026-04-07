@@ -134,6 +134,7 @@ export const StudentProfile: React.FC = () => {
             security_message: defaultMessage,
             experience_level: experience,
             cnh_process_type: cnhProcess,
+            is_profile_complete: true,
             updated_at: new Date().toISOString()
           })
           .eq('id', userId);

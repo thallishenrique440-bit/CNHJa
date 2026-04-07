@@ -296,6 +296,7 @@ export const InstructorProfile: React.FC = () => {
           full_name: name,
           city: city,
           phone: whatsapp.replace(/\D/g, ''),
+          is_profile_complete: true,
           updated_at: new Date().toISOString()
         })
         .eq('id', userId);
