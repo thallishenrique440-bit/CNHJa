@@ -574,7 +574,7 @@ export const StudentInstructorProfile: React.FC = () => {
 
     // Filter based on night lessons
     if (!instructor.hasNightLessons) {
-      const limitIndex = filteredSlots.indexOf('17:10');
+      const limitIndex = filteredSlots.indexOf('17:00');
       if (limitIndex !== -1) {
         filteredSlots = filteredSlots.slice(0, limitIndex + 1);
       }
@@ -582,7 +582,7 @@ export const StudentInstructorProfile: React.FC = () => {
 
     // Saturday Rule
     if (selectedDate.getDay() === 6) {
-      const limitTime = instructor.workSaturdayAfternoon ? '17:10' : '11:10';
+      const limitTime = instructor.workSaturdayAfternoon ? '17:00' : '11:10';
       const limitIndex = filteredSlots.indexOf(limitTime);
       if (limitIndex !== -1) {
         filteredSlots = filteredSlots.slice(0, limitIndex + 1);
@@ -654,9 +654,9 @@ export const StudentInstructorProfile: React.FC = () => {
           const [h, m] = time.split(':').map(Number);
           const minutes = h * 60 + m;
           
-          // If instructor works saturday afternoon, allow until 17:10 (end 18:00)
+          // If instructor works saturday afternoon, allow until 17:00 (end 17:50)
           // Else allow until 11:10 (end 12:00)
-          const limit = instructor?.workSaturdayAfternoon ? (17 * 60 + 10) : (11 * 60 + 10);
+          const limit = instructor?.workSaturdayAfternoon ? (17 * 60) : (11 * 60 + 10);
           
           if (minutes > limit) return false;
       }

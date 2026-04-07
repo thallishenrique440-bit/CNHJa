@@ -1521,7 +1521,7 @@ export const StudentLessons: React.FC = () => {
               {(instructorConfig ? (() => {
                 const slots = [
                   '07:00', '07:50', '08:40', '09:30', '10:20', '11:10',
-                  '13:50', '14:40', '15:30', '16:20', '17:10'
+                  '13:40', '14:30', '15:20', '16:10', '17:00'
                 ];
                 if (instructorConfig.hasNight) {
                   slots.push('18:00', '18:50', '19:40', '20:30', '21:20', '22:10');
@@ -1539,7 +1539,7 @@ export const StudentLessons: React.FC = () => {
                 if (rescheduleDate.getDay() === 6) {
                   const [h, m] = time.split(':').map(Number);
                   const minutes = h * 60 + m;
-                  const limit = instructorConfig?.workSat ? (17 * 60 + 10) : (11 * 60 + 10);
+                  const limit = instructorConfig?.workSat ? (17 * 60) : (11 * 60 + 10);
                   if (minutes > limit) isSatOff = true;
                 }
 

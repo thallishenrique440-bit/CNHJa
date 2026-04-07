@@ -117,17 +117,24 @@ export default async function handler(req: any, res: any) {
           const [h, m] = lesson.startTime.split(':').map(Number);
           const minutes = h * 60 + m;
           
-          // If instructor works saturday afternoon, allow until 17:10 (1030 mins)
+          // If instructor works saturday afternoon, allow until 17:00 (1020 mins)
           // Else allow until 11:10 (670 mins)
-          const limit = instructor.work_saturday_afternoon ? (17 * 60 + 10) : (11 * 60 + 10);
+          const limit = instructor.work_saturday_afternoon ? (17 * 60) : (11 * 60 + 10);
           
           if (minutes > limit) {
              return res.status(400).json({ 
                  error: instructor.work_saturday_afternoon 
-                    ? 'Aos sábados, o horário limite é 17:10.' 
+                    ? 'Aos sábados, o horário limite é 17:00.' 
                     : 'Aos sábados, o horário limite é 11:10.' 
              });
           }
+      }
+
+      // NEW: Weekday Night Lesson Check
+      const [h, m] = lesson.startTime.split(':').map(Number);
+      const minutes = h * 60 + m;
+      if (!instructor.has_night_lessons && minutes >= 18 * 60) {
+          return res.status(400).json({ error: 'Este instrutor não realiza aulas noturnas.' });
       }
 
       // NEW: Lunch Check (Slot-based)

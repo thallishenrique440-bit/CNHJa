@@ -249,7 +249,7 @@ export const InstructorAgenda: React.FC = () => {
 
     // Saturday Rule
     if (dayOfWeek === 6) {
-      const limitTime = workSaturdayAfternoon ? '17:10' : '11:10';
+      const limitTime = workSaturdayAfternoon ? '17:00' : '11:10';
       const limitIndex = filteredSlots.indexOf(limitTime);
       if (limitIndex !== -1) {
         filteredSlots = filteredSlots.slice(0, limitIndex + 1);
@@ -257,7 +257,7 @@ export const InstructorAgenda: React.FC = () => {
     } else {
       // Weekday Night Rule
       if (!nightLessonsEnabled) {
-        const limitIndex = filteredSlots.indexOf('17:10');
+        const limitIndex = filteredSlots.indexOf('17:00');
         if (limitIndex !== -1) {
           filteredSlots = filteredSlots.slice(0, limitIndex + 1);
         }
