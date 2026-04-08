@@ -1757,18 +1757,24 @@ export const InstructorAgenda: React.FC = () => {
                                     <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Aulas neste combo ({groupLessons.length})</span>
                                     <span className="text-[10px] font-bold text-indigo-500 bg-white px-1.5 py-0.5 rounded border border-indigo-100">Decisão Única</span>
                                 </div>
-                                <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                                    {groupLessons.map((gl, idx) => (
-                                        <div key={gl.id} className="flex items-center justify-between text-xs py-1.5 border-b border-indigo-100/50 last:border-0">
-                                            <div className="flex items-center space-x-2">
-                                                <span className="text-indigo-400">📅</span>
-                                                <span className="font-medium text-gray-700">{formatDateFull(gl.dateStr!)} • {gl.timeStr}</span>
+                                <div className="relative">
+                                    <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-indigo-200 [&::-webkit-scrollbar-thumb]:rounded-full">
+                                        {groupLessons.map((gl, idx) => (
+                                            <div key={gl.id} className="flex items-center justify-between text-xs py-1.5 border-b border-indigo-100/50 last:border-0">
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-indigo-400">📅</span>
+                                                    <span className="font-medium text-gray-700">{formatDateFull(gl.dateStr!)} • {gl.timeStr}</span>
+                                                </div>
+                                                {gl.id === selectedLesson.id && (
+                                                    <span className="text-[9px] font-bold text-indigo-500 bg-indigo-100 px-1 rounded">Este slot</span>
+                                                )}
                                             </div>
-                                            {gl.id === selectedLesson.id && (
-                                                <span className="text-[9px] font-bold text-indigo-500 bg-indigo-100 px-1 rounded">Este slot</span>
-                                            )}
-                                        </div>
-                                    ))}
+                                        ))}
+                                    </div>
+                                    {/* Fade Gradient for scroll affordance - only shown if more than 4 lessons */}
+                                    {groupLessons.length > 4 && (
+                                        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-indigo-50 to-transparent pointer-events-none" />
+                                    )}
                                 </div>
                                 <div className="mt-3 pt-2 border-t border-indigo-100 flex justify-between items-center">
                                     <span className="text-[10px] font-bold text-gray-500 uppercase">Total do Combo:</span>
