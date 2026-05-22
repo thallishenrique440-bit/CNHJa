@@ -131,6 +131,22 @@ serve(async (req) => {
       })
     }
 
+    // Initialize Supabase client early
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+
+    // --- LOG [PUSH REQUEST] ---
+    console.log('[PUSH REQUEST] Received webhook event:', {
+      table: payload.table,
+      type: payload.type,
+      oldStatus,
+      newStatus,
+      appointmentId: payload.record?.id,
+      groupId,
+      actorId
+    });
+
     // Determine who should receive the notification and what the message is
     let targetUserId: string | null = null
     let title = ''
@@ -140,41 +156,25 @@ serve(async (req) => {
     if (newStatus === 'pending_approval' && oldStatus !== 'pending_approval') {
       // 1. Student requested a class (payment confirmed) -> Notify Instructor
       targetUserId = payload.record.instructor_id
-      title = 'Novo agendamento'
-      body = 'Um aluno solicitou uma nova aula.'
       notificationType = 'booking_request'
     } else if (newStatus === 'confirmed' && oldStatus === 'pending_approval') {
       // 2. Instructor approved -> Notify Student
       targetUserId = payload.record.student_id
-      const category = payload.record.category
       notificationType = 'booking_confirmed'
-      
-      if (category === 'A') {
-        title = 'Aula Aprovada 🏍️'
-        body = 'Seu instrutor aceitou a aula de moto. Nos vemos no horário combinado!'
-      } else {
-        title = 'Aula Aprovada 🚗'
-        body = 'Seu instrutor aceitou a aula de carro. Nos vemos no horário combinado!'
-      }
     } else if (newStatus === 'cancelled') {
       // 3. Someone cancelled -> Notify the other party
       targetUserId = payload.record.cancelled_by === 'student' ? payload.record.instructor_id : payload.record.student_id
-      title = 'Aula cancelada'
-      body = `A aula foi cancelada pelo ${payload.record.cancelled_by === 'student' ? 'aluno' : 'instrutor'}.`
       notificationType = 'booking_cancelled'
     } else if (newStatus === 'rejected') {
       targetUserId = payload.record.student_id
-      title = 'Aula recusada'
-      body = 'O instrutor não pôde aceitar seu agendamento.'
       notificationType = 'booking_rejected'
     } else if (newStatus === 'expired') {
       targetUserId = payload.record.student_id
-      title = 'Agendamento expirado'
-      body = 'O prazo para aceitar sua aula expirou.'
       notificationType = 'booking_cancelled'
     }
 
     if (!targetUserId) {
+      console.log('[PUSH REQUEST] Ignored: No target user identified for status code change');
       return new Response(JSON.stringify({ message: 'Ignored: No notification needed for this status change' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
@@ -183,16 +183,12 @@ serve(async (req) => {
 
     // --- PROTEÇÃO CONTRA AUTO-NOTIFICAÇÃO ---
     if (actorId && targetUserId === actorId) {
+      console.log('[PUSH REQUEST] Ignored: Actor is the target user itself');
       return new Response(JSON.stringify({ message: 'Ignored: Actor is the target user' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
     }
-
-    // Initialize Supabase client
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
     // --- IDEMPOTÊNCIA INDIVIDUAL (INSERT-FIRST) ---
     // Reservamos a idempotência antes de qualquer outra lógica.
@@ -209,13 +205,33 @@ serve(async (req) => {
 
     if (logInsertError) {
       if (logInsertError.code === '23505') {
+        console.log('[PUSH REQUEST] Ignored: Notification already processed (idempotency constraint)');
         return new Response(JSON.stringify({ message: 'Ignored: Notification already processed (idempotency)' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           status: 200,
         })
       }
-      console.error('Error inserting notification log:', logInsertError)
+      console.error('[PUSH ERROR] Error inserting notification log:', logInsertError)
     }
+
+    // Fetch student's full name to personalize title and body
+    const studentId = payload.record.student_id
+    let studentName = 'Um aluno'
+    if (studentId) {
+      const { data: studentProfile, error: studentError } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', studentId)
+        .maybeSingle()
+      if (!studentError && studentProfile?.full_name) {
+        studentName = studentProfile.full_name
+      }
+    }
+
+    const startTime = payload.record.start_time ? payload.record.start_time.substring(0, 5) : 'horário marcado'
+
+    let isCombo = false
+    let comboCount = 1
 
     // --- AGRUPAMENTO (DEBOUNCE POR GROUP_ID) ---
     // Se houver um group_id, verificamos se houve algum disparo para esse grupo nos últimos 20 segundos
@@ -232,10 +248,11 @@ serve(async (req) => {
         .maybeSingle()
 
       if (groupLogError) {
-        console.error('Error checking group notification log:', groupLogError)
+        console.error('[PUSH ERROR] Error checking group notification log:', groupLogError)
       }
 
       if (recentGroupLog) {
+        console.log('[PUSH REQUEST] Ignored: Group already notified recently (debounce check)');
         return new Response(JSON.stringify({ message: 'Ignored: Group already notified recently (debounce)' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           status: 200,
@@ -253,28 +270,36 @@ serve(async (req) => {
         .eq('student_id', payload.record.student_id)
 
       if (countError) {
-        console.error('Error counting group appointments:', countError)
+        console.error('[PUSH ERROR] Error counting group appointments:', countError)
       }
 
       if (count && count > 1) {
-        // Se houver mais de uma aula, consolidamos a mensagem
-        if (newStatus === 'pending_approval') {
-          title = 'Novos agendamentos'
-          body = `Você recebeu ${count} novas solicitações de aula.`
-        } else if (newStatus === 'confirmed') {
-          title = 'Aulas Aprovadas 🚗'
-          body = `Seu instrutor aceitou ${count} aulas do seu pacote.`
-        } else if (newStatus === 'cancelled') {
-          title = 'Aulas canceladas'
-          body = `${count} aulas foram canceladas pelo ${payload.record.cancelled_by === 'student' ? 'aluno' : 'instrutor'}.`
-        } else if (newStatus === 'rejected') {
-          title = 'Aulas recusadas'
-          body = `O instrutor não pôde aceitar ${count} agendamentos.`
-        } else if (newStatus === 'expired') {
-          title = 'Agendamentos expirados'
-          body = `O prazo para aceitar ${count} aulas expirou.`
-        }
+        isCombo = true
+        comboCount = count
       }
+    }
+
+    // Dynamic messaging formatting
+    if (newStatus === 'pending_approval') {
+      if (isCombo) {
+        title = 'Novo combo solicitado'
+        body = `${studentName} solicitou um combo com ${comboCount} aulas.`
+      } else {
+        title = 'Nova solicitação de aula'
+        body = `${studentName} solicitou uma aula às ${startTime}.`
+      }
+    } else if (newStatus === 'confirmed') {
+      title = 'Aula confirmada'
+      body = 'Seu instrutor confirmou sua aula.'
+    } else if (newStatus === 'rejected') {
+      title = 'Aula recusada'
+      body = 'Sua solicitação de aula foi recusada.'
+    } else if (newStatus === 'cancelled') {
+      title = 'Aula cancelada'
+      body = 'Uma aula foi cancelada.'
+    } else if (newStatus === 'expired') {
+      title = 'Agendamento expirado'
+      body = 'O prazo para aceitar sua aula expirou.'
     }
 
     // --- INSERÇÃO NA TABELA DE NOTIFICAÇÕES (In-App) ---
@@ -292,7 +317,7 @@ serve(async (req) => {
       })
 
     if (inAppError) {
-      console.error('Error inserting in-app notification:', inAppError)
+      console.error('[PUSH ERROR] Error inserting in-app notification:', inAppError)
     }
 
     // --- ENVIO PUSH (FCM) ---
@@ -303,8 +328,16 @@ serve(async (req) => {
       .eq('user_id', targetUserId)
 
     if (tokensError) {
+      console.error('[PUSH ERROR] Error fetching token data:', tokensError)
       throw new Error(`Error fetching tokens: ${tokensError.message}`)
     }
+
+    // --- LOG [PUSH TOKENS] ---
+    console.log('[PUSH TOKENS] Found active tokens for target user:', {
+      targetUserId,
+      tokenCount: tokensData?.length || 0,
+      tokenMasks: tokensData?.map(t => t.token.substring(0, 8) + '...' + t.token.substring(t.token.length - 8)) || []
+    });
 
     if (!tokensData || tokensData.length === 0) {
       return new Response(JSON.stringify({ message: 'In-app notification sent, but no FCM tokens found' }), {
@@ -318,6 +351,7 @@ serve(async (req) => {
     // Get Firebase Service Account from environment variables
     const serviceAccountStr = Deno.env.get('FIREBASE_SERVICE_ACCOUNT')
     if (!serviceAccountStr) {
+      console.error('[PUSH ERROR] FIREBASE_SERVICE_ACCOUNT environment variable is not defined!');
       throw new Error('FIREBASE_SERVICE_ACCOUNT environment variable is not set')
     }
     
@@ -327,6 +361,7 @@ serve(async (req) => {
     const accessToken = await getFirebaseAccessToken(serviceAccount)
 
     if (!accessToken) {
+      console.error('[PUSH ERROR] Failed to generate OAuth2 accessToken from Google APIs credentials');
       throw new Error('Failed to get access token for Firebase')
     }
 
@@ -352,6 +387,9 @@ serve(async (req) => {
         }
       }
 
+      // --- LOG [PUSH PAYLOAD] ---
+      console.log('[PUSH PAYLOAD] Payload being dispatched to FCM API:', JSON.stringify(message, null, 2));
+
       const response = await fetch(fcmUrl, {
         method: 'POST',
         headers: {
@@ -364,7 +402,8 @@ serve(async (req) => {
       const responseData = await response.json()
 
       if (!response.ok) {
-        console.error('FCM Error:', responseData)
+        // --- LOG [PUSH ERROR] ---
+        console.error('[PUSH ERROR] FCM service responded with failure:', responseData)
         
         // Handle invalid tokens (cleanup)
         if (
@@ -379,6 +418,9 @@ serve(async (req) => {
         return { success: false, token, error: responseData.error }
       }
 
+      // --- LOG [PUSH RESPONSE] ---
+      console.log('[PUSH RESPONSE] FCM success response:', responseData)
+
       return { success: true, token, messageId: responseData.name }
     })
 
@@ -390,7 +432,7 @@ serve(async (req) => {
     })
 
   } catch (error) {
-    console.error('Error processing webhook:', error)
+    console.error('[PUSH ERROR] Error processing webhook:', error)
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 500,

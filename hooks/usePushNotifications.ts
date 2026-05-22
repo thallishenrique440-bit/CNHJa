@@ -42,7 +42,7 @@ export function usePushNotifications() {
               navigator.serviceWorker.ready.then((registration) => {
                 registration.showNotification(notification.title || 'Nova notificação', {
                   body: notification.body,
-                  icon: '/icon-192x192.png',
+                  icon: '/android-chrome-192x192.png',
                   data: payload.data
                 });
               });

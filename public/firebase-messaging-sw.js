@@ -29,7 +29,7 @@ messaging.onBackgroundMessage((payload) => {
   const notificationTitle = payload.notification?.title || 'Autoescola do Brasil';
   const notificationOptions = {
     body: payload.notification?.body || 'Você tem uma nova notificação.',
-    icon: '/icon-192x192.png', // Assuming there's a PWA icon
+    icon: '/android-chrome-192x192.png', // Assuming there's a PWA icon
     data: payload.data
   };
 

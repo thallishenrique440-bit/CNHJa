@@ -51,6 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const lastSyncTimestamp = useRef(0);
 
   const syncPushToken = React.useCallback(async () => {
+    console.log('[Push] Chamado syncPushToken... Permissão:', 'Notification' in window ? Notification.permission : 'not supported', 'user_id:', session?.user?.id);
     // Only proceed if user is authenticated and permission is granted
     if (!session?.user?.id || !('Notification' in window) || Notification.permission !== 'granted') {
       return;
@@ -98,11 +99,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           throw err;
         });
 
+        console.log('[Push] Service Worker Registrado e Pronto no escopo:', readyRegistration.scope);
+
         if (syncId !== lastPushSyncId.current) return;
 
         const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+        console.log('[Push] VAPID Key para getToken:', vapidKey);
         if (!vapidKey) {
-          console.error('[Push] VITE_FIREBASE_VAPID_KEY ausente');
+          console.error('[Push] ERRO CRÍTICO: VITE_FIREBASE_VAPID_KEY ausente! Por favor, certifique-se de que a variável de ambiente VITE_FIREBASE_VAPID_KEY esteja configurada durante o build/runtime.');
           return;
         }
 
@@ -120,6 +124,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.log('[Push] Token FCM gerado com sucesso:', maskedToken);
           
           // 3. Save to Supabase via secure RPC
+          console.log('[Push] Salvando token FCM no banco de dados...');
           const { error } = await supabase.rpc('register_fcm_token', {
             p_token: currentToken,
             p_device_type: 'web'
