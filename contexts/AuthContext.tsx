@@ -13,7 +13,7 @@ interface AuthContextType {
   serverTimeOffset: number;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
-  syncPushToken: () => Promise<void>;
+  syncPushToken: (explicitSession?: Session | null) => Promise<void>;
 }
 
 // Helper for Supabase queries with timeout
@@ -35,7 +35,7 @@ const AuthContext = createContext<AuthContextType>({
   serverTimeOffset: 0,
   signOut: async () => {},
   refreshProfile: async () => {},
-  syncPushToken: async () => {},
+  syncPushToken: async (explicitSession?: Session | null) => {},
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -50,10 +50,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const lastPushSyncId = useRef(0);
   const lastSyncTimestamp = useRef(0);
 
-  const syncPushToken = React.useCallback(async () => {
-    console.log('[Push] Chamado syncPushToken... Permissão:', 'Notification' in window ? Notification.permission : 'not supported', 'user_id:', session?.user?.id);
+  const syncPushToken = React.useCallback(async (explicitSession?: Session | null) => {
+    const activeSession = explicitSession !== undefined ? explicitSession : session;
+    console.log('[Push] Chamado syncPushToken... Permissão:', 'Notification' in window ? Notification.permission : 'not supported', 'user_id:', activeSession?.user?.id);
     // Only proceed if user is authenticated and permission is granted
-    if (!session?.user?.id || !('Notification' in window) || Notification.permission !== 'granted') {
+    if (!activeSession?.user?.id || !('Notification' in window) || Notification.permission !== 'granted') {
       return;
     }
 
@@ -303,7 +304,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             fetchProfile(data.session.user.id);
             
             // Sync Push Token if permission is already granted
-            syncPushToken();
+            syncPushToken(data.session);
           } else {
             // No session, we can mark profile as "complete" (not applicable) or false
             setIsProfileComplete(false);
@@ -340,7 +341,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fetchProfile(session.user.id);
           
           // Sync Push Token if permission is already granted
-          syncPushToken();
+          syncPushToken(session);
         } else {
           setUserRole(null);
           setIsProfileComplete(false);
