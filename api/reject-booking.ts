@@ -142,6 +142,7 @@ export default async function handler(req: any, res: any) {
         status: 'rejected',
         payment_status: 'failed',
         cancelled_reason: 'instructor_rejected',
+        updated_by: user.id,
         updated_at: new Date().toISOString()
       })
       .eq('group_id', appointment.group_id);
