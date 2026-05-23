@@ -355,12 +355,22 @@ Deno.serve(async (req: Request) => {
           // G. Sincronização de Status da Aula (Apenas para lesson_payment)
           if (txType !== 'tip') {
             console.log(`🔄 Attempting to update appointment ${item.id} to confirmed/paid...`);
+            
+            console.log('[WEBHOOK]', {
+              appointmentId: item.id,
+              instructorId: instructor_id,
+              studentId,
+              oldStatus: 'pending_approval',
+              newStatus: 'confirmed'
+            });
+
             const { data: updateResult, error: updateError } = await supabaseAdmin
               .from('appointments')
               .update({ 
                 status: 'confirmed', 
                 payment_status: 'paid', 
                 payment_intent_id: pi.id,
+                updated_by: instructor_id,
                 updated_at: new Date().toISOString()
               })
               .eq('id', item.id)
@@ -411,6 +421,15 @@ Deno.serve(async (req: Request) => {
                 updatePayload.status = 'rejected';
              }
              
+             console.log('[WEBHOOK]', {
+               groupId,
+               instructorId,
+               studentId: paymentIntent.metadata?.student_id,
+               oldStatus: appointment.status,
+               newStatus: updatePayload.status || appointment.status,
+               payment_status: updatePayload.payment_status
+             });
+
              await supabaseAdmin
                 .from("appointments")
                 .update(updatePayload)

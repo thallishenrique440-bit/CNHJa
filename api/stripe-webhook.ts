@@ -163,6 +163,8 @@ export default async function handler(req: Request, res: Response) {
           const updatePayload = {
             status: 'confirmed' as const,
             payment_status: 'paid' as const,
+            updated_by: metadata.instructor_id,
+            updated_at: new Date().toISOString()
           };
 
           // [Validation] Ensure payment_status is explicitly 'paid' and not null/undefined
@@ -171,6 +173,14 @@ export default async function handler(req: Request, res: Response) {
             // Safe return to avoid Stripe retries on logic errors
             return res.json({ received: true, error: 'invalid_payment_status' });
           }
+
+          console.log('[WEBHOOK]', {
+            groupId,
+            instructorId: metadata.instructor_id,
+            studentId: metadata.student_id,
+            oldStatus: 'pending_approval',
+            newStatus: 'confirmed'
+          });
 
           console.log(`[Webhook Debug] succeeded: Executing update for PI=${paymentIntent.id} (Group=${groupId}) with payload:`, JSON.stringify(updatePayload, null, 2));
 
@@ -238,70 +248,97 @@ export default async function handler(req: Request, res: Response) {
         if (groupId) {
           console.log(`❌ Payment Canceled for Group ID: ${groupId}`);
 
-          const updatePayload = {
-            status: 'cancelled' as const,
-            payment_status: 'pending' as const,
-            cancelled_by: 'student' as const,
-            cancelled_reason: 'Payment canceled by user',
-          };
+          // Check current status to decide next state
+          const { data: appointments } = await supabaseAdmin
+             .from("appointments")
+             .select("status")
+             .eq("group_id", groupId);
 
-          // [Validation] Ensure payment_status is explicitly 'pending' (or 'released' if we prefer)
-          if (updatePayload.payment_status !== 'pending') {
-            console.error(`[Webhook Critical] canceled: Invalid payment_status state for PI=${paymentIntent.id}. Expected 'pending', got:`, updatePayload.payment_status);
-            // Safe return to avoid Stripe retries on logic errors
-            return res.json({ received: true, error: 'invalid_payment_status' });
-          }
+          const appointment = appointments?.[0];
 
-          console.log(`[Webhook Debug] canceled: Executing update for PI=${paymentIntent.id} (Group=${groupId}) with payload:`, JSON.stringify(updatePayload, null, 2));
-          
-          const { data: updatedData, error } = await supabaseAdmin
-            .from('appointments')
-            .update(updatePayload)
-            .eq('group_id', groupId) // Using group_id is safer
-            .not('status', 'in', '("confirmed", "completed", "in_progress", "scheduled")')
-            .select();
+          if (appointment) {
+            const updatePayload: any = {
+              payment_status: 'released' as const,
+              updated_by: metadata.instructor_id || metadata.student_id,
+              updated_at: new Date().toISOString()
+            };
 
-          const rowsCount = updatedData?.length || 0;
-          console.log(`[Webhook Debug] Update result:`, { updatedRows: rowsCount, error });
+            // Only change status to rejected if it's currently pending_approval or awaiting_payment
+            if (appointment.status === 'pending_approval' || appointment.status === 'awaiting_payment') {
+              updatePayload.status = 'rejected' as const;
+            } else {
+              updatePayload.status = 'cancelled' as const;
+              updatePayload.cancelled_by = 'student' as const;
+              updatePayload.cancelled_reason = 'Payment canceled by user';
+            }
 
-          if (rowsCount === 0 && !error) {
-            console.warn(`[Webhook Warning] canceled: No rows matched for PI=${paymentIntent.id}. Possible reasons: status already 'cancelled', PI ID mismatch, or rows deleted.`);
-            // Check if rows exist at all with this PI ID to debug mismatch
-            const { count } = await supabaseAdmin.from('appointments').select('*', { count: 'exact', head: true }).eq('payment_intent_id', paymentIntent.id);
-            console.log(`[Webhook Debug] Total rows with PI=${paymentIntent.id}: ${count || 0}`);
-          }
+            // [Validation] Ensure payment_status is explicitly 'released' or 'pending'
+            if (updatePayload.payment_status !== 'released') {
+              console.error(`[Webhook Critical] canceled: Invalid payment_status state for PI=${paymentIntent.id}. Expected 'released', got:`, updatePayload.payment_status);
+              // Safe return to avoid Stripe retries on logic errors
+              return res.json({ received: true, error: 'invalid_payment_status' });
+            }
 
-          if (error) {
-            console.error(`[Webhook Debug] Update error:`, JSON.stringify(error, null, 2));
-            return res.json({ received: true, error: 'db_update_failed', details: error.message });
-          }
+            console.log('[WEBHOOK]', {
+              groupId,
+              instructorId: metadata.instructor_id,
+              studentId: metadata.student_id,
+              oldStatus: appointment.status,
+              newStatus: updatePayload.status,
+              payment_status: updatePayload.payment_status
+            });
 
-          if (rowsCount > 0) {
-            // Notify Student about the cancellation based on reason
-            if (paymentIntent.metadata?.student_id) {
-              const reason = paymentIntent.metadata?.cancellation_reason || 'payment_canceled';
-              let title = 'Pagamento Cancelado';
-              let message = 'Sua tentativa de pagamento foi cancelada e os horários foram liberados.';
-              let type = 'booking_cancelled';
+            console.log(`[Webhook Debug] canceled: Executing update for PI=${paymentIntent.id} (Group=${groupId}) with payload:`, JSON.stringify(updatePayload, null, 2));
+            
+            const { data: updatedData, error } = await supabaseAdmin
+              .from('appointments')
+              .update(updatePayload)
+              .eq('group_id', groupId) // Using group_id is safer
+              .not('status', 'in', '("confirmed", "completed", "in_progress", "scheduled")')
+              .select();
 
-              if (reason === 'instructor_rejected') {
-                title = 'Aula Recusada';
-                message = 'O instrutor não pôde aceitar sua solicitação. O valor reservado no seu cartão foi liberado.';
-                type = 'booking_rejected';
-              } else if (reason === 'auto_expired_start_time' || reason === 'auth_expired') {
-                title = 'Aula Expirada';
-                message = 'O tempo para aprovação da aula expirou e o valor foi liberado.';
-                type = 'booking_expired';
+            const rowsCount = updatedData?.length || 0;
+            console.log(`[Webhook Debug] Update result:`, { updatedRows: rowsCount, error });
+
+            if (rowsCount === 0 && !error) {
+              console.warn(`[Webhook Warning] canceled: No rows matched for PI=${paymentIntent.id}. Possible reasons: status already 'cancelled', PI ID mismatch, or rows deleted.`);
+              // Check if rows exist at all with this PI ID to debug mismatch
+              const { count } = await supabaseAdmin.from('appointments').select('*', { count: 'exact', head: true }).eq('payment_intent_id', paymentIntent.id);
+              console.log(`[Webhook Debug] Total rows with PI=${paymentIntent.id}: ${count || 0}`);
+            }
+
+            if (error) {
+              console.error(`[Webhook Debug] Update error:`, JSON.stringify(error, null, 2));
+              return res.json({ received: true, error: 'db_update_failed', details: error.message });
+            }
+
+            if (rowsCount > 0) {
+              // Notify Student about the cancellation based on reason
+              if (paymentIntent.metadata?.student_id) {
+                const reason = paymentIntent.metadata?.cancellation_reason || 'payment_canceled';
+                let title = 'Pagamento Cancelado';
+                let message = 'Sua tentativa de pagamento foi cancelada e os horários foram liberados.';
+                let type = 'booking_cancelled';
+
+                if (reason === 'instructor_rejected') {
+                  title = 'Aula Recusada';
+                  message = 'O instrutor não pôde aceitar sua solicitação. O valor reservado no seu cartão foi liberado.';
+                  type = 'booking_rejected';
+                } else if (reason === 'auto_expired_start_time' || reason === 'auth_expired') {
+                  title = 'Aula Expirada';
+                  message = 'O tempo para aprovação da aula expirou e o valor foi liberado.';
+                  type = 'booking_expired';
+                }
+
+                await supabaseAdmin.from('notifications').upsert({
+                  user_id: paymentIntent.metadata.student_id,
+                  title,
+                  message,
+                  type,
+                  metadata: { group_id: groupId, payment_intent_id: paymentIntent.id, reason },
+                  idempotency_key: `${type}:${groupId}`
+                }, { onConflict: 'idempotency_key' });
               }
-
-              await supabaseAdmin.from('notifications').upsert({
-                user_id: paymentIntent.metadata.student_id,
-                title,
-                message,
-                type,
-                metadata: { group_id: groupId, payment_intent_id: paymentIntent.id, reason },
-                idempotency_key: `${type}:${groupId}`
-              }, { onConflict: 'idempotency_key' });
             }
           }
           
