@@ -25,15 +25,8 @@ self.addEventListener('activate', (event) => {
 
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Received background message ', payload);
-  
-  const notificationTitle = payload.notification?.title || 'Autoescola do Brasil';
-  const notificationOptions = {
-    body: payload.notification?.body || 'Você tem uma nova notificação.',
-    icon: '/android-chrome-192x192.png', // Assuming there's a PWA icon
-    data: payload.data
-  };
-
-  self.registration.showNotification(notificationTitle, notificationOptions);
+  // Manual showNotification is removed here to prevent duplicate render because 
+  // Firebase SDK automatically renders notifications when the payload containing 'notification' is received in the background.
 });
 
 self.addEventListener('notificationclick', function(event) {

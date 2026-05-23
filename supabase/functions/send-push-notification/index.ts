@@ -379,6 +379,12 @@ serve(async (req) => {
             title: title,
             body: body,
           },
+          webpush: {
+            notification: {
+              icon: '/android-chrome-192x192.png',
+              badge: '/android-chrome-192x192.png',
+            }
+          },
           data: {
             appointmentId: payload.record.id,
             status: newStatus,
