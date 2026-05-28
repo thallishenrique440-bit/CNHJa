@@ -15,6 +15,7 @@ const corsHeaders = {
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") as string, {
   apiVersion: "2023-10-16" as any,
   httpClient: Stripe.createFetchHttpClient(),
+  telemetry: false,
 });
 
 Deno.serve(async (req: any) => {

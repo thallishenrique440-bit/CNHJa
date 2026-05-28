@@ -10,6 +10,7 @@ declare const Deno: any;
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") as string, {
   apiVersion: "2023-10-16" as any,
   httpClient: Stripe.createFetchHttpClient(),
+  telemetry: false,
 });
 
 // Initialize Supabase Admin Client (Bypass RLS)
