@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.send-push-notification]
 verify_jwt = false
+
+[functions.stripe-webhook-platform]
+verify_jwt = false
