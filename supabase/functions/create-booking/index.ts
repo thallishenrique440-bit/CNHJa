@@ -156,7 +156,7 @@ Deno.serve(async (req: any) => {
         .in('date', dates)
         .in('start_time', times)
         .eq('student_id', user.id)
-        .in('status', ['reserved', 'pending']); 
+        .in('status', ['reserved', 'pending', 'awaiting_payment']); 
 
     // 7. Verificar Disponibilidade (Double booking check - Instrutor)
     // Agora verificamos se sobrou algum bloqueio REAL (de OUTROS usuários ou confirmados)
