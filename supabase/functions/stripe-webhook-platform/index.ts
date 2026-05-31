@@ -346,7 +346,7 @@ Deno.serve(async (req: Request) => {
               description: txType === 'tip' ? 'Caixinha' : 'Pagamento de Aula',
               metadata: metadata,
               event_date: new Date().toISOString()
-            }, { onConflict: 'stripe_payment_intent_id,type,appointment_id' });
+            }, { onConflict: 'appointment_id,type' });
 
           if (txError) {
             console.error(`❌ Error upserting transaction for PI ${pi.id} / apt ${item.id}:`, txError);
@@ -360,7 +360,7 @@ Deno.serve(async (req: Request) => {
             console.log('[WEBHOOK]', {
               appointmentId: item.id,
               instructorId: instructor_id,
-              studentId,
+              studentId: student_id,
               oldStatus: 'pending_approval',
               newStatus: 'confirmed'
             });
