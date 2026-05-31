@@ -404,11 +404,12 @@ Deno.serve(async (req: Request) => {
           const instructorId = paymentIntent.metadata?.instructor_id;
 
           // 1. Check current status to decide next state
-          const { data: appointment } = await supabaseAdmin
+          const { data: appointments } = await supabaseAdmin
              .from("appointments")
              .select("status")
-             .eq("group_id", groupId)
-             .maybeSingle();
+             .eq("group_id", groupId);
+
+          const appointment = appointments && appointments.length > 0 ? appointments[0] : null;
 
           if (appointment) {
              const updatePayload: any = { 
