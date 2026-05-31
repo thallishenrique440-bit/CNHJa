@@ -911,17 +911,24 @@ export const InstructorAgenda: React.FC = () => {
         }
         if (data?.error) throw new Error(data.error);
 
-        const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
-        if (keyToUpdate) {
-            setAppointments(prev => {
-                const updated = { ...prev };
-                delete updated[keyToUpdate];
-                return updated;
+        const targetGroupId = selectedLesson.groupId;
+        setAppointments(prev => {
+            const updated = { ...prev };
+            Object.keys(updated).forEach(k => {
+                const appt = updated[k];
+                if (appt.id === selectedLesson.id || (targetGroupId && appt.groupId === targetGroupId)) {
+                    delete updated[k];
+                }
             });
-        }
+            return updated;
+        });
         
         closeLessonModal();
         addToast("Solicitação recusada e valor estornado.", 'info');
+
+        setTimeout(() => {
+            fetchAppointments();
+        }, 800);
 
     } catch (err: any) {
         console.error("Error rejecting:", err);
