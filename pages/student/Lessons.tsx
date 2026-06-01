@@ -51,6 +51,7 @@ interface DBAppointment {
   instructor_id: string;
   reschedule_requested_at: string | null;
   rescheduled_at: string | null;
+  cancelled_reason: string | null;
   instructors: {
     whatsapp: string;
     meeting_point: string;
@@ -240,6 +241,17 @@ export const StudentLessons: React.FC = () => {
     const now = new Date(Date.now() + serverTimeOffset);
     
     return rawLessons.map((apt): Lesson | null => {
+      // Exclude expired lessons or technical cancellations (user_retry_new_attempt, system_cleanup_expired, stripe_creation_failed)
+      const isTechnicalCancelled = 
+        apt.status === 'cancelled' && 
+        (apt.cancelled_reason === 'user_retry_new_attempt' || 
+         apt.cancelled_reason === 'system_cleanup_expired' || 
+         apt.cancelled_reason === 'stripe_creation_failed');
+
+      if (apt.status === 'expired' || isTechnicalCancelled) {
+        return null;
+      }
+
       try {
         const [year, month, day] = apt.date.split('-').map(Number);
         const [hours, minutes] = apt.start_time.split(':').map(Number);
@@ -386,6 +398,7 @@ export const StudentLessons: React.FC = () => {
             instructor_id,
             reschedule_requested_at,
             rescheduled_at,
+            cancelled_reason,
             instructors (
               whatsapp,
               meeting_point,

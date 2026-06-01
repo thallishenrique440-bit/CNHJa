@@ -374,6 +374,7 @@ export const InstructorAgenda: React.FC = () => {
                 group_id,
                 reschedule_requested_at,
                 rescheduled_at,
+                cancelled_reason,
                 profiles:student_id (
                     full_name,
                     avatar_url,
@@ -417,7 +418,16 @@ export const InstructorAgenda: React.FC = () => {
                 } else if (apt.status === 'completed') {
                     uiStatus = 'completed';
                 } else if (apt.status === 'cancelled') {
-                    uiStatus = 'cancelled';
+                    const isTechnical = 
+                      apt.cancelled_reason === 'user_retry_new_attempt' ||
+                      apt.cancelled_reason === 'system_cleanup_expired' ||
+                      apt.cancelled_reason === 'stripe_creation_failed';
+                    
+                    if (isTechnical) {
+                        uiStatus = null;
+                    } else {
+                        uiStatus = 'cancelled';
+                    }
                 } else if (apt.status === 'reserved' || apt.status === 'awaiting_payment') {
                     // Reserved or awaiting_payment slots are currently being booked by a student.
                     // We must show them as occupied to prevent the instructor from trying to block them
