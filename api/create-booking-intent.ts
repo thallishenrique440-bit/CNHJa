@@ -47,7 +47,8 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { lessons, studentId, instructorId, category, ignoreTooClose } = req.body;
+  const { lessons, instructorId, category, ignoreTooClose } = req.body;
+  const secureStudentId = user.id;
 
   if (!lessons || !lessons.length) {
     return res.status(400).json({ error: 'No lessons provided' });
@@ -209,7 +210,7 @@ export default async function handler(req: any, res: any) {
 
       if (conflict) {
         // Allow retry if it's the same student and it's a temporary status
-        if (conflict.student_id === studentId && (conflict.status === 'awaiting_payment' || conflict.status === 'reserved')) {
+        if (conflict.student_id === secureStudentId && (conflict.status === 'awaiting_payment' || conflict.status === 'reserved')) {
           // This will be cleaned up in the next step
           continue; 
         }
@@ -225,12 +226,12 @@ export default async function handler(req: any, res: any) {
       await supabase
           .from('appointments')
           .update({
-              status: 'failed',
+              status: 'cancelled',
               payment_status: 'failed',
               cancelled_reason: 'user_retry_new_attempt'
           })
           .eq('instructor_id', instructorId)
-          .eq('student_id', studentId)
+          .eq('student_id', secureStudentId)
           .eq('date', lesson.date)
           .eq('start_time', lesson.startTime)
           .in('status', ['reserved', 'pending', 'awaiting_payment']);
@@ -249,7 +250,7 @@ export default async function handler(req: any, res: any) {
 
       return {
         instructor_id: instructorId,
-        student_id: studentId,
+        student_id: secureStudentId,
         date: lesson.date,
         start_time: lesson.startTime,
         start_time_utc: startTimeUtc,
@@ -304,7 +305,7 @@ export default async function handler(req: any, res: any) {
         metadata: {
           type: 'lesson_payment',
           group_id: groupId,
-          student_id: studentId,
+          student_id: secureStudentId,
           instructor_id: instructorId,
           lesson_count: lessons.length,
         },
