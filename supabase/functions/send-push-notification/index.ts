@@ -121,6 +121,7 @@ Deno.serve(async (req) => {
     const newStatus = payload.record?.status
     const actorId = payload.record?.updated_by
     const groupId = payload.record?.group_id
+    const cancelledReason = payload.record?.cancelled_reason
 
     // Only process if the status actually changed (for UPDATE)
     if (oldStatus === newStatus) {
@@ -143,8 +144,18 @@ Deno.serve(async (req) => {
       newStatus,
       appointmentId: payload.record?.id,
       groupId,
-      actorId
+      actorId,
+      cancelledReason
     });
+
+    // Ignore technical cancellations for checkout retries to avoid confusing users
+    if (newStatus === 'cancelled' && cancelledReason === 'user_retry_new_attempt') {
+      console.log('[PUSH REQUEST] Ignored: Technical cancellation (user_retry_new_attempt)');
+      return new Response(JSON.stringify({ message: 'Ignored: Technical cancellation for user retry' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      })
+    }
 
     // Determine who should receive the notification and what the message is
     let targetUserId: string | null = null
