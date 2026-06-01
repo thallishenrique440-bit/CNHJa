@@ -420,7 +420,8 @@ Deno.serve(async (req: Request) => {
              // Only change status to rejected if it's currently pending_approval or awaiting_payment
              // If it's 'expired', we leave it as 'expired'.
              if (appointment.status === 'pending_approval' || appointment.status === 'awaiting_payment') {
-                updatePayload.status = 'rejected';
+                updatePayload.status = 'cancelled';
+                 updatePayload.cancelled_reason = 'instructor_rejected';
              }
              
              console.log('[WEBHOOK]', {
@@ -466,7 +467,7 @@ Deno.serve(async (req: Request) => {
           await supabaseAdmin
             .from("appointments")
             .update({ 
-                status: "failed", 
+                status: "cancelled", 
                 payment_status: "failed" 
             })
             .eq("group_id", groupId);

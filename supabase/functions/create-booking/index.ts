@@ -131,7 +131,7 @@ Deno.serve(async (req: any) => {
     await supabaseAdmin
       .from('appointments')
       .update({
-        status: 'failed',
+        status: 'cancelled',
         payment_status: 'failed',
         cancelled_reason: 'system_cleanup_expired', // Auditoria: expirou sem pagamento
         updated_by: user.id
@@ -147,7 +147,7 @@ Deno.serve(async (req: any) => {
     await supabaseAdmin
         .from('appointments')
         .update({
-            status: 'failed',
+            status: 'cancelled',
             payment_status: 'failed',
             cancelled_reason: 'user_retry_new_attempt', // Auditoria: usuário reiniciou checkout
             updated_by: user.id
@@ -407,7 +407,7 @@ Deno.serve(async (req: any) => {
         await supabaseAdmin
             .from('appointments')
             .update({
-                status: 'failed',
+                status: 'cancelled',
                 payment_status: 'failed',
                 cancelled_reason: 'stripe_creation_failed'
             })

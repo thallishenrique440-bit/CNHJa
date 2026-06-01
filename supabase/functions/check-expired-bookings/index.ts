@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
     const { data: reservedBookings, error: reservedError } = await supabaseAdmin
       .from('appointments')
       .update({
-        status: 'failed',
+        status: 'cancelled',
         payment_status: 'failed',
         cancelled_reason: 'system_cleanup_expired',
         updated_at: new Date().toISOString()
