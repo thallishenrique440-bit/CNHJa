@@ -123,9 +123,21 @@ Deno.serve(async (req) => {
     const groupId = payload.record?.group_id
     const cancelledReason = payload.record?.cancelled_reason
 
-    // Only process if the status actually changed (for UPDATE)
-    if (oldStatus === newStatus) {
-      return new Response(JSON.stringify({ message: 'Ignored: Status did not change' }), {
+    // Reschedule changes
+    const oldReschedReq = payload.old_record?.reschedule_requested_at
+    const newReschedReq = payload.record?.reschedule_requested_at
+    const oldRescheduled = payload.old_record?.rescheduled_at
+    const newRescheduled = payload.record?.rescheduled_at
+
+    const isRescheduleRequested = !oldReschedReq && newReschedReq
+    const isRescheduleApproved = !oldRescheduled && newRescheduled && oldReschedReq && !newReschedReq
+    const isRescheduleRejected = oldReschedReq && !newReschedReq && !newRescheduled
+
+    const isRescheduleEvent = isRescheduleRequested || isRescheduleApproved || isRescheduleRejected
+
+    // Only process if the status actually changed (for UPDATE) OR if a reschedule event occurred
+    if (oldStatus === newStatus && !isRescheduleEvent) {
+      return new Response(JSON.stringify({ message: 'Ignored: Status did not change and no reschedule event' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
@@ -163,14 +175,26 @@ Deno.serve(async (req) => {
     let body = ''
     let notificationType: string = ''
 
-    if (newStatus === 'pending_approval' && oldStatus !== 'pending_approval') {
+    if (isRescheduleRequested) {
+      // Aluno solicita remarcação -> Instrutor recebe
+      targetUserId = payload.record.instructor_id
+      notificationType = 'booking_request'
+    } else if (isRescheduleApproved) {
+      // Instrutor aprova remarcação -> Aluno recebe
+      targetUserId = payload.record.student_id
+      notificationType = 'booking_accepted'
+    } else if (isRescheduleRejected) {
+      // Instrutor rejeita remarcação -> Aluno recebe
+      targetUserId = payload.record.student_id
+      notificationType = 'booking_rejected'
+    } else if (newStatus === 'pending_approval' && oldStatus !== 'pending_approval') {
       // 1. Student requested a class (payment confirmed) -> Notify Instructor
       targetUserId = payload.record.instructor_id
       notificationType = 'booking_request'
     } else if (newStatus === 'confirmed' && oldStatus === 'pending_approval') {
       // 2. Instructor approved -> Notify Student
       targetUserId = payload.record.student_id
-      notificationType = 'booking_confirmed'
+      notificationType = 'booking_accepted'
     } else if (newStatus === 'cancelled') {
       // 3. Someone cancelled -> Notify the other party
       targetUserId = payload.record.cancelled_by === 'student' ? payload.record.instructor_id : payload.record.student_id
@@ -200,6 +224,14 @@ Deno.serve(async (req) => {
       })
     }
 
+    const notificationStatus = isRescheduleRequested
+      ? 'reschedule_requested'
+      : isRescheduleApproved
+      ? 'reschedule_approved'
+      : isRescheduleRejected
+      ? 'reschedule_rejected'
+      : newStatus;
+
     // --- IDEMPOTÊNCIA INDIVIDUAL (INSERT-FIRST) ---
     // Reservamos a idempotência antes de qualquer outra lógica.
     // Se falhar por restrição de unicidade (appointment_id, status, target_user_id), 
@@ -209,7 +241,7 @@ Deno.serve(async (req) => {
       .insert({
         appointment_id: payload.record.id,
         group_id: groupId,
-        status: newStatus,
+        status: notificationStatus,
         target_user_id: targetUserId
       })
 
@@ -251,7 +283,7 @@ Deno.serve(async (req) => {
         .from('notification_logs')
         .select('id')
         .eq('group_id', groupId)
-        .eq('status', newStatus)
+        .eq('status', notificationStatus)
         .eq('target_user_id', targetUserId)
         .neq('appointment_id', payload.record.id) // Exclui o log que acabamos de criar
         .gt('created_at', twentySecondsAgo)
@@ -290,7 +322,16 @@ Deno.serve(async (req) => {
     }
 
     // Dynamic messaging formatting
-    if (newStatus === 'pending_approval') {
+    if (isRescheduleRequested) {
+      title = 'Solicitação de remarcação'
+      body = `${studentName} pediu para remarcar a aula das ${startTime}.`
+    } else if (isRescheduleApproved) {
+      title = 'Remarcação aceita'
+      body = 'Seu instrutor aceitou a solicitação de remarcação.'
+    } else if (isRescheduleRejected) {
+      title = 'Remarcação recusada'
+      body = 'O instrutor recusou o pedido de remarcação da aula.'
+    } else if (newStatus === 'pending_approval') {
       if (isCombo) {
         title = 'Novo combo solicitado'
         body = `${studentName} solicitou um combo com ${comboCount} aulas.`
