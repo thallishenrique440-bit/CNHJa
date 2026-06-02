@@ -93,8 +93,8 @@ export default async function handler(req: any, res: any) {
     }
 
     // Idempotency check
-    if (appointment.status === 'rejected') {
-      return res.status(200).json({ message: 'Booking already rejected' });
+    if (appointment.status === 'cancelled') {
+      return res.status(200).json({ message: 'Booking already rejected/cancelled' });
     }
 
     if (appointment.status !== 'pending_approval') {
@@ -139,7 +139,7 @@ export default async function handler(req: any, res: any) {
     const { error: updateError } = await supabaseAdmin
       .from('appointments')
       .update({
-        status: 'rejected',
+        status: 'cancelled',
         payment_status: 'failed',
         cancelled_reason: 'instructor_rejected',
         updated_by: user.id,

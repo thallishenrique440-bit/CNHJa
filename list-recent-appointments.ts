@@ -15,7 +15,7 @@ async function listRecentAppointments() {
 
   const { data, error } = await supabase
     .from('appointments')
-    .select('id, created_at, date, start_time, start_time_utc, status, group_id')
+    .select('id, student_id, created_at, date, start_time, start_time_utc, status, group_id')
     .order('created_at', { ascending: false })
     .limit(10);
 

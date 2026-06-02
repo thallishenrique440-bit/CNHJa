@@ -968,7 +968,7 @@ export const StudentInstructorProfile: React.FC = () => {
         await supabase
           .from('appointments')
           .update({
-            status: 'failed',
+            status: 'cancelled',
             payment_status: 'failed',
             cancelled_reason: 'user_contacted_instructor'
           })

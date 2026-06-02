@@ -263,9 +263,10 @@ export default async function handler(req: Request, res: Response) {
               updated_at: new Date().toISOString()
             };
 
-            // Only change status to rejected if it's currently pending_approval or awaiting_payment
+            // Only change status to cancelled if it's currently pending_approval or awaiting_payment
             if (appointment.status === 'pending_approval' || appointment.status === 'awaiting_payment') {
-              updatePayload.status = 'rejected' as const;
+              updatePayload.status = 'cancelled' as const;
+              updatePayload.cancelled_reason = 'instructor_rejected' as const;
             } else {
               updatePayload.status = 'cancelled' as const;
               updatePayload.cancelled_by = 'student' as const;
