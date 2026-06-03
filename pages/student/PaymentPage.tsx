@@ -172,8 +172,8 @@ export const PaymentPage = () => {
         if (error) throw error;
 
         if (data && data.length > 0) {
-          // Calculate total price accurately based on the queried rows
-          const totalAmount = data.reduce((acc, item) => acc + (item.price || 0), 0);
+          // Calculate total price accurately based on the queried rows (stored in cents) converted to reais
+          const totalAmount = data.reduce((acc, item) => acc + (item.price || 0), 0) / 100;
           
           // Map lessons and sort them by date and time
           const sortedLessons = [...data].sort((a, b) => {
@@ -413,19 +413,13 @@ export const PaymentPage = () => {
                 <Info className="w-4.5 h-4.5 text-blue-600 shrink-0 mt-0.5" />
                 <div className="text-xs leading-relaxed text-blue-900 space-y-2">
                   <p className="font-bold text-blue-950">
-                    Como funciona a pré-autorização?
+                    Como funciona o pagamento?
                   </p>
                   <p>
-                    O preço total será apenas <strong className="text-blue-950 font-semibold">reservado temporariamente</strong> no limite do seu cartão de crédito.
+                    Aceitamos apenas cartão de crédito, Parcelamentos indisponivel temporariamente.
                   </p>
                   <p>
-                    A cobrança real e transferência só serão efetivadas quando o instrutor <strong className="text-blue-950 font-semibold">aprovar formalmente</strong> o agendamento.
-                  </p>
-                  <p>
-                    Caso o instrutor recuse ou expire, a reserva é desfeita de forma automática pela operadora do seu cartão sem qualquer custo.
-                  </p>
-                  <p className="text-blue-800/80 text-[10px]">
-                    * Modalidades de pagamento com parcelamento ou cartões de débito não são compatíveis com o mecanismo de pré-autorização manual.
+                    O valor será apenas reservado no seu cartão e só será cobrado após a aprovação do instrutor.
                   </p>
                 </div>
               </div>
