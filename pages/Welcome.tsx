@@ -14,31 +14,31 @@ export const Welcome: React.FC = () => {
       <div className="absolute top-[20%] left-[-20%] w-72 h-72 bg-yellow-50 rounded-full mix-blend-multiply filter blur-3xl opacity-60 animate-fade-in"></div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col items-center justify-center relative z-10 -mt-10">
+      <div className="flex-1 flex flex-col items-center justify-center relative z-10 -mt-6">
         
         {/* Logo */}
-        <div className="w-full max-w-[480px] mb-8 transform hover:scale-105 transition-transform duration-500">
+        <div className="w-full max-w-[480px] mb-3 transform hover:scale-105 transition-transform duration-500">
           <img 
-            src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
-            alt="Autoescola do Brasil" 
+            src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%203%20de%20jun.%20de%202026,%2011_51_42.png" 
+            alt="CNHJá" 
             className="w-full h-auto object-contain drop-shadow-sm"
           />
         </div>
 
         {/* Value Proposition */}
-        <div className="text-center space-y-4 max-w-xs mx-auto animate-fade-in">
+        <div className="text-center space-y-3 max-w-xs mx-auto animate-fade-in mb-4">
           <h2 className="text-3xl font-extrabold text-gray-900 leading-tight">
             Sua CNH <br/> 
             <span className="text-blue-600">sem complicações</span>
           </h2>
-          <p className="text-gray-500 text-base leading-relaxed">
-            A plataforma que conecta você aos melhores instrutores independentes da sua região.
+          <p className="text-gray-500 text-sm leading-relaxed">
+            Conectando você aos melhores instrutores independentes da sua região.
           </p>
         </div>
       </div>
 
       {/* Bottom Actions Area */}
-      <div className="w-full space-y-5 pb-6 relative z-10 animate-fade-in">
+      <div className="w-full space-y-5 pb-6 pt-4 relative z-10 animate-fade-in">
         <div className="space-y-3">
           <Button 
             variant="primary" 

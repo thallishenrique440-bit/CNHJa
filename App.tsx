@@ -32,8 +32,8 @@ import { InstructorStripeBanner } from './components/InstructorStripeBanner';
 const LoadingScreen = () => (
   <div className="min-h-screen flex flex-col items-center justify-center bg-white space-y-4">
     <img 
-      src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
-      alt="Autoescola do Brasil" 
+      src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%203%20de%20jun.%20de%202026,%2011_51_42.png" 
+      alt="CNHJá" 
       className="h-16 w-auto object-contain animate-pulse" 
       onError={(e) => {
         // Fallback if image fails

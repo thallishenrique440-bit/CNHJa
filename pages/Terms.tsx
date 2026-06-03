@@ -46,7 +46,7 @@ export const Terms: React.FC = () => {
           <section className="space-y-3">
             <h2 className="text-xl font-bold text-gray-900">1. Sobre a plataforma</h2>
             <p>
-              A Autoescola do Brasil é uma plataforma tecnológica que atua como um marketplace, conectando alunos interessados em aprender a dirigir ou aperfeiçoar sua condução a instrutores de direção independentes. A plataforma facilita o agendamento de aulas e o processamento de pagamentos, não sendo proprietária de veículos nem empregadora direta dos instrutores.
+              A CNHJá é uma plataforma tecnológica que atua como um marketplace, conectando alunos interessados em aprender a dirigir ou aperfeiçoar sua condução a instrutores de direção independentes. A plataforma facilita o agendamento de aulas e o processamento de pagamentos, não sendo proprietária de veículos nem empregadora direta dos instrutores.
             </p>
           </section>
 
@@ -74,7 +74,7 @@ export const Terms: React.FC = () => {
           <section className="space-y-3">
             <h2 className="text-xl font-bold text-gray-900">5. Pagamentos (Stripe)</h2>
             <p>
-              Todos os pagamentos são processados via Stripe. A Autoescola do Brasil não armazena dados sensíveis de cartões de crédito. O Aluno concorda com o valor total da aula e eventuais taxas aplicáveis no momento da reserva.
+              Todos os pagamentos são processados via Stripe. A CNHJá não armazena dados sensíveis de cartões de crédito. O Aluno concorda com o valor total da aula e eventuais taxas aplicáveis no momento da reserva.
             </p>
           </section>
 
@@ -88,7 +88,7 @@ export const Terms: React.FC = () => {
           <section className="space-y-3">
             <h2 className="text-xl font-bold text-gray-900">7. Responsabilidade e Isenção de Garantias</h2>
             <p>
-              Os instrutores são profissionais independentes e totalmente responsáveis pela condução das aulas e manutenção de seus veículos. <strong>A Autoescola do Brasil não garante, sob nenhuma hipótese, a aprovação do Aluno em exames práticos ou teóricos para obtenção da CNH</strong>, sendo a plataforma apenas uma facilitadora de ensino.
+              Os instrutores são profissionais independentes e totalmente responsáveis pela condução das aulas e manutenção de seus veículos. <strong>A CNHJá não garante, sob nenhuma hipótese, a aprovação do Aluno em exames práticos ou teóricos para obtenção da CNH</strong>, sendo a plataforma apenas uma facilitadora de ensino.
             </p>
           </section>
 

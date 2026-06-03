@@ -150,8 +150,8 @@ export const RegisterStudent: React.FC = () => {
         
         <div className="flex flex-col items-center">
           <img 
-            src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/logo%20oficial.png" 
-            alt="Autoescola do Brasil" 
+            src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%203%20de%20jun.%20de%202026,%2011_51_42.png" 
+            alt="CNHJá" 
             className="w-64 h-auto object-contain mb-8 drop-shadow-sm"
           />
           <div className="text-center space-y-2">
