@@ -1193,13 +1193,14 @@ export const InstructorAgenda: React.FC = () => {
   const handleSaveAgenda = async () => {
     setIsSavingSettings(true);
     try {
+        const finalDuration = Math.max(1, parseInt(tempLunchConfig.duration as any) || 1);
         // Save to DB
         const { error } = await supabase
             .from('instructors')
             .update({ 
                 work_saturday_afternoon: tempWorkSaturdayAfternoon,
                 lunch_start_slot: tempLunchConfig.startSlot,
-                lunch_duration: tempLunchConfig.duration,
+                lunch_duration: finalDuration,
                 lunch_active: tempLunchConfig.isActive
             })
             .eq('id', session?.user?.id);
@@ -1207,7 +1208,10 @@ export const InstructorAgenda: React.FC = () => {
         if (error) throw error;
 
         // Update Local State
-        setLunchConfig({ ...tempLunchConfig });
+        setLunchConfig({ 
+            ...tempLunchConfig,
+            duration: finalDuration
+        });
         setWorkSaturdayAfternoon(tempWorkSaturdayAfternoon);
         setShowAgendaModal(false);
         addToast("Configurações da agenda atualizadas.", 'success');
@@ -1900,7 +1904,13 @@ export const InstructorAgenda: React.FC = () => {
                             max="5"
                             className="w-full p-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                             value={tempLunchConfig.duration}
-                            onChange={(e) => setTempLunchConfig({...tempLunchConfig, duration: parseInt(e.target.value) || 1})}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                setTempLunchConfig({
+                                    ...tempLunchConfig,
+                                    duration: val === '' ? '' as any : (parseInt(val) || 1)
+                                });
+                            }}
                         />
                     </div>
                 </div>

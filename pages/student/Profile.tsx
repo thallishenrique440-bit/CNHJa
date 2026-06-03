@@ -551,6 +551,14 @@ export const StudentProfile: React.FC = () => {
         </div>
       </Modal>
 
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept="image/*"
+        className="hidden"
+      />
+
       <StudentBottomNav />
     </div>
   );
