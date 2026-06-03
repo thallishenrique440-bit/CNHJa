@@ -69,6 +69,7 @@ export const InstructorFinance: React.FC = () => {
   
   // Data State
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [showAllHistory, setShowAllHistory] = useState(false);
   
   // Financial Metrics
   const [totalRevenue, setTotalRevenue] = useState(0);
@@ -295,6 +296,8 @@ export const InstructorFinance: React.FC = () => {
     setExpandedId(expandedId === id ? null : id);
   };
 
+  const visibleItems = showAllHistory ? historyItems : historyItems.slice(0, 5);
+
   return (
     <div className="min-h-screen bg-gray-50 pb-24 sm:max-w-md sm:mx-auto relative flex flex-col">
       
@@ -431,103 +434,118 @@ export const InstructorFinance: React.FC = () => {
                  Nenhuma atividade encontrada.
              </div>
           ) : (
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 overflow-hidden">
-                {historyItems.map((item) => {
-                    const isTip = item.type === 'tip';
-                    const isRefund = item.type === 'refund';
-                    const isLesson = item.type === 'lesson';
-                    
-                    let label = 'Aula';
-                    if (isTip) label = 'Caixinha';
-                    if (isRefund) label = 'Reembolso';
-
-                    const studentName = item.studentName;
-                    const displayDesc = `${label} - ${studentName}`;
-
-                    // Visual indicators
-                    const getIndicatorColor = () => {
-                        if (isRefund) return 'border-red-500';
-                        if (isTip) return 'border-amber-400';
-                        return 'border-green-500';
-                    };
-
-                    const getIcon = () => {
-                        if (isRefund) return '↩️';
-                        if (isTip) return '🎁';
-                        return '✅';
-                    };
-
-                    return (
-                        <div 
-                            key={item.id} 
-                            onClick={() => toggleExpand(item.id)}
-                            className={`p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer border-l-4 ${getIndicatorColor()}`}
-                        >
-                            <div className="flex justify-between items-center w-full">
-                                <div className="flex flex-col space-y-1">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xs text-gray-400 font-medium">{formatDate(item.sortDate)}</span>
-                                        <span className="text-[10px] text-gray-300">•</span>
-                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">{getIcon()} {label}</span>
-                                    </div>
-                                    <span className="text-sm font-semibold text-gray-800">
-                                        {studentName}
-                                    </span>
-                                </div>
-                                <div className="text-right">
-                                    <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
-                                        {item.netAmount !== undefined ? (
-                                            <>
-                                                {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.netAmount))}
-                                            </>
-                                        ) : (
-                                            '—'
-                                        )}
-                                    </span>
-                                    <span className="text-[10px] text-gray-400">
-                                        {item.status === 'pending' && 'Pendente'}
-                                        {item.status === 'completed' && (
-                                            item.stripePayoutId 
-                                                ? 'Transferido' 
-                                                : <span className="text-green-600 font-bold">Concluído</span>
-                                        )}
-                                        {item.status === 'failed' && 'Falha'}
-                                        {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
-                                    </span>
-                                </div>
-                            </div>
-
-                            {expandedId === item.id && (
-                                <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 animate-fade-in">
-                                    <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                                        <div className="text-gray-400">Horário:</div>
-                                        <div className="text-gray-700 font-medium text-right">{formatTime(item.sortDate)}</div>
-                                        
-                                        {item.isFinancial && item.grossAmount !== undefined && (
-                                            <>
-                                                <div className="text-gray-400">Valor Bruto:</div>
-                                                <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
-                                                
-                                                {item.type === 'lesson' && item.platformFee !== undefined && item.platformFee > 0 && (
-                                                    <>
-                                                        <div className="text-gray-400">Taxa Plataforma (10%):</div>
-                                                        <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee))}</div>
-                                                    </>
-                                                )}
-                                                
-                                                <div className="text-gray-400 font-bold">Valor Líquido:</div>
-                                                <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
-                                            </>
-                                        )}
-
-                                        <div className="text-gray-400">ID:</div>
-                                        <div className="text-gray-500 text-right font-mono">{item.id.slice(0, 12)}...</div>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    );
-                })}
+            <div className="space-y-4">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 overflow-hidden">
+                  {visibleItems.map((item) => {
+                      const isTip = item.type === 'tip';
+                      const isRefund = item.type === 'refund';
+                      const isLesson = item.type === 'lesson';
+                      
+                      let label = 'Aula';
+                      if (isTip) label = 'Caixinha';
+                      if (isRefund) label = 'Reembolso';
+  
+                      const studentName = item.studentName;
+                      const displayDesc = `${label} - ${studentName}`;
+  
+                      // Visual indicators
+                      const getIndicatorColor = () => {
+                          if (isRefund) return 'border-red-500';
+                          if (isTip) return 'border-amber-400';
+                          return 'border-green-500';
+                      };
+  
+                      const getIcon = () => {
+                          if (isRefund) return '↩️';
+                          if (isTip) return '🎁';
+                          return '✅';
+                      };
+  
+                      return (
+                          <div 
+                              key={item.id} 
+                              onClick={() => toggleExpand(item.id)}
+                              className={`p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer border-l-4 ${getIndicatorColor()}`}
+                          >
+                              <div className="flex justify-between items-center w-full">
+                                  <div className="flex flex-col space-y-1">
+                                      <div className="flex items-center gap-2">
+                                          <span className="text-xs text-gray-400 font-medium">{formatDate(item.sortDate)}</span>
+                                          <span className="text-[10px] text-gray-300">•</span>
+                                          <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">{getIcon()} {label}</span>
+                                      </div>
+                                      <span className="text-sm font-semibold text-gray-800">
+                                          {studentName}
+                                      </span>
+                                  </div>
+                                  <div className="text-right">
+                                      <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
+                                          {item.netAmount !== undefined ? (
+                                              <>
+                                                  {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.netAmount))}
+                                              </>
+                                          ) : (
+                                              '—'
+                                          )}
+                                      </span>
+                                      <span className="text-[10px] text-gray-400">
+                                          {item.status === 'pending' && 'Pendente'}
+                                          {item.status === 'completed' && (
+                                              item.stripePayoutId 
+                                                  ? 'Transferido' 
+                                                  : <span className="text-green-600 font-bold">Concluído</span>
+                                          )}
+                                          {item.status === 'failed' && 'Falha'}
+                                          {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
+                                      </span>
+                                  </div>
+                              </div>
+  
+                              {expandedId === item.id && (
+                                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 animate-fade-in">
+                                      <div className="grid grid-cols-2 gap-y-2 text-[11px]">
+                                          <div className="text-gray-400">Horário:</div>
+                                          <div className="text-gray-700 font-medium text-right">{formatTime(item.sortDate)}</div>
+                                          
+                                          {item.isFinancial && item.grossAmount !== undefined && (
+                                              <>
+                                                  <div className="text-gray-400">Valor Bruto:</div>
+                                                  <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
+                                                  
+                                                  {item.type === 'lesson' && item.platformFee !== undefined && item.platformFee > 0 && (
+                                                      <>
+                                                          <div className="text-gray-400">Taxa Plataforma (10%):</div>
+                                                          <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee))}</div>
+                                                      </>
+                                                  )}
+                                                  
+                                                  <div className="text-gray-400 font-bold">Valor Líquido:</div>
+                                                  <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
+                                              </>
+                                          )}
+  
+                                          <div className="text-gray-400">ID:</div>
+                                          <div className="text-gray-500 text-right font-mono">{item.id.slice(0, 12)}...</div>
+                                      </div>
+                                  </div>
+                              )}
+                          </div>
+                      );
+                  })}
+              </div>
+              {historyItems.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllHistory(!showAllHistory)}
+                  className="w-full text-center py-3 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-700 text-xs font-bold rounded-xl border border-gray-100 transition-colors flex items-center justify-center gap-1.5 focus:outline-none"
+                >
+                  {showAllHistory ? (
+                    <>Mostrar menos ▲</>
+                  ) : (
+                    <>Ver histórico completo ({historyItems.length}) ▼</>
+                  )}
+                </button>
+              )}
             </div>
           )}
         </div>
