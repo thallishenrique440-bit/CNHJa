@@ -116,7 +116,8 @@ export const StudentHome: React.FC = () => {
           )
         `)
         .gt('base_price', 0)     // Only instructors who set a price
-        .not('categories', 'is', null); // Only instructors who selected a category
+        .not('categories', 'is', null) // Only instructors who selected a category
+        .eq('payouts_enabled', true);
 
       if (error) throw error;
       

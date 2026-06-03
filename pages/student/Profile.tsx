@@ -115,7 +115,7 @@ export const StudentProfile: React.FC = () => {
   const handleSave = async () => {
     if (!session?.user) return;
     
-    if (!name || !phone || phone.length < 10 || !city || !experience || !cnhProcess) {
+    if (!name || !phone || phone.length < 10 || !city) {
         addToast("Por favor, preencha todos os campos obrigatórios para continuar.", 'warning');
         return;
     }
@@ -144,6 +144,7 @@ export const StudentProfile: React.FC = () => {
         await refreshProfile();
 
         addToast("Informações salvas com sucesso!", 'success');
+        navigate('/student/home');
     } catch (error: any) {
         console.error('Error saving:', error);
         addToast('Erro ao salvar: ' + error.message, 'error');
