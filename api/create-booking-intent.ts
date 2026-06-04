@@ -85,6 +85,55 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Instructor not ready for payments' });
     }
 
+    // 1.5 Fetch student profile & manage Stripe Customer ID
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name, stripe_customer_id')
+      .eq('id', secureStudentId)
+      .single();
+
+    if (profileError || !profile) {
+      console.error('[ERROR] Student profile not found for user:', secureStudentId, profileError);
+      return res.status(400).json({ error: 'Student profile not found.' });
+    }
+
+    let stripeCustomerId = profile.stripe_customer_id;
+
+    if (!stripeCustomerId) {
+      try {
+        console.log(`[INFO] Creating new Stripe Customer for user ${secureStudentId}`);
+        const customer = await stripe.customers.create({
+          email: user.email,
+          name: profile.full_name || undefined,
+          metadata: {
+            supabase_user_id: secureStudentId
+          }
+        });
+        stripeCustomerId = customer.id;
+        console.log(`[INFO] Stripe Customer created successfully with ID: ${stripeCustomerId}`);
+
+        // Persist back to profile
+        const { error: updateProfileError } = await supabase
+          .from('profiles')
+          .update({ stripe_customer_id: stripeCustomerId })
+          .eq('id', secureStudentId);
+
+        if (updateProfileError) {
+          console.error(`[ERROR] Failed to save stripe_customer_id ${stripeCustomerId} to user profile ${secureStudentId}:`, updateProfileError);
+        } else {
+          console.log(`[INFO] Saved stripe_customer_id ${stripeCustomerId} to database profile ${secureStudentId}`);
+        }
+      } catch (stripeCustError: any) {
+        console.error(`[ERROR] Fail to create Stripe Customer for user ${secureStudentId}:`, stripeCustError);
+        return res.status(500).json({ 
+          error: 'Erro ao registrar cliente de pagamento. Tente novamente.',
+          details: stripeCustError.message 
+        });
+      }
+    } else {
+      console.log(`[INFO] Reusing existing Stripe Customer ${stripeCustomerId} for user ${secureStudentId}`);
+    }
+
     // 2. Validate dates (max 7 days in advance)
     const MAX_DAYS_IN_ADVANCE = 7;
     
@@ -296,6 +345,7 @@ export default async function handler(req: any, res: any) {
       paymentIntent = await stripe.paymentIntents.create({
         amount: finalPrice,
         currency: 'brl',
+        customer: stripeCustomerId,
         capture_method: 'manual', // Capture only when instructor accepts
         automatic_payment_methods: { enabled: true },
         transfer_data: {
