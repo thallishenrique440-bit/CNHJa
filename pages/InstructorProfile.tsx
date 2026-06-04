@@ -20,7 +20,7 @@ import {
 import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
-import { CitySelect } from '../components/CitySelect';
+import { CitySelect, isValidCity } from '../components/CitySelect';
 import { GooglePlacesInput } from '../components/GooglePlacesInput';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { supabase } from '../lib/supabase';
@@ -280,8 +280,12 @@ export const InstructorProfile: React.FC = () => {
 
   const handleSave = async () => {
     if (!session?.user) return;
-    if (!whatsapp || !credential) {
-      addToast("WhatsApp e Credencial são obrigatórios.", 'warning');
+    if (!whatsapp || !credential || !city) {
+      addToast("Todos os campos obrigatórios devem ser preenchidos.", 'warning');
+      return;
+    }
+    if (!isValidCity(city)) {
+      addToast("Selecione uma cidade da lista.", 'warning');
       return;
     }
 

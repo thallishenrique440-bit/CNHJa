@@ -15,7 +15,7 @@ import {
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
 import { Select } from '../../components/Select';
-import { CitySelect } from '../../components/CitySelect';
+import { CitySelect, isValidCity } from '../../components/CitySelect';
 import { Modal } from '../../components/Modal';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { supabase } from '../../lib/supabase';
@@ -117,6 +117,11 @@ export const StudentProfile: React.FC = () => {
     
     if (!name || !phone || phone.length < 10 || !city) {
         addToast("Por favor, preencha todos os campos obrigatórios para continuar.", 'warning');
+        return;
+    }
+
+    if (!isValidCity(city)) {
+        addToast("Selecione uma cidade da lista.", 'warning');
         return;
     }
 

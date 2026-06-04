@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { citiesSP } from '../data/cities-sp';
 
+export const isValidCity = (city: string): boolean => {
+  if (!city) return false;
+  const trimmed = city.trim().toLowerCase();
+  return citiesSP.some(
+    option => option.value.trim().toLowerCase() === trimmed || 
+              option.label.trim().toLowerCase() === trimmed
+  );
+};
+
 interface CitySelectProps {
   label?: string;
   value: string;

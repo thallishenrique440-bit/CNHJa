@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
-import { CitySelect } from '../components/CitySelect';
+import { CitySelect, isValidCity } from '../components/CitySelect';
 import { TermsModal } from '../components/TermsModal';
 import { PrivacyModal } from '../components/PrivacyModal';
 import { TERMS_VERSION, PRIVACY_VERSION, APP_CONFIG } from '../constants';
@@ -65,6 +65,11 @@ export const RegisterStudent: React.FC = () => {
     if (e) e.preventDefault();
     if (!name || !email || !city || !password || !confirmPassword || !whatsapp) {
       addToast("Por favor, preencha todos os campos.", 'warning');
+      return;
+    }
+
+    if (!isValidCity(city)) {
+      addToast("Selecione uma cidade da lista.", 'warning');
       return;
     }
 
