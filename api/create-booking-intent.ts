@@ -287,7 +287,10 @@ export default async function handler(req: any, res: any) {
     }
 
     // 4. Create appointments in DB (awaiting_payment)
-    const appointmentsToInsert = lessons.map((lesson: any) => {
+    const basePrice = Math.floor(finalPrice / lessons.length);
+    const remainder = finalPrice % lessons.length;
+
+    const appointmentsToInsert = lessons.map((lesson: any, index: number) => {
       // Check if it's last minute (within 10 mins)
       const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
       const startTimeUtc = lessonDateTime.toISOString();
@@ -306,7 +309,7 @@ export default async function handler(req: any, res: any) {
         end_time: lesson.endTime,
         category: category, // Store the category
         status: 'awaiting_payment',
-        price: Math.round(finalPrice / lessons.length), // Distribute discounted price
+        price: index < remainder ? basePrice + 1 : basePrice, // Distribute discounted price with remainder adjustment
         group_id: groupId,
         expires_at: expiresAt,
         created_at: new Date().toISOString(),
