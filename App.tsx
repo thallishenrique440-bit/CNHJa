@@ -21,6 +21,7 @@ import { StudentInstructorProfile } from './pages/student/InstructorProfile';
 import { StudentFinance } from './pages/student/Finance';
 import { StudentProfile } from './pages/student/Profile';
 import { PaymentPage } from './pages/student/PaymentPage';
+import { PaymentFeedback } from './pages/student/PaymentFeedback';
 import { supabase } from './lib/supabase';
 import { ProfileGuard } from './components/ProfileGuard';
 import { PushNotificationManager } from './components/PushNotificationManager';
@@ -163,6 +164,9 @@ const AppRoutes: React.FC = () => {
               <Route path="/student/finance" element={<StudentFinance />} /> 
               <Route path="/student/profile" element={<StudentProfile />} />
               <Route path="/student/payment" element={<PaymentPage />} />
+               <Route path="/student/payment/success" element={<PaymentFeedback type="success" />} />
+               <Route path="/student/payment/cancelled" element={<PaymentFeedback type="cancelled" />} />
+               <Route path="/student/payment/expired" element={<PaymentFeedback type="expired" />} />
            </Route>
         </Route>
 

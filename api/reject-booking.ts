@@ -1,5 +1,7 @@
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
+import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-02-24.acacia' as any,
@@ -72,7 +74,7 @@ export default async function handler(req: any, res: any) {
     // 2. Fetch Appointment details
     const { data: appointment, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, group_id, status, instructor_id, payment_intent_id')
+      .select('id, group_id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name')
       .eq('id', appointment_id)
       .single();
 
@@ -102,25 +104,41 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: `Invalid status: ${appointment.status}` });
     }
 
-    if (!appointment.payment_intent_id) {
-      return res.status(500).json({ error: 'Missing payment_intent_id' });
+    const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
+
+    if (!paymentId) {
+      return res.status(500).json({ error: 'Missing payment transaction reference' });
     }
 
-    // 3. Cancel Payment (Stripe)
+    // Resolve the payment provider via the orchestration layer
+    const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+    const paymentProvider = PaymentProviderFactory.getProvider(providerName);
+
+    // 3. Cancel Payment (via resolved provider)
     try {
-      await stripe.paymentIntents.cancel(appointment.payment_intent_id, {
-        cancellation_reason: 'abandoned',
-      });
+      if (providerName === 'stripe') {
+        await (paymentProvider as any).stripe.paymentIntents.cancel(paymentId, {
+          cancellation_reason: 'abandoned',
+        });
+      } else {
+        // Safe placeholder for alternative providers
+        await paymentProvider.refundPayment({
+          providerPaymentId: paymentId,
+          reason: 'instructor_rejected',
+        });
+      }
     } catch (stripeError: any) {
-      console.error('Stripe Cancel Error:', stripeError);
+      console.error('Payment Cancel Error:', stripeError);
 
       // Handle already canceled
       if (stripeError.code === 'payment_intent_unexpected_state') {
-        const pi = await stripe.paymentIntents.retrieve(appointment.payment_intent_id);
+        const pi = providerName === 'stripe'
+          ? await (paymentProvider as any).stripe.paymentIntents.retrieve(paymentId)
+          : await paymentProvider.getPayment(paymentId).then((r: any) => ({ status: r.status }));
         
         if (pi.status === 'canceled') {
           // Already canceled, proceed to update DB
-          console.log('PaymentIntent already canceled. Proceeding to DB update.');
+          console.log('Payment already canceled. Proceeding to DB update.');
         } else if (pi.status === 'succeeded') {
           // Cannot cancel captured payment
           return res.status(409).json({ 
@@ -135,13 +153,14 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // 4. Update DB (Group)
+    // 4. Update DB (Group) with Dual Writing
     const { error: updateError } = await supabaseAdmin
       .from('appointments')
       .update({
         status: 'cancelled',
         payment_status: 'failed',
         cancelled_reason: 'instructor_rejected',
+        provider_name: providerName,
         updated_by: user.id,
         updated_at: new Date().toISOString()
       })

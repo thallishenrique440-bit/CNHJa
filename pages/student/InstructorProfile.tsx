@@ -881,10 +881,11 @@ export const StudentInstructorProfile: React.FC = () => {
       }
 
       // 5. Sucesso
-      if (data && data.clientSecret && data.groupId) {
+      if (data && data.groupId && (data.clientSecret || data.invoiceUrl)) {
          navigate('/student/payment', { 
             state: { 
                clientSecret: data.clientSecret, 
+               invoiceUrl: data.invoiceUrl,
                purchaseId: data.groupId // Using groupId as purchaseId for compatibility
             } 
          });

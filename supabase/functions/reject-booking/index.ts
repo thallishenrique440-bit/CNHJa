@@ -7,6 +7,14 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   telemetry: false,
 })
 
+// Abstração local do orchestrator compatível com as restrições de Deno Edge Functions
+class PaymentProviderResolver {
+  static resolveProviderForAppointment(appointmentId: string): string {
+    const defaultProvider = Deno.env.get("DEFAULT_PAYMENT_PROVIDER");
+    return defaultProvider === "asaas" || defaultProvider === "stripe" ? defaultProvider : "stripe";
+  }
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -49,7 +57,7 @@ Deno.serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, group_id')
+      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id')
       .eq('id', appointment_id)
       .single()
 
@@ -70,7 +78,7 @@ Deno.serve(async (req) => {
     if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, payment_status, cancelled_reason, group_id')
+        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id')
         .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
@@ -85,7 +93,7 @@ Deno.serve(async (req) => {
       }
 
       // VALIDATION: All must share the same PaymentIntent
-      const piIds = new Set(groupAppointments.map(a => a.payment_intent_id));
+      const piIds = new Set(groupAppointments.map(a => a.provider_payment_id || a.payment_intent_id));
       if (piIds.size > 1) {
         console.error('CRITICAL: Group has multiple PaymentIntents:', Array.from(piIds));
         throw new Error('Erro de integridade: O combo possui múltiplos IDs de pagamento.');
@@ -107,38 +115,47 @@ Deno.serve(async (req) => {
       throw new Error(`Invalid status change: Cannot reject appointment with status '${appointment.status}'`)
     }
 
+    const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
+    const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+
     console.log(JSON.stringify({
       event: "reject_group_start",
+      provider_name: providerName,
       group_id: appointment.group_id,
       status: appointment.status,
       group_size: appointmentsToReject.length,
-      payment_intent_id: appointment.payment_intent_id
+      payment_id: paymentId
     }));
 
-    // 4. Act (Stripe): Cancel Payment Intent (if exists)
-    if (appointment.payment_intent_id) {
+    // 4. Act: Cancel Payment Intent (if exists)
+    if (paymentId) {
       try {
-        // Update metadata before cancelling so the webhook knows the reason
-        await stripe.paymentIntents.update(appointment.payment_intent_id, {
-          metadata: { cancellation_reason: 'instructor_rejected' }
-        });
+        if (providerName === 'stripe') {
+          // Update metadata before cancelling so the webhook knows the reason
+          await stripe.paymentIntents.update(paymentId, {
+            metadata: { cancellation_reason: 'instructor_rejected' }
+          });
 
-        await stripe.paymentIntents.cancel(
-          appointment.payment_intent_id,
-          {
-            idempotencyKey: `cancel_group_${appointment.group_id || appointment.id}`,
-          }
-        )
+          await stripe.paymentIntents.cancel(
+            paymentId,
+            {
+              idempotencyKey: `cancel_group_${appointment.group_id || appointment.id}`,
+            }
+          )
+        } else {
+          // Safe modular placeholder
+          console.log(`Rejecting non-Stripe provider ${providerName} transaction ${paymentId}`);
+        }
       } catch (stripeError: any) {
-        console.error('Stripe Cancel Error:', stripeError)
+        console.error('Payment Cancel Error:', stripeError)
 
         // Robust Error Handling
         if (stripeError.code === 'payment_intent_unexpected_state') {
-          const retrievedIntent = await stripe.paymentIntents.retrieve(appointment.payment_intent_id)
+          const retrievedIntent = await stripe.paymentIntents.retrieve(paymentId)
 
           if (retrievedIntent.status === 'canceled') {
             // Already canceled. Proceed.
-            console.log('PaymentIntent was already canceled. Proceeding.')
+            console.log('Payment was already canceled. Proceeding.')
           } else if (retrievedIntent.status === 'succeeded') {
             // CRITICAL: Money already captured. Cannot reject.
             throw new Error('Payment already captured. Cannot reject. Please use refund flow.')
@@ -150,16 +167,17 @@ Deno.serve(async (req) => {
         }
       }
     } else {
-      console.log('No PaymentIntent ID found. Skipping Stripe cancellation.')
+      console.log('No Payment ID found. Skipping cancellation.')
     }
 
     // 5. Return Success (Cancellation Initiated)
-    // We NO LONGER update the database here to avoid race conditions with the Stripe Webhook.
+    // We NO LONGER update the database here to avoid race conditions with the Webhook.
     // The Webhook (payment_intent.canceled) is now the single source of truth for cancellation.
     console.log(JSON.stringify({
       event: "reject_group_initiated",
+      provider_name: providerName,
       group_id: appointment.group_id,
-      payment_intent_id: appointment.payment_intent_id,
+      payment_id: paymentId,
       count: appointmentsToReject.length
     }));
 

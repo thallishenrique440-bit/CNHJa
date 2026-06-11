@@ -1,17 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
-import Stripe from 'stripe';
 import { calculateDiscount, getInstructorDiscounts } from '../lib/discount-utils.js';
 import { AGENDA_SLOTS } from '../lib/slots.js';
+import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
+import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-02-25.clover' as any, // Use a stable version or the one from package.json if specified
-});
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -58,12 +55,12 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Invalid or missing category' });
   }
 
-  // NEW: Validation for limits
+  // Validation for limits
   if (lessons.length > 20) {
     return res.status(400).json({ error: 'Limite máximo de 20 aulas por agendamento excedido.' });
   }
 
-  // NEW: Validation for daily limits
+  // Validation for daily limits
   const lessonsByDate: Record<string, number> = {};
   for (const lesson of lessons) {
     const date = lesson.date;
@@ -74,21 +71,35 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    // 1. Fetch instructor details (Stripe Account ID)
+    // 1. Fetch instructor details (including generic provider details)
     const { data: instructor, error: instructorError } = await supabase
       .from('instructors')
-      .select('stripe_account_id, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons')
+      .select('stripe_account_id, provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons')
       .eq('id', instructorId)
       .single();
 
-    if (instructorError || !instructor?.stripe_account_id) {
-      return res.status(400).json({ error: 'Instructor not ready for payments' });
+    if (instructorError) {
+      console.error('[ERROR] Instructor details fetch error:', instructorError);
+      return res.status(400).json({ error: 'Instructor details not found.' });
     }
 
-    // 1.5 Fetch student profile & manage Stripe Customer ID
+    // Resolve the payment provider via the orchestration layer
+    const providerName = PaymentProviderResolver.resolveProviderForStudent(secureStudentId);
+    const paymentProvider = PaymentProviderFactory.getProvider(providerName);
+
+    // Validate gateway setup for selected provider
+    if (providerName === 'stripe' && !instructor?.stripe_account_id) {
+      return res.status(400).json({ error: 'Instructor not ready for Stripe payments' });
+    }
+
+    if (providerName === 'asaas' && !instructor?.provider_account_id && !instructor?.provider_wallet_id) {
+      return res.status(400).json({ error: 'Instructor not ready for Asaas payments' });
+    }
+
+    // 1.5 Fetch student profile & manage Stripe/Provider Customer ID
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('full_name, stripe_customer_id')
+      .select('full_name, stripe_customer_id, provider_customer_id, provider_name, phone, cpf')
       .eq('id', secureStudentId)
       .single();
 
@@ -97,41 +108,67 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Student profile not found.' });
     }
 
-    let stripeCustomerId = profile.stripe_customer_id;
+    // Resolve student's customer ID for the active provider
+    let customerProviderId = (profile.provider_name === providerName)
+      ? profile.provider_customer_id
+      : (providerName === 'stripe' ? profile.stripe_customer_id : null);
 
-    if (!stripeCustomerId) {
+    if (!customerProviderId) {
       try {
-        console.log(`[INFO] Creating new Stripe Customer for user ${secureStudentId}`);
-        const customer = await stripe.customers.create({
-          email: user.email,
-          name: profile.full_name || undefined,
-          metadata: {
-            supabase_user_id: secureStudentId
-          }
+        console.log(`[INFO] Creating new Customer via resolved provider: ${providerName} for user ${secureStudentId}`);
+        const customerResponse = await paymentProvider.createCustomer({
+          email: user.email || '',
+          name: profile.full_name || user.email || 'Aluno',
+          phone: profile.phone || '11999999999',
+          cpfCnpj: (profile.cpf || '000.000.000-00').replace(/\D/g, '') || '00000000000',
         });
-        stripeCustomerId = customer.id;
-        console.log(`[INFO] Stripe Customer created successfully with ID: ${stripeCustomerId}`);
+        
+        customerProviderId = customerResponse.providerCustomerId;
+        console.log(`[INFO] Customer created successfully on ${providerName} with ID: ${customerProviderId}`);
 
-        // Persist back to profile
+        // Persist back to profile with Dual Writing
+        const updateData: any = {
+          provider_customer_id: customerProviderId,
+          provider_name: providerName
+        };
+        if (providerName === 'stripe') {
+          updateData.stripe_customer_id = customerProviderId;
+        }
+
         const { error: updateProfileError } = await supabase
           .from('profiles')
-          .update({ stripe_customer_id: stripeCustomerId })
+          .update(updateData)
           .eq('id', secureStudentId);
 
         if (updateProfileError) {
-          console.error(`[ERROR] Failed to save stripe_customer_id ${stripeCustomerId} to user profile ${secureStudentId}:`, updateProfileError);
+          console.error(`[ERROR] Failed to save customer_id ${customerProviderId} to user profile ${secureStudentId}:`, updateProfileError);
         } else {
-          console.log(`[INFO] Saved stripe_customer_id ${stripeCustomerId} to database profile ${secureStudentId}`);
+          console.log(`[INFO] Saved customer identifiers to database profile ${secureStudentId}`);
         }
-      } catch (stripeCustError: any) {
-        console.error(`[ERROR] Fail to create Stripe Customer for user ${secureStudentId}:`, stripeCustError);
+      } catch (custError: any) {
+        console.error(`[ERROR] Fail to create Customer for user ${secureStudentId} on provider ${providerName}:`, custError);
         return res.status(500).json({ 
           error: 'Erro ao registrar cliente de pagamento. Tente novamente.',
-          details: stripeCustError.message 
+          details: custError.message 
         });
       }
     } else {
-      console.log(`[INFO] Reusing existing Stripe Customer ${stripeCustomerId} for user ${secureStudentId}`);
+      console.log(`[INFO] Reusing existing Customer ${customerProviderId} for user ${secureStudentId} on provider ${providerName}`);
+      
+      // Dual write check: keep provider fields synced if empty
+      if (!profile.provider_customer_id || profile.provider_name !== providerName) {
+        const updateData: any = {
+          provider_customer_id: customerProviderId,
+          provider_name: providerName
+        };
+        if (providerName === 'stripe') {
+          updateData.stripe_customer_id = customerProviderId;
+        }
+        await supabase
+          .from('profiles')
+          .update(updateData)
+          .eq('id', secureStudentId);
+      }
     }
 
     // 2. Validate dates (max 7 days in advance)
@@ -157,12 +194,12 @@ export default async function handler(req: any, res: any) {
       const lessonDateObj = new Date(`${lesson.date}T12:00:00Z`);
       const dayOfWeek = lessonDateObj.getUTCDay(); // 0 = Sunday, 6 = Saturday
 
-      // NEW: Sunday Check
+      // Sunday Check
       if (dayOfWeek === 0) {
          return res.status(400).json({ error: 'Não é possível agendar aulas aos domingos.' });
       }
 
-      // NEW: Saturday Check
+      // Saturday Check
       if (dayOfWeek === 6) {
           const [h, m] = lesson.startTime.split(':').map(Number);
           const minutes = h * 60 + m;
@@ -180,14 +217,14 @@ export default async function handler(req: any, res: any) {
           }
       }
 
-      // NEW: Weekday Night Lesson Check
+      // Weekday Night Lesson Check
       const [h, m] = lesson.startTime.split(':').map(Number);
       const minutes = h * 60 + m;
       if (!instructor.has_night_lessons && minutes >= 18 * 60) {
           return res.status(400).json({ error: 'Este instrutor não realiza aulas noturnas.' });
       }
 
-      // NEW: Lunch Check (Slot-based)
+      // Lunch Check (Slot-based)
       if (instructor.lunch_active) {
           const startIndex = AGENDA_SLOTS.indexOf(instructor.lunch_start_slot || '12:00');
           if (startIndex !== -1) {
@@ -198,13 +235,13 @@ export default async function handler(req: any, res: any) {
           }
       }
       
-      // NEW: Past date check (Date only)
+      // Past date check (Date only)
       const lessonDateString = lesson.date;
       if (lessonDateString < todayString) {
          return res.status(400).json({ error: 'Não é possível agendar aulas no passado.' });
       }
 
-      // NEW: Specific Time Check (Date + Time)
+      // Specific Time Check (Date + Time)
       // Prevent booking if the lesson time has already passed or is within 2 minutes
       // Assume lesson time is in America/Sao_Paulo (UTC-3)
       const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
@@ -236,13 +273,13 @@ export default async function handler(req: any, res: any) {
     // Calculate total base price by summing individual lesson prices
     const totalBasePrice = lessons.reduce((sum: number, lesson: any) => sum + (lesson.price || 0), 0);
     
-    const { finalPrice, discountAmount, appliedDiscountPercentage } = calculateDiscount(
+    const { finalPrice, discountAmount } = calculateDiscount(
       lessons.length,
       totalBasePrice,
       discounts
     );
 
-    // 3. Create group_id
+    // Create group_id
     const groupId = uuidv4();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
 
@@ -307,7 +344,7 @@ export default async function handler(req: any, res: any) {
         start_time: lesson.startTime,
         start_time_utc: startTimeUtc,
         end_time: lesson.endTime,
-        category: category, // Store the category
+        category: category,
         status: 'awaiting_payment',
         price: index < remainder ? basePrice + 1 : basePrice, // Distribute discounted price with remainder adjustment
         group_id: groupId,
@@ -340,54 +377,61 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // 5. Create Stripe PaymentIntent with Rollback
+    // 5. Create Payment via resolved provider with Rollback capabilities
     const applicationFeeAmount = Math.round(finalPrice * 0.10); // 10% commission
-    let paymentIntent;
+    let paymentResponse;
 
     try {
-      paymentIntent = await stripe.paymentIntents.create({
+      paymentResponse = await paymentProvider.createPayment({
         amount: finalPrice,
-        currency: 'brl',
-        customer: stripeCustomerId,
-        capture_method: 'manual', // Capture only when instructor accepts
-        automatic_payment_methods: { enabled: true },
-        transfer_data: {
-          destination: instructor.stripe_account_id,
+        description: `Agendamento - Código da reserva ${groupId}`,
+        customerProviderId: customerProviderId,
+        externalReferenceId: groupId,
+        billingAddress: {
+          postalCode: '01001-000',
+          address: 'Praca da Se',
+          addressNumber: '1',
+          city: 'Sao Paulo',
+          state: 'SP',
         },
-        application_fee_amount: applicationFeeAmount,
-        metadata: {
-          type: 'lesson_payment',
-          group_id: groupId,
-          student_id: secureStudentId,
-          instructor_id: instructorId,
-          lesson_count: lessons.length,
-        },
+        splitRules: [
+          {
+            accountId: providerName === 'stripe' ? (instructor.stripe_account_id || undefined) : undefined,
+            walletId: providerName === 'asaas' ? (instructor.provider_wallet_id || undefined) : undefined,
+            fixedValue: finalPrice - applicationFeeAmount,
+          }
+        ]
       });
 
-      // 6. Update appointments with payment_intent_id
+      // 6. Update appointments with payment_intent_id & provider_payment_id with Dual Writing
       await supabase
         .from('appointments')
-        .update({ payment_intent_id: paymentIntent.id })
+        .update({ 
+          payment_intent_id: paymentResponse.providerPaymentId, 
+          provider_payment_id: paymentResponse.providerPaymentId,
+          provider_name: providerName
+        })
         .eq('group_id', groupId);
 
-    } catch (stripeError: any) {
-      console.error('Stripe Error, rolling back appointments:', stripeError);
+    } catch (paymentError: any) {
+      console.error(`[ERROR] Payment Provider creation error on ${providerName}, rolling back appointments:`, paymentError);
       
-      // ROLLBACK: Delete appointments if Stripe fails
+      // ROLLBACK: Delete appointments if payment creation fails
       await supabase.from('appointments').delete().eq('group_id', groupId);
       
       return res.status(500).json({ 
         error: 'Erro ao processar pagamento. Tente novamente.',
-        details: stripeError.message 
+        details: paymentError.message 
       });
     }
 
-    // 7. Return clientSecret
+    // 7. Return payload (retains clientSecret legacy compatibility, appends invoiceUrl dynamically)
     return res.status(200).json({
-      clientSecret: paymentIntent.client_secret,
+      clientSecret: paymentResponse.clientSecret,
       groupId,
       totalPrice: finalPrice,
       discountAmount,
+      invoiceUrl: providerName === 'asaas' ? (paymentResponse.invoiceUrl || null) : undefined
     });
 
   } catch (error: any) {

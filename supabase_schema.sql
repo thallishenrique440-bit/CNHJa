@@ -154,9 +154,7 @@ create policy "Users see their own transactions"
 on public.transactions for select
 using (auth.uid() = student_id OR auth.uid() = instructor_id);
 
-create policy "System/Students can create transactions"
-on public.transactions for insert
-with check (auth.uid() = student_id); -- In MVP, student triggers the payment creation upon completion
+-- Only service_role and backend processes can create transactions. No INSERT policy for 'authenticated' exists.
 
 -- Grants
 grant all on public.appointments to authenticated;
@@ -554,3 +552,106 @@ ON public.transactions (instructor_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_transactions_stripe_payout_id 
 ON public.transactions (stripe_payout_id);
+
+
+-- ==============================================================================
+-- MIGRATION: PAYMENT PROVIDER ABSTRACTION (FASE D.1)
+-- ==============================================================================
+
+-- 1. Profiles: Genéricamente associado a um cliente de provedor de pagamentos
+ALTER TABLE public.profiles
+ADD COLUMN IF NOT EXISTS provider_name text DEFAULT 'stripe',
+ADD COLUMN IF NOT EXISTS provider_customer_id text;
+
+-- 2. Instructors: Vinculação de subconta/carteira de provedor genérico
+ALTER TABLE public.instructors
+ADD COLUMN IF NOT EXISTS provider_name text DEFAULT 'stripe',
+ADD COLUMN IF NOT EXISTS provider_account_id text, -- ID da conta/subconta genérica
+ADD COLUMN IF NOT EXISTS provider_wallet_id text,  -- ID adicional para carteiras (ex: Asaas Wallet ID)
+ADD COLUMN IF NOT EXISTS provider_onboarding_completed boolean DEFAULT false,
+ADD COLUMN IF NOT EXISTS provider_status text DEFAULT 'pending'; -- Status cadastral/onboarding
+
+-- 3. Appointments: Vinculação de transação com provedor genérico
+ALTER TABLE public.appointments
+ADD COLUMN IF NOT EXISTS provider_name text DEFAULT 'stripe',
+ADD COLUMN IF NOT EXISTS provider_payment_id text; -- ID do pagamento/cobrança no provedor
+
+-- 4. Transactions: Rastreabilidade financeira multiprovedor
+ALTER TABLE public.transactions
+ADD COLUMN IF NOT EXISTS provider_name text DEFAULT 'stripe',
+ADD COLUMN IF NOT EXISTS provider_payment_id text,
+ADD COLUMN IF NOT EXISTS provider_transfer_id text,
+ADD COLUMN IF NOT EXISTS provider_payout_id text;
+
+-- 5. Índices de Idempotência e Performance para a camada de abstração genérica
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_provider_type_appointment 
+ON public.transactions (provider_payment_id, type, appointment_id) 
+WHERE provider_payment_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_transactions_provider_payout_id 
+ON public.transactions (provider_payout_id);
+
+
+-- ==============================================================================
+-- SECURITY HARDENING (D.7.3)
+-- ==============================================================================
+
+-- 1. Create security check function for appointments updates
+CREATE OR REPLACE FUNCTION public.check_appointments_update_security()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- We ONLY enforce this check for non-service_role requests (authenticated/anon users via Client SDK)
+  -- service_role automatically bypasses this if we check auth.role() = 'authenticated'
+  IF auth.role() = 'authenticated' THEN
+    
+    -- Prevent alteration of sensitive financial and provider columns
+    IF NEW.payment_status IS DISTINCT FROM OLD.payment_status THEN
+      RAISE EXCEPTION 'Alteracao de payment_status nao permitida via client.';
+    END IF;
+
+    IF NEW.payment_intent_id IS DISTINCT FROM OLD.payment_intent_id THEN
+      RAISE EXCEPTION 'Alteracao de payment_intent_id nao permitida via client.';
+    END IF;
+
+    IF NEW.provider_payment_id IS DISTINCT FROM OLD.provider_payment_id THEN
+      RAISE EXCEPTION 'Alteracao de provider_payment_id nao permitida via client.';
+    END IF;
+
+    IF NEW.purchase_id IS DISTINCT FROM OLD.purchase_id THEN
+      RAISE EXCEPTION 'Alteracao de purchase_id nao permitida via client.';
+    END IF;
+
+    IF NEW.payment_id IS DISTINCT FROM OLD.payment_id THEN
+      RAISE EXCEPTION 'Alteracao de payment_id nao permitida via client.';
+    END IF;
+
+    IF NEW.price IS DISTINCT FROM OLD.price THEN
+      RAISE EXCEPTION 'Alteracao de price nao permitida via client.';
+    END IF;
+
+    IF NEW.provider_name IS DISTINCT FROM OLD.provider_name THEN
+      RAISE EXCEPTION 'Alteracao de provider_name nao permitida via client.';
+    END IF;
+
+    -- If status is changed, restrict to allowed client transitions (completed, cancelled, no_show, pending_approval)
+    IF NEW.status IS DISTINCT FROM OLD.status THEN
+      IF NEW.status NOT IN ('cancelled', 'completed', 'no_show', 'pending_approval') THEN
+        RAISE EXCEPTION 'Alteracao de status nao autorizada ou invalida via client: %', NEW.status;
+      END IF;
+    END IF;
+
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 2. Bind the security check trigger to public.appointments
+DROP TRIGGER IF EXISTS appointments_security_check_trigger ON public.appointments;
+
+CREATE TRIGGER appointments_security_check_trigger
+  BEFORE UPDATE ON public.appointments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.check_appointments_update_security();
+
+

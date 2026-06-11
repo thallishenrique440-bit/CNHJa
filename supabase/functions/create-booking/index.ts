@@ -6,6 +6,18 @@ import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check";
 // Declaração do Deno para evitar erros de lint
 declare const Deno: any;
 
+// Abstração local do orchestrator compatível com as restrições de Deno Edge Functions
+class PaymentProviderResolver {
+  static resolveProviderForStudent(studentId: string): string {
+    const defaultProvider = Deno.env.get("DEFAULT_PAYMENT_PROVIDER");
+    return defaultProvider === "asaas" || defaultProvider === "stripe" ? defaultProvider : "stripe";
+  }
+  static resolveProviderForAppointment(appointmentId: string): string {
+    const defaultProvider = Deno.env.get("DEFAULT_PAYMENT_PROVIDER");
+    return defaultProvider === "asaas" || defaultProvider === "stripe" ? defaultProvider : "stripe";
+  }
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -71,20 +83,20 @@ Deno.serve(async (req: any) => {
       throw new Error('Token de usuário inválido or expirado.');
     }
 
-    // 4.5 Gerenciar Cliente Stripe (Customer)
-    // Buscamos o stripe_customer_id no perfil do usuário
+    // 4.5 Gerenciar Cliente de Pagamentos (Customer)
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
-      .select('full_name, stripe_customer_id')
+      .select('full_name, stripe_customer_id, provider_customer_id, provider_name')
       .eq('id', user.id)
       .single();
 
     if (profileError) throw profileError;
 
+    const providerName = PaymentProviderResolver.resolveProviderForStudent(user.id);
     let stripeCustomerId = profile.stripe_customer_id;
 
     if (!stripeCustomerId) {
-      console.log(`Criando novo Cliente Stripe para o usuário ${user.id}`);
+      console.log(`Criando novo Cliente via ${providerName} para o usuário ${user.id}`);
       const customer = await stripe.customers.create({
         email: user.email,
         name: profile.full_name || undefined,
@@ -94,11 +106,26 @@ Deno.serve(async (req: any) => {
       });
       stripeCustomerId = customer.id;
 
-      // Salvar de volta no perfil para reutilização futura
+      // Salvar de volta no perfil com Dupla Gravação
       await supabaseAdmin
         .from('profiles')
-        .update({ stripe_customer_id: stripeCustomerId })
+        .update({ 
+          stripe_customer_id: stripeCustomerId,
+          provider_customer_id: stripeCustomerId,
+          provider_name: providerName
+        })
         .eq('id', user.id);
+    } else {
+      // Dupla gravação preventiva do provider_customer_id se não estiver preenchido
+      if (!profile.provider_customer_id || profile.provider_name !== providerName) {
+        await supabaseAdmin
+          .from('profiles')
+          .update({
+            provider_customer_id: stripeCustomerId,
+            provider_name: providerName
+          })
+          .eq('id', user.id);
+      }
     }
 
     // 5. Ler corpo da requisição
@@ -363,41 +390,50 @@ Deno.serve(async (req: any) => {
       ? `Aula Prática (${category || 'B'}) - ${slots[0].date}`
       : `Pacote de ${slots.length} Aulas Práticas`;
 
+    console.log(`[Payment] Local Resolver Selected Provider: ${providerName}`);
     console.log(`Creating PaymentIntent. Amount: ${finalUnitAmount}, Fee: ${platformFee}, Dest: ${instructorData.stripe_account_id}`);
 
     let paymentIntent;
     try {
-        paymentIntent = await stripe.paymentIntents.create({
-          amount: finalUnitAmount,
-          currency: 'brl',
-          customer: stripeCustomerId, // Vínculo com o cliente Stripe
-          capture_method: 'manual', // AUTH ONLY: O valor é reservado, mas não cobrado
-          automatic_payment_methods: {
-            enabled: true,
-          },
-          description: title,
-          
-          // Destination Charges (Split Payment)
-          application_fee_amount: platformFee, // Inteiro
-          on_behalf_of: instructorData.stripe_account_id, // Transparência: Instrutor como negócio de registro
-          transfer_data: {
-            destination: instructorData.stripe_account_id,
-          },
-          
-          metadata: {
-            group_id: String(groupId),
-            student_id: String(user.id),
-            instructor_id: String(instructor_id),
-            customer_id: stripeCustomerId // Redundância para auditoria
-          },
-          
-        }, { idempotencyKey: groupId });
+        if (providerName === 'stripe') {
+            paymentIntent = await stripe.paymentIntents.create({
+              amount: finalUnitAmount,
+              currency: 'brl',
+              customer: stripeCustomerId, // Vínculo com o cliente Stripe
+              capture_method: 'manual', // AUTH ONLY: O valor é reservado, mas não cobrado
+              automatic_payment_methods: {
+                enabled: true,
+              },
+              description: title,
+              
+              // Destination Charges (Split Payment)
+              application_fee_amount: platformFee, // Inteiro
+              on_behalf_of: instructorData.stripe_account_id, // Transparência: Instrutor como negócio de registro
+              transfer_data: {
+                destination: instructorData.stripe_account_id,
+              },
+              
+              metadata: {
+                group_id: String(groupId),
+                student_id: String(user.id),
+                instructor_id: String(instructor_id),
+                customer_id: stripeCustomerId // Redundância para auditoria
+              },
+              
+            }, { idempotencyKey: groupId });
+        } else {
+            throw new Error(`Asaas provider not active. resolved=${providerName}`);
+        }
 
-        // SUCESSO: Atualizar appointments com o ID do PaymentIntent
+        // SUCESSO: Atualizar appointments com o ID do PaymentIntent (Dupla Gravação das colunas genéricas)
         // Isso é crucial para o webhook e funções de gestão
         await supabaseAdmin
             .from('appointments')
-            .update({ payment_intent_id: paymentIntent.id })
+            .update({ 
+               payment_intent_id: paymentIntent.id,
+               provider_payment_id: paymentIntent.id,
+               provider_name: providerName
+            })
             .eq('group_id', groupId);
 
     } catch (stripeError: any) {

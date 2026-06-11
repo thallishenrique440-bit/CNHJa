@@ -38,7 +38,6 @@ Deno.serve(async (req) => {
     }
 
     // Clean up reserved (soft delete to failed)
-    const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString()
     const { data: reservedBookings, error: reservedError } = await supabaseAdmin
       .from('appointments')
       .update({
@@ -48,7 +47,7 @@ Deno.serve(async (req) => {
         updated_at: new Date().toISOString()
       })
       .eq('status', 'reserved')
-      .lt('created_at', fifteenMinsAgo)
+      .lt('expires_at', now)
       .select('id')
 
     if (reservedError) {
