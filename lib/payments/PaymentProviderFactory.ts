@@ -1,7 +1,7 @@
-import { IPaymentProvider } from './IPaymentProvider';
-import { StripeProvider } from './StripeProvider';
-import { AsaasProvider } from './AsaasProvider';
-import { ProviderName } from './types';
+import { IPaymentProvider } from './IPaymentProvider.js';
+import { StripeProvider } from './StripeProvider.js';
+import { AsaasProvider } from './AsaasProvider.js';
+import { ProviderName } from './types.js';
 
 /**
  * PaymentProviderFactory

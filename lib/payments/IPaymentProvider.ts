@@ -10,7 +10,7 @@ import {
   AccountStatusResponseDTO,
   WebhookPayload,
   WebhookHandlingResponseDTO,
-} from './types';
+} from './types.js';
 
 /**
  * IPaymentProvider definitions for CNHJÁ Payment Layer abstraction.

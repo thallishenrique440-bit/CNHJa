@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { IPaymentProvider } from './IPaymentProvider';
+import { IPaymentProvider } from './IPaymentProvider.js';
 import {
   CreateCustomerDTO,
   CustomerResponseDTO,
@@ -12,7 +12,7 @@ import {
   AccountStatusResponseDTO,
   WebhookPayload,
   WebhookHandlingResponseDTO,
-} from './types';
+} from './types.js';
 
 /**
  * StripeProvider implements IPaymentProvider for CNHJÁ.
