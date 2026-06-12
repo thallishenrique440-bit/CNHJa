@@ -85,7 +85,13 @@ export default async function handler(req: any, res: any) {
 
     // Resolve the payment provider via the orchestration layer
     const providerName = PaymentProviderResolver.resolveProviderForStudent(secureStudentId);
+    console.log(`[PAYMENT_DIAGNOSTIC]
+DEFAULT_PAYMENT_PROVIDER=${process.env.DEFAULT_PAYMENT_PROVIDER}
+providerName=${providerName}`);
+
     const paymentProvider = PaymentProviderFactory.getProvider(providerName);
+    console.log(`[PAYMENT_DIAGNOSTIC]
+providerInstance=${paymentProvider.getProviderName()}`);
 
     // Validate gateway setup for selected provider
     if (providerName === 'stripe' && !instructor?.stripe_account_id) {
@@ -403,6 +409,12 @@ export default async function handler(req: any, res: any) {
         ]
       });
 
+      console.log(`[PAYMENT_DIAGNOSTIC]
+paymentResponse.providerName=${paymentResponse.providerName}
+paymentResponse.clientSecretPresent=${!!paymentResponse.clientSecret}
+paymentResponse.invoiceUrl=${paymentResponse.invoiceUrl}
+paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
+
       // 6. Update appointments with payment_intent_id & provider_payment_id with Dual Writing
       await supabase
         .from('appointments')
@@ -424,6 +436,12 @@ export default async function handler(req: any, res: any) {
         details: paymentError.message 
       });
     }
+
+    console.log(`[PAYMENT_DIAGNOSTIC]
+RESPONSE_PAYLOAD
+clientSecretPresent=${!!paymentResponse?.clientSecret}
+invoiceUrl=${providerName === 'asaas' ? (paymentResponse?.invoiceUrl || null) : undefined}
+groupId=${groupId}`);
 
     // 7. Return payload (retains clientSecret legacy compatibility, appends invoiceUrl dynamically)
     return res.status(200).json({
