@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
+import { Input } from '../components/Input';
 import { Info } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { invokeSecureFunction } from '../lib/functions';
@@ -57,15 +58,48 @@ interface HistoryItem {
   isPast?: boolean;
 }
 
-// Updated Status Types for better UX
-type StripeStatus = 'none' | 'pending' | 'processing' | 'active';
+// Updated Status Types for Asaas Dashboard Integration
+type AsaasStatus = 'none' | 'pending' | 'processing' | 'active' | 'denied';
+
+// Mask Helpers
+const formatCpfCnpj = (value: string) => {
+  const clean = value.replace(/\D/g, '').slice(0, 14);
+  if (clean.length <= 11) {
+    return clean
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+  } else {
+    return clean
+      .replace(/(\d{2})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1/$2')
+      .replace(/(\d{4})(\d{1,2})$/, '$1-$2');
+  }
+};
+
+const formatCep = (value: string) => {
+  const clean = value.replace(/\D/g, '').slice(0, 8);
+  return clean.replace(/(\d{5})(\d{1,3})$/, '$1-$2');
+};
+
+const formatPhone = (value: string) => {
+  const clean = value.replace(/\D/g, '').slice(0, 11);
+  if (clean.length <= 10) {
+    return clean
+      .replace(/(\d{2})(\d)/, '($1) $2')
+      .replace(/(\d{4})(\d{1,4})$/, '$1-$2');
+  } else {
+    return clean
+      .replace(/(\d{2})(\d)/, '($1) $2')
+      .replace(/(\d{5})(\d{1,4})$/, '$1-$2');
+  }
+};
 
 export const InstructorFinance: React.FC = () => {
   const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   
   // Data State
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
@@ -75,8 +109,23 @@ export const InstructorFinance: React.FC = () => {
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
   
-  // Stripe State
-  const [stripeStatus, setStripeStatus] = useState<StripeStatus>('none');
+  // Asaas States
+  const [asaasStatus, setAsaasStatus] = useState<AsaasStatus>('none');
+  const [isAsaasModalOpen, setIsAsaasModalOpen] = useState(false);
+  const [submittingAsaas, setSubmittingAsaas] = useState(false);
+  const [cepLoading, setCepLoading] = useState(false);
+
+  // Form Fields
+  const [cpfCnpj, setCpfCnpj] = useState('');
+  const [companyType, setCompanyType] = useState<'INDIVIDUAL' | 'MEI' | 'LIMITED'>('INDIVIDUAL');
+  const [postalCode, setPostalCode] = useState('');
+  const [address, setAddress] = useState('');
+  const [addressNumber, setAddressNumber] = useState('');
+  const [complement, setComplement] = useState('');
+  const [province, setProvince] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [phone, setPhone] = useState('');
   
   // UI States
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -102,23 +151,30 @@ export const InstructorFinance: React.FC = () => {
         setLoading(true);
         const userId = session.user.id;
 
-        // 1. Fetch Instructor Stripe Status
+        // 1. Fetch Instructor Asaas Status
         const { data: instructorData, error: instructorError } = await supabase
             .from('instructors')
-            .select('stripe_account_id, payouts_enabled, stripe_onboarding_completed')
+            .select('provider_account_id, provider_status, provider_onboarding_completed')
             .eq('id', userId)
             .single();
 
         if (instructorError) throw instructorError;
 
-        if (!instructorData.stripe_account_id) {
-            setStripeStatus('none');
-        } else if (instructorData.payouts_enabled === true) {
-            setStripeStatus('active');
-        } else if (instructorData.stripe_onboarding_completed === true) {
-            setStripeStatus('processing');
+        if (!instructorData?.provider_account_id) {
+            setAsaasStatus('none');
         } else {
-            setStripeStatus('pending');
+            const status = (instructorData.provider_status || '').toUpperCase();
+            if (status === 'APPROVED' || status === 'ACTIVE') {
+                setAsaasStatus('active');
+            } else if (status === 'PENDING' || status === 'AWAITING_APPROVAL') {
+                setAsaasStatus('processing');
+            } else if (status === 'AWAITING_DOCUMENTS') {
+                setAsaasStatus('pending');
+            } else if (status === 'REJECTED') {
+                setAsaasStatus('denied');
+            } else {
+                setAsaasStatus('none');
+            }
         }
 
         // 2. Fetch Transactions
@@ -216,79 +272,128 @@ export const InstructorFinance: React.FC = () => {
     loadData();
   }, [session]);
 
-    const handleStripeConnect = async () => {
-    setConnecting(true);
-    try {
-        const { data, error } = await invokeSecureFunction('create-stripe-account', {
-            method: 'POST',
-            body: { mode: 'create_link' }
-        });
+  const handleCpfCnpjChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawVal = e.target.value;
+    const formatted = formatCpfCnpj(rawVal);
+    setCpfCnpj(formatted);
 
-        if (error) {
-            if (error.message === 'SESSION_EXPIRED') {
-                addToast("Sessão expirada. Por favor, entre novamente.", 'error');
-                signOut();
-                return;
-            }
-            throw error;
-        }
-
-        if (data?.url) {
-            window.open(data.url, '_blank');
-        } else {
-            throw new Error("URL não encontrada.");
-        }
-
-    } catch (err: any) {
-        addToast("Erro ao conectar: " + err.message, 'error');
-    } finally {
-        setConnecting(false);
+    const clean = rawVal.replace(/\D/g, '');
+    if (clean.length <= 11) {
+      setCompanyType('INDIVIDUAL');
+    } else {
+      if (companyType === 'INDIVIDUAL') {
+        setCompanyType('MEI');
+      }
     }
   };
 
-  // --- NEW MANUAL SYNC FUNCTION ---
-  const handleManualSync = async () => {
-    setSyncing(true);
+  const handleCepChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value;
+    const formatted = formatCep(rawValue);
+    setPostalCode(formatted);
+
+    const cleanCep = rawValue.replace(/\D/g, '');
+    if (cleanCep.length === 8) {
+      setCepLoading(true);
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+        const data = await res.json();
+        if (!data.erro) {
+          setAddress(data.logradouro || '');
+          setProvince(data.bairro || '');
+          setCity(data.localidade || '');
+          setState(data.uf || '');
+        } else {
+          addToast('CEP não encontrado.', 'warning');
+        }
+      } catch (err) {
+        console.error('Erro ao buscar CEP', err);
+      } finally {
+        setCepLoading(false);
+      }
+    }
+  };
+
+  const handleSubmitAsaas = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    const cleanCpfCnpj = cpfCnpj.replace(/\D/g, '');
+    const cleanPostalCode = postalCode.replace(/\D/g, '');
+    const cleanPhone = phone.replace(/\D/g, '');
+
+    // Basic Validation
+    if (cleanCpfCnpj.length !== 11 && cleanCpfCnpj.length !== 14) {
+      addToast('Documento CPF (11 dígitos) ou CNPJ (14 dígitos) inválido.', 'error');
+      return;
+    }
+    if (cleanPostalCode.length !== 8) {
+      addToast('CEP inválido.', 'error');
+      return;
+    }
+    if (!address.trim()) {
+      addToast('O endereço é obrigatório.', 'error');
+      return;
+    }
+    if (!addressNumber.trim()) {
+      addToast('O número do endereço é obrigatório.', 'error');
+      return;
+    }
+    if (!province.trim()) {
+      addToast('O bairro é obrigatório.', 'error');
+      return;
+    }
+    if (!city.trim()) {
+      addToast('A cidade é obrigatória.', 'error');
+      return;
+    }
+    if (!state.trim()) {
+      addToast('O estado é obrigatório.', 'error');
+      return;
+    }
+
+    setSubmittingAsaas(true);
     try {
-        const { data, error } = await invokeSecureFunction('create-stripe-account', {
-            method: 'POST',
-            body: { mode: 'sync' }
-        });
+      const payload = {
+        cpfCnpj: cleanCpfCnpj,
+        companyType: cleanCpfCnpj.length <= 11 ? 'INDIVIDUAL' : companyType,
+        postalCode: cleanPostalCode,
+        address,
+        addressNumber,
+        complement,
+        province,
+        city,
+        state,
+        phone: cleanPhone || undefined // optional
+      };
 
-        if (error) {
-            if (error.message === 'SESSION_EXPIRED') {
-                addToast("Sessão expirada. Por favor, entre novamente.", 'error');
-                signOut();
-                return;
-            }
-            throw error;
+      const { data, error } = await invokeSecureFunction('create-asaas-account', {
+        method: 'POST',
+        body: payload
+      });
+
+      if (error) {
+        if (error.message === 'SESSION_EXPIRED') {
+          addToast("Sessão expirada. Por favor, realize o login novamente.", 'error');
+          signOut();
+          return;
         }
+        throw error;
+      }
 
-        if (data?.status === 'synced') {
-            // Refresh profile to update isStripeConnected in AuthContext
-            await refreshProfile();
+      if (data?.error) {
+        throw new Error(data.error);
+      }
 
-            // OPTIMISTIC UPDATE: Use response directly instead of waiting for DB read
-            // This prevents race conditions where the read happens before the write propagates
-            if (data.payouts_enabled === true) {
-                setStripeStatus('active');
-                addToast("Tudo certo! Sua conta está ativa.", 'success');
-            } else if (data.details_submitted === true) {
-                setStripeStatus('processing');
-                addToast("Dados enviados! Aguardando verificação do banco.", 'info');
-            } else {
-                setStripeStatus('pending');
-                addToast("Cadastro incompleto no Stripe.", 'warning');
-            }
-            
-            // Reload background data just to be sure
-            loadData(); 
-        }
-
+      addToast('Conta Asaas configurada com sucesso!', 'success');
+      setIsAsaasModalOpen(false);
+      
+      // Auto reload data
+      await loadData();
     } catch (err: any) {
-        addToast("Erro ao sincronizar: " + err.message, 'error');
+      console.error('Error creating Asaas account:', err);
+      addToast('Erro ao criar conta Asaas: ' + (err.message || 'tente novamente.'), 'error');
     } finally {
-        setSyncing(false);
+      setSubmittingAsaas(false);
     }
   };
 
@@ -310,19 +415,22 @@ export const InstructorFinance: React.FC = () => {
             
             {!loading && (
                 <div className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border flex items-center gap-1
-                    ${stripeStatus === 'active' 
+                    ${asaasStatus === 'active' 
                         ? 'bg-green-50 text-green-700 border-green-100' 
-                        : stripeStatus === 'processing'
+                        : asaasStatus === 'processing'
                             ? 'bg-blue-50 text-blue-700 border-blue-100'
-                            : stripeStatus === 'pending'
+                            : asaasStatus === 'pending'
                                 ? 'bg-yellow-50 text-yellow-700 border-yellow-100'
-                                : 'bg-gray-100 text-gray-500 border-gray-200'
+                                : asaasStatus === 'denied'
+                                    ? 'bg-red-50 text-red-700 border-red-100'
+                                    : 'bg-gray-100 text-gray-500 border-gray-200'
                     }`}
                 >
-                    {stripeStatus === 'active' && <span>✅ Conta Ativa</span>}
-                    {stripeStatus === 'processing' && <span>⏳ Em Análise</span>}
-                    {stripeStatus === 'pending' && <span>⚠️ Ação Necessária</span>}
-                    {stripeStatus === 'none' && <span>❌ Não Configurado</span>}
+                    {asaasStatus === 'active' && <span>✅ Conta Ativa</span>}
+                    {asaasStatus === 'processing' && <span>⏳ Em Análise</span>}
+                    {asaasStatus === 'pending' && <span>⚠️ Ação Necessária</span>}
+                    {asaasStatus === 'denied' && <span>❌ Rejeitada</span>}
+                    {asaasStatus === 'none' && <span>❌ Não Configurado</span>}
                 </div>
             )}
         </div>
@@ -348,78 +456,69 @@ export const InstructorFinance: React.FC = () => {
           {/* Info Card */}
           <div className="bg-gray-50 border border-gray-100 p-3.5 rounded-2xl">
             <p className="text-[10px] text-gray-500 leading-relaxed">
-              Os repasses são feitos automaticamente pela Stripe direto para sua conta bancária. As primeiras transferências podem levar até 7 dias úteis.
+              Os repasses são feitos de forma segura e imediata pelo Asaas direto para sua conta integrada assim que os pagamentos são compensados.
             </p>
           </div>
         </div>
 
-        {/* Stripe Callout Area */}
+        {/* Asaas Callout Area */}
         <div className={`rounded-2xl p-5 border relative overflow-hidden transition-colors
-            ${stripeStatus === 'active' ? 'bg-indigo-50 border-indigo-100' : 
-              stripeStatus === 'processing' ? 'bg-blue-50 border-blue-100' :
+            ${asaasStatus === 'active' ? 'bg-indigo-50 border-indigo-100' : 
+              asaasStatus === 'processing' ? 'bg-blue-50 border-blue-100' :
+              asaasStatus === 'denied' ? 'bg-red-50 border-red-100' :
               'bg-yellow-50 border-yellow-100'
             }`}>
             
             <div className="relative z-10">
                 <h3 className={`font-bold text-sm mb-1
-                    ${stripeStatus === 'active' ? 'text-indigo-900' : 
-                      stripeStatus === 'processing' ? 'text-blue-900' :
+                    ${asaasStatus === 'active' ? 'text-indigo-900' : 
+                      asaasStatus === 'processing' ? 'text-blue-900' :
+                      asaasStatus === 'denied' ? 'text-red-900' :
                       'text-yellow-900'
                     }`}>
-                    {stripeStatus === 'active' ? 'Painel Financeiro Stripe' : 
-                     stripeStatus === 'processing' ? 'Verificando Dados' :
-                     'Recebimento Automático'}
+                    {asaasStatus === 'active' && 'Conta Ativa no Asaas'}
+                    {asaasStatus === 'processing' && 'Conta em Análise no Asaas'}
+                    {asaasStatus === 'pending' && 'Ação Necessária Asaas'}
+                    {asaasStatus === 'denied' && 'Cadastro Rejeitado Asaas'}
+                    {asaasStatus === 'none' && 'Ativar Recebimentos Asaas'}
                 </h3>
                 <p className={`text-xs leading-relaxed mb-4 max-w-[85%]
-                    ${stripeStatus === 'active' ? 'text-indigo-700/80' : 
-                      stripeStatus === 'processing' ? 'text-blue-700/80' :
+                    ${asaasStatus === 'active' ? 'text-indigo-700/80' : 
+                      asaasStatus === 'processing' ? 'text-blue-700/80' :
+                      asaasStatus === 'denied' ? 'text-red-700/80' :
                       'text-yellow-800/80'
                     }`}>
-                    {stripeStatus === 'active' 
-                        ? 'Acesse seu painel Stripe para ver seu saldo disponível, acompanhar os repasses automáticos para sua conta bancária e consultar seus extratos de pagamento.' 
-                        : stripeStatus === 'processing'
-                            ? 'O Stripe está verificando seus documentos. Isso pode levar alguns minutos ou horas. Clique em atualizar para checar.'
-                            : 'Configure sua conta Stripe e comece a receber seus ganhos automaticamente na sua conta bancária.'}
+                    {asaasStatus === 'active' && 'Tudo pronto! Seus repasses automáticos de saldo estão configurados por meio do Asaas.'}
+                    {asaasStatus === 'processing' && 'O Asaas está verificando seus dados e documentos. Isso pode levar alguns minutos ou horas.'}
+                    {asaasStatus === 'pending' && 'Sua conta Asaas necessita do envio de documentos adicionais. Por favor, regularize no painel Asaas.'}
+                    {asaasStatus === 'denied' && 'Seu cadastro de conta foi rejeitado pelo Asaas. Entre em contato com o suporte para mais informações.'}
+                    {asaasStatus === 'none' && 'Configure sua conta digital Asaas no ambiente seguro de sandbox para poder receber das suas aulas automatizadas.'}
                 </p>
                 
                 <div className="flex flex-col space-y-2">
-                    <Button 
-                        variant={stripeStatus === 'active' ? 'outline' : 'primary'}
-                        onClick={handleStripeConnect}
-                        disabled={connecting}
-                        className={`text-xs py-2.5 px-4 h-auto shadow-none w-full
-                            ${stripeStatus === 'active' 
-                                ? 'bg-white border-white text-indigo-600 hover:bg-indigo-50' 
-                                : stripeStatus === 'processing'
-                                    ? 'bg-blue-600 hover:bg-blue-700 text-white border-transparent'
-                                    : 'bg-yellow-600 hover:bg-yellow-700 text-white border-transparent'}`}
-                    >
-                        {connecting ? 'Processando...' : 
-                            stripeStatus === 'active' ? 'Acessar Painel Stripe ↗' : 
-                            stripeStatus === 'processing' ? 'Verificar Status no Stripe ↗' : 
-                            stripeStatus === 'pending' ? 'Concluir Cadastro ⚠️' : 
-                            'Ativar Recebimentos'
-                        }
-                    </Button>
-
-                    {/* Botão de Sincronização Manual */}
-                    {(stripeStatus === 'pending' || stripeStatus === 'processing') && (
-                        <button 
-                            onClick={handleManualSync}
-                            disabled={syncing}
-                            className={`text-[10px] font-bold underline text-center
-                                ${stripeStatus === 'processing' ? 'text-blue-600 hover:text-blue-800' : 'text-yellow-700 hover:text-yellow-900'}
-                            `}
+                    {asaasStatus === 'none' && (
+                        <Button 
+                            variant="primary"
+                            onClick={() => setIsAsaasModalOpen(true)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white border-transparent text-xs py-2.5 px-4 h-auto shadow-none w-full"
                         >
-                            {syncing ? 'Verificando com o banco...' : 'Já completei, atualizar agora ⟳'}
-                        </button>
+                            Criar Conta Asaas
+                        </Button>
+                    )}
+
+                    {asaasStatus !== 'none' && (
+                        <div className="text-xs text-gray-500 flex flex-col space-y-1">
+                            <span className="font-semibold text-gray-700">Canal de Recebimento de Aulas</span>
+                            <span className="text-[11px]">Provedor Ativo: Asaas (Sandbox)</span>
+                        </div>
                     )}
                 </div>
             </div>
             
             <div className={`absolute -right-6 -bottom-8 w-24 h-24 rounded-full opacity-50 mix-blend-multiply filter blur-xl
-                ${stripeStatus === 'active' ? 'bg-indigo-200' : 
-                  stripeStatus === 'processing' ? 'bg-blue-200' :
+                ${asaasStatus === 'active' ? 'bg-indigo-200' : 
+                  asaasStatus === 'processing' ? 'bg-blue-200' :
+                  asaasStatus === 'denied' ? 'bg-red-200' :
                   'bg-yellow-200'
                 }`}></div>
         </div>
@@ -551,6 +650,161 @@ export const InstructorFinance: React.FC = () => {
         </div>
 
       </div>
+
+      <Modal
+        isOpen={isAsaasModalOpen}
+        onClose={() => !submittingAsaas && setIsAsaasModalOpen(false)}
+        title="Conta de Recebimentos Asaas"
+      >
+        <form onSubmit={handleSubmitAsaas} className="space-y-4">
+          <p className="text-xs text-gray-500 leading-relaxed mb-2">
+            Insira suas informações cadastrais para habilitar transferências automáticas via Asaas Sandbox.
+          </p>
+
+          <Input
+            label="CPF ou CNPJ"
+            placeholder="000.000.000-00 ou 00.000.000/0000-00"
+            value={cpfCnpj}
+            onChange={handleCpfCnpjChange}
+            type="text"
+            required
+            disabled={submittingAsaas}
+          />
+
+          {cpfCnpj.replace(/\D/g, '').length > 11 && (
+            <div className="flex flex-col space-y-2 w-full text-left">
+              <label className="text-sm font-semibold text-gray-700 ml-1">
+                Tipo de Empresa
+              </label>
+              <select
+                value={companyType}
+                onChange={(e) => setCompanyType(e.target.value as 'MEI' | 'LIMITED')}
+                className="w-full px-4 py-3.5 rounded-xl bg-gray-50 border border-gray-200 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all duration-200"
+                disabled={submittingAsaas}
+                required
+              >
+                <option value="MEI">Microempreendedor Individual (MEI)</option>
+                <option value="LIMITED">Sociedade Limitada (LTDA)</option>
+              </select>
+            </div>
+          )}
+
+          <div className="relative">
+            <Input
+              label="CEP"
+              placeholder="00000-000"
+              value={postalCode}
+              onChange={handleCepChange}
+              type="text"
+              required
+              disabled={submittingAsaas || cepLoading}
+            />
+            {cepLoading && (
+              <span className="absolute right-4 bottom-3.5 text-xs text-blue-500 flex items-center gap-1">
+                <svg className="animate-spin h-3.5 w-3.5 text-blue-500 animate-fade-in" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Buscando...
+              </span>
+            )}
+          </div>
+
+          <Input
+            label="Rua / Endereço"
+            placeholder="Nome da rua"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            type="text"
+            required
+            disabled={submittingAsaas}
+          />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Número"
+              placeholder="Ex: 123"
+              value={addressNumber}
+              onChange={(e) => setAddressNumber(e.target.value)}
+              type="text"
+              required
+              disabled={submittingAsaas}
+            />
+            <Input
+              label="Complemento"
+              placeholder="Apto, Bloco..."
+              value={complement}
+              onChange={(e) => setComplement(e.target.value)}
+              type="text"
+              disabled={submittingAsaas}
+            />
+          </div>
+
+          <Input
+            label="Bairro"
+            placeholder="Nome do bairro"
+            value={province}
+            onChange={(e) => setProvince(e.target.value)}
+            type="text"
+            required
+            disabled={submittingAsaas}
+          />
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <Input
+                label="Cidade"
+                placeholder="Ex: São Paulo"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                type="text"
+                required
+                disabled={submittingAsaas}
+              />
+            </div>
+            <div>
+              <Input
+                label="UF"
+                placeholder="Ex: SP"
+                value={state}
+                onChange={(e) => setState(e.target.value.toUpperCase().slice(0, 2))}
+                type="text"
+                required
+                disabled={submittingAsaas}
+              />
+            </div>
+          </div>
+
+          <Input
+            label="Telefone (Opcional)"
+            placeholder="(00) 00000-0000"
+            value={phone}
+            onChange={(e) => setPhone(formatPhone(e.target.value))}
+            type="text"
+            disabled={submittingAsaas}
+          />
+
+          <div className="pt-4 flex gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsAsaasModalOpen(false)}
+              disabled={submittingAsaas}
+              className="flex-1 py-3 text-xs"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={submittingAsaas}
+              className="flex-1 py-3 text-xs"
+            >
+              Confirmar
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       <InstructorBottomNav />
     </div>
