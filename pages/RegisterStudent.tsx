@@ -8,6 +8,7 @@ import { PrivacyModal } from '../components/PrivacyModal';
 import { TERMS_VERSION, PRIVACY_VERSION, APP_CONFIG } from '../constants';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../contexts/ToastContext';
+import { toTitleCase, sanitizeEmail, normalizeCity } from '../lib/stringUtils';
 
 export const RegisterStudent: React.FC = () => {
   const navigate = useNavigate();
@@ -95,9 +96,13 @@ export const RegisterStudent: React.FC = () => {
 
     setLoading(true);
 
+    const normalizedName = toTitleCase(name);
+    const normalizedEmail = sanitizeEmail(email);
+    const normalizedCityVal = normalizeCity(city);
+
     const signupData = {
-      full_name: name,
-      city: city, 
+      full_name: normalizedName,
+      city: normalizedCityVal, 
       role: 'student',
       phone: whatsapp,
       terms_accepted_at: new Date().toISOString(),
@@ -108,7 +113,7 @@ export const RegisterStudent: React.FC = () => {
 
     // SUPABASE SIGN UP
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
       options: {
         data: signupData

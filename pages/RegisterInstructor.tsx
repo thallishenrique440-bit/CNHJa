@@ -8,6 +8,7 @@ import { PrivacyModal } from '../components/PrivacyModal';
 import { TERMS_VERSION, PRIVACY_VERSION, APP_CONFIG } from '../constants';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../contexts/ToastContext';
+import { toTitleCase, sanitizeEmail, normalizeCity } from '../lib/stringUtils';
 
 export const RegisterInstructor: React.FC = () => {
   const navigate = useNavigate();
@@ -102,9 +103,13 @@ export const RegisterInstructor: React.FC = () => {
 
     setLoading(true);
 
+    const normalizedName = toTitleCase(name);
+    const normalizedEmail = sanitizeEmail(email);
+    const normalizedCityVal = normalizeCity(city);
+
     const signupData = {
-      full_name: name,
-      city: city,
+      full_name: normalizedName,
+      city: normalizedCityVal,
       phone: whatsapp,
       whatsapp: whatsapp,
       credential: detranCredential,
@@ -117,7 +122,7 @@ export const RegisterInstructor: React.FC = () => {
 
     // SUPABASE SIGN UP
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
       options: {
         data: signupData
@@ -133,10 +138,10 @@ export const RegisterInstructor: React.FC = () => {
 
     if (data.user) {
       localStorage.setItem('ab_instructor_data', JSON.stringify({
-        name,
+        name: normalizedName,
         detranCredential,
         whatsapp,
-        city
+        city: normalizedCityVal
       }));
       localStorage.setItem('ab_user_type', 'instructor');
 

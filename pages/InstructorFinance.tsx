@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { toTitleCase } from '../lib/stringUtils';
 
 // --- Types ---
 interface Transaction {
@@ -353,15 +354,24 @@ export const InstructorFinance: React.FC = () => {
 
     setSubmittingAsaas(true);
     try {
+      const normalizedAddress = toTitleCase(address);
+      const normalizedProvince = toTitleCase(province);
+      const normalizedCity = toTitleCase(city);
+
+      // Sincroniza estados do formulário para exibir normalizado na tela
+      setAddress(normalizedAddress);
+      setProvince(normalizedProvince);
+      setCity(normalizedCity);
+
       const payload = {
         cpfCnpj: cleanCpfCnpj,
         companyType: cleanCpfCnpj.length <= 11 ? 'INDIVIDUAL' : companyType,
         postalCode: cleanPostalCode,
-        address,
+        address: normalizedAddress,
         addressNumber,
         complement,
-        province,
-        city,
+        province: normalizedProvince,
+        city: normalizedCity,
         state,
         phone: cleanPhone || undefined // optional
       };

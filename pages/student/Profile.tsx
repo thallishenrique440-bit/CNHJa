@@ -21,6 +21,7 @@ import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { toTitleCase, normalizeCity } from '../../lib/stringUtils';
 
 export const StudentProfile: React.FC = () => {
   const navigate = useNavigate();
@@ -125,6 +126,9 @@ export const StudentProfile: React.FC = () => {
         return;
     }
 
+    const normalizedName = toTitleCase(name);
+    const normalizedCity = normalizeCity(city);
+
     setSaving(true);
     const userId = session.user.id;
 
@@ -132,9 +136,9 @@ export const StudentProfile: React.FC = () => {
         const { error } = await supabase
           .from('profiles')
           .update({
-            full_name: name,
+            full_name: normalizedName,
             phone: phone,
-            city: city,
+            city: normalizedCity,
             trusted_contact: trustedContact,
             security_message: defaultMessage,
             experience_level: experience,
@@ -145,6 +149,9 @@ export const StudentProfile: React.FC = () => {
           .eq('id', userId);
 
         if (error) throw error;
+
+        setName(normalizedName);
+        setCity(normalizedCity);
 
         await refreshProfile();
 

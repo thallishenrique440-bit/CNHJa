@@ -26,6 +26,7 @@ import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { toTitleCase, normalizeCity } from '../lib/stringUtils';
 
 export const InstructorProfile: React.FC = () => {
   const navigate = useNavigate();
@@ -289,6 +290,9 @@ export const InstructorProfile: React.FC = () => {
       return;
     }
 
+    const normalizedName = toTitleCase(name);
+    const normalizedCity = normalizeCity(city);
+
     setSaving(true);
     const userId = session.user.id;
 
@@ -297,8 +301,8 @@ export const InstructorProfile: React.FC = () => {
       const { error: profileError } = await supabase
         .from('profiles')
         .update({
-          full_name: name,
-          city: city,
+          full_name: normalizedName,
+          city: normalizedCity,
           phone: whatsapp.replace(/\D/g, ''),
           is_profile_complete: true,
           updated_at: new Date().toISOString()
@@ -401,6 +405,8 @@ export const InstructorProfile: React.FC = () => {
       }
 
       addToast("Perfil salvo com sucesso!", 'success');
+      setName(normalizedName);
+      setCity(normalizedCity);
       await refreshProfile();
 
       localStorage.setItem('ab_instructor_preferences', JSON.stringify({
