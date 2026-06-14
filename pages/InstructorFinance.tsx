@@ -128,6 +128,7 @@ export const InstructorFinance: React.FC = () => {
   const [state, setState] = useState('');
   const [phone, setPhone] = useState('');
   const [birthDate, setBirthDate] = useState('');
+  const [incomeValue, setIncomeValue] = useState('');
   
   // UI States
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -364,6 +365,13 @@ export const InstructorFinance: React.FC = () => {
       return;
     }
 
+    const numIncome = parseFloat(incomeValue);
+    if (!incomeValue || isNaN(numIncome) || numIncome <= 0) {
+      const fieldName = isIndividual ? 'Renda Mensal Estimada' : 'Faturamento Mensal Estimado';
+      addToast(`Informe o campo: ${fieldName}, com um valor maior que zero.`, 'error');
+      return;
+    }
+
     setSubmittingAsaas(true);
     try {
       const normalizedAddress = toTitleCase(address);
@@ -385,7 +393,8 @@ export const InstructorFinance: React.FC = () => {
         province: normalizedProvince,
         city: normalizedCity,
         state,
-        phone: cleanPhone || undefined // optional
+        phone: cleanPhone || undefined, // optional
+        incomeValue: numIncome
       };
 
       if (isIndividual && birthDate) {
@@ -820,6 +829,23 @@ export const InstructorFinance: React.FC = () => {
             type="text"
             disabled={submittingAsaas}
           />
+
+          <div className="flex flex-col space-y-1">
+            <Input
+              label={cpfCnpj.replace(/\D/g, '').length <= 11 ? "Renda Mensal Estimada (R$)" : "Faturamento Mensal Estimado (R$)"}
+              placeholder="Ex: 3000.00"
+              value={incomeValue}
+              onChange={(e) => setIncomeValue(e.target.value)}
+              type="number"
+              required
+              disabled={submittingAsaas}
+              min="0.01"
+              step="any"
+            />
+            <p className="text-[11px] text-gray-500 ml-1 leading-relaxed">
+              Informação exigida pelo parceiro financeiro Asaas para validação regulatória da conta de recebimentos.
+            </p>
+          </div>
 
           <div className="pt-4 flex gap-3">
             <Button

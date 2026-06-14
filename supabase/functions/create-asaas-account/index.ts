@@ -75,13 +75,18 @@ Deno.serve(async (req: Request) => {
       province,
       city,
       state,
-      birthDate
+      birthDate,
+      incomeValue
     } = body;
 
     if (!cpfCnpj) throw new Error('O CPF/CNPJ é obrigatório para o cadastro no Asaas.');
     if (!companyType) throw new Error('O tipo de empresa (companyType) é obrigatório.');
     if (companyType === 'INDIVIDUAL' && !birthDate) {
       throw new Error('A data de nascimento é obrigatória para o cadastro de Pessoa Física.');
+    }
+    const parsedIncomeValue = Number(incomeValue);
+    if (incomeValue === undefined || isNaN(parsedIncomeValue) || parsedIncomeValue <= 0) {
+      throw new Error('A renda/faturamento estimado (incomeValue) é obrigatório e deve ser maior que zero.');
     }
     if (!postalCode) throw new Error('O CEP é obrigatório para o cadastro no Asaas.');
     if (!address) throw new Error('O Endereço (Logradouro) é obrigatório.');
@@ -153,7 +158,8 @@ Deno.serve(async (req: Request) => {
       complement: complement || undefined,
       province,
       postalCode: cleanPostalCode,
-      companyType: companyType
+      companyType: companyType,
+      incomeValue: parsedIncomeValue
     };
 
     if (companyType === 'INDIVIDUAL' && birthDate) {
