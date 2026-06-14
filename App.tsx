@@ -46,7 +46,7 @@ const LoadingScreen = () => (
 );
 
 const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) => {
-  const { session, userRole, loading, isStripeConnected } = useAuth();
+  const { session, userRole, loading, isPaymentSetupComplete } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -63,14 +63,14 @@ const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) =
     return <Navigate to={userRole === 'student' ? '/student/home' : '/instructor/agenda'} replace />;
   }
 
-  // Determine if Stripe banner is showing (or would show)
+  // Determine if onboarding banner is showing (or would show)
   const isInstructor = userRole === 'instructor';
   const isFinancePage = location.pathname === '/instructor/finance';
-  const stripeBannerShowing = isInstructor && !isStripeConnected && !isFinancePage;
+  const paymentBannerShowing = isInstructor && !isPaymentSetupComplete && !isFinancePage;
 
   return (
     <>
-      <PushNotificationManager disabled={stripeBannerShowing} />
+      <PushNotificationManager disabled={paymentBannerShowing} />
       <Outlet />
     </>
   );

@@ -74,11 +74,15 @@ Deno.serve(async (req: Request) => {
       complement,
       province,
       city,
-      state
+      state,
+      birthDate
     } = body;
 
     if (!cpfCnpj) throw new Error('O CPF/CNPJ é obrigatório para o cadastro no Asaas.');
     if (!companyType) throw new Error('O tipo de empresa (companyType) é obrigatório.');
+    if (companyType === 'INDIVIDUAL' && !birthDate) {
+      throw new Error('A data de nascimento é obrigatória para o cadastro de Pessoa Física.');
+    }
     if (!postalCode) throw new Error('O CEP é obrigatório para o cadastro no Asaas.');
     if (!address) throw new Error('O Endereço (Logradouro) é obrigatório.');
     if (!addressNumber) throw new Error('O Número do endereço é obrigatório.');
@@ -138,7 +142,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // PASSO 9: Executar POST /accounts
-    const asaasPayload = {
+    const asaasPayload: any = {
       name,
       email,
       cpfCnpj: cleanCpfCnpj,
@@ -151,6 +155,10 @@ Deno.serve(async (req: Request) => {
       postalCode: cleanPostalCode,
       companyType: companyType
     };
+
+    if (companyType === 'INDIVIDUAL' && birthDate) {
+      asaasPayload.birthDate = birthDate;
+    }
 
     console.log(`Sending subaccount request to Asaas API for instructor ${user.id}`);
     const asaasResponse = await fetch(`${asaasApiUrl}/accounts`, {

@@ -10,6 +10,7 @@ interface AuthContextType {
   userRole: 'student' | 'instructor' | null;
   isProfileComplete: boolean | null;
   isStripeConnected: boolean;
+  isPaymentSetupComplete: boolean;
   serverTimeOffset: number;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -32,6 +33,7 @@ const AuthContext = createContext<AuthContextType>({
   userRole: null,
   isProfileComplete: null,
   isStripeConnected: true, // Default to true so it doesn't block notifications for students
+  isPaymentSetupComplete: true,
   serverTimeOffset: 0,
   signOut: async () => {},
   refreshProfile: async () => {},
@@ -43,7 +45,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<'student' | 'instructor' | null>(null);
   const [isProfileComplete, setIsProfileComplete] = useState<boolean | null>(null);
-  const [isStripeConnected, setIsStripeConnected] = useState(true);
+  const [isPaymentSetupComplete, setIsPaymentSetupComplete] = useState(true);
+  const isStripeConnected = isPaymentSetupComplete;
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
   const loadingFinalized = useRef(false);
   const lastFetchId = useRef(0);
@@ -194,8 +197,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    // 2. Fetch Stripe Status (Independent)
-    const fetchStripe = async () => {
+    // 2. Fetch Payment Setup Status (Independent)
+    const fetchPaymentStatus = async () => {
       try {
         const userResponse = await withTimeout<any>(supabase.auth.getUser() as any, 3000);
         
@@ -207,7 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const instructorResponse = await withTimeout<any>(
             supabase
               .from('instructors')
-              .select('payouts_enabled')
+              .select('payouts_enabled, stripe_onboarding_completed, provider_name, provider_onboarding_completed, provider_status')
               .eq('id', userId)
               .single() as any,
             4000
@@ -218,23 +221,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const { data: instructorData, error: instError } = instructorResponse;
           
           if (!instError && instructorData) {
-            setIsStripeConnected(instructorData.payouts_enabled === true);
+            const providerName = instructorData.provider_name || 'stripe';
+            if (providerName === 'asaas') {
+              const statusUpper = (instructorData.provider_status || '').toUpperCase();
+              const isApproved = instructorData.provider_onboarding_completed === true || 
+                statusUpper === 'APPROVED' || 
+                statusUpper === 'ACTIVE' ||
+                statusUpper === 'APROVADO' ||
+                statusUpper === 'ATIVO';
+              setIsPaymentSetupComplete(isApproved);
+            } else {
+              // Legacy Stripe behavior
+              setIsPaymentSetupComplete(instructorData.payouts_enabled === true);
+            }
           } else {
-            setIsStripeConnected(false);
+            setIsPaymentSetupComplete(false);
           }
         } else {
-          setIsStripeConnected(true);
+          setIsPaymentSetupComplete(true);
         }
       } catch (err) {
         if (fetchId !== lastFetchId.current) return;
-        console.error('[Auth] Falha na query de Stripe:', err);
+        console.error('[Auth] Falha na query de status de pagamento:', err);
         // Default to true for students, false for instructors if unknown
       }
     };
 
     // Run both independently
     fetchCompletion();
-    fetchStripe();
+    fetchPaymentStatus();
   }, []);
 
   const refreshProfile = React.useCallback(async () => {
@@ -379,7 +394,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, isStripeConnected, serverTimeOffset, signOut, refreshProfile, syncPushToken }}>
+    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, isStripeConnected, isPaymentSetupComplete, serverTimeOffset, signOut, refreshProfile, syncPushToken }}>
       {children}
     </AuthContext.Provider>
   );

@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 export const InstructorStripeBanner: React.FC = () => {
-  const { session, userRole, isStripeConnected } = useAuth();
+  const { session, userRole, isPaymentSetupComplete } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [showBanner, setShowBanner] = useState(false);
@@ -22,8 +22,8 @@ export const InstructorStripeBanner: React.FC = () => {
       return;
     }
 
-    setShowBanner(!isStripeConnected);
-  }, [session, userRole, location.pathname, isStripeConnected]);
+    setShowBanner(!isPaymentSetupComplete);
+  }, [session, userRole, location.pathname, isPaymentSetupComplete]);
 
   if (!showBanner) return null;
 
@@ -38,8 +38,8 @@ export const InstructorStripeBanner: React.FC = () => {
             <AlertCircle className="w-4 h-4 text-yellow-700" />
           </div>
           <div className="flex flex-col">
-            <span className="text-xs font-bold text-yellow-900">Configuração pendente</span>
-            <span className="text-[10px] text-yellow-700 leading-tight">Conecte sua conta Stripe para começar a receber pagamentos.</span>
+            <span className="text-xs font-bold text-yellow-900">Onboarding Financeiro Pendente</span>
+            <span className="text-[10px] text-yellow-700 leading-tight">Complete a configuração da sua conta Asaas para habilitar seus recebimentos.</span>
           </div>
         </div>
         <ChevronRight className="w-4 h-4 text-yellow-400 group-hover:text-yellow-600 transition-colors shrink-0" />

@@ -127,6 +127,7 @@ export const InstructorFinance: React.FC = () => {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [phone, setPhone] = useState('');
+  const [birthDate, setBirthDate] = useState('');
   
   // UI States
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -327,6 +328,17 @@ export const InstructorFinance: React.FC = () => {
       addToast('Documento CPF (11 dígitos) ou CNPJ (14 dígitos) inválido.', 'error');
       return;
     }
+    const isIndividual = cleanCpfCnpj.length <= 11;
+    if (isIndividual) {
+      if (!birthDate) {
+        addToast('Informe sua data de nascimento para concluir o cadastro financeiro.', 'error');
+        return;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
+        addToast('Informe uma data de nascimento válida.', 'error');
+        return;
+      }
+    }
     if (cleanPostalCode.length !== 8) {
       addToast('CEP inválido.', 'error');
       return;
@@ -363,7 +375,7 @@ export const InstructorFinance: React.FC = () => {
       setProvince(normalizedProvince);
       setCity(normalizedCity);
 
-      const payload = {
+      const payload: any = {
         cpfCnpj: cleanCpfCnpj,
         companyType: cleanCpfCnpj.length <= 11 ? 'INDIVIDUAL' : companyType,
         postalCode: cleanPostalCode,
@@ -375,6 +387,10 @@ export const InstructorFinance: React.FC = () => {
         state,
         phone: cleanPhone || undefined // optional
       };
+
+      if (isIndividual && birthDate) {
+        payload.birthDate = birthDate;
+      }
 
       const { data, error } = await invokeSecureFunction('create-asaas-account', {
         method: 'POST',
@@ -680,6 +696,17 @@ export const InstructorFinance: React.FC = () => {
             required
             disabled={submittingAsaas}
           />
+
+          {cpfCnpj.replace(/\D/g, '').length <= 11 && (
+            <Input
+              label="Data de Nascimento"
+              value={birthDate}
+              onChange={(e) => setBirthDate(e.target.value)}
+              type="date"
+              required={cpfCnpj.replace(/\D/g, '').length <= 11}
+              disabled={submittingAsaas}
+            />
+          )}
 
           {cpfCnpj.replace(/\D/g, '').length > 11 && (
             <div className="flex flex-col space-y-2 w-full text-left">
