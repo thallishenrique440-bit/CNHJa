@@ -414,14 +414,13 @@ export class AsaasProvider implements IPaymentProvider {
    * Audits subaccount KYC and configuration status on Asaas.
    */
   async getAccountStatus(providerAccountId: string): Promise<AccountStatusResponseDTO> {
-    const response = await this.request<AsaasAccountsListResponse>(`/accounts?id=${providerAccountId}`);
-    const accountInfo = response.data?.find(acc => acc.id === providerAccountId) || response.data?.[0];
+    const response = await this.request<AsaasAccountResponse>(`/accounts/${providerAccountId}`);
 
-    if (!accountInfo) {
+    if (!response) {
       throw new Error(`Asaas subaccount not found: ${providerAccountId}`);
     }
 
-    const asaasStatus = (accountInfo.status || '').toUpperCase();
+    const asaasStatus = (response.status || '').toUpperCase();
     let status: AccountStatusResponseDTO['status'] = 'pending';
     let onboardingCompleted = false;
     let payoutsEnabled = false;
@@ -435,12 +434,12 @@ export class AsaasProvider implements IPaymentProvider {
     }
 
     return {
-      providerAccountId: accountInfo.id,
+      providerAccountId: response.id,
       providerName: 'asaas',
       onboardingCompleted,
       payoutsEnabled,
       status,
-      rawStatus: JSON.stringify(accountInfo),
+      rawStatus: JSON.stringify(response),
     };
   }
 
