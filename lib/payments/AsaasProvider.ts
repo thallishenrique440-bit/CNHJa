@@ -159,6 +159,12 @@ export class AsaasProvider implements IPaymentProvider {
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     const url = `${this.apiUrl}${cleanEndpoint}`;
     
+    console.log('================ [ASAAS AUDIT OUTCOMING] ================');
+    console.log('[ASAAS API URL]:', url);
+    console.log('[ASAAS BASE]:', this.apiUrl);
+    console.log('[ASAAS METHOD]:', options.method || 'GET');
+    console.log('=========================================================');
+
     const headers = {
       'access_token': this.apiKey,
       'Content-Type': 'application/json',
@@ -172,6 +178,14 @@ export class AsaasProvider implements IPaymentProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
+
+      console.error('================ [ASAAS AUDIT ERROR] ================');
+      console.error('[STATUS HTTP]:', response.status);
+      console.error('[REQUESTED URL]:', url);
+      console.error('[RESPONSE BODY]:', errorText);
+      console.error('[API KEY CONFIGURADA]:', this.apiKey ? `SIM (${this.apiKey.substring(0,8)}...)` : 'NÃO');
+      console.error('=====================================================');
+
       let errorsList: string = 'Unknown Asaas API error';
       try {
         const errorJson = JSON.parse(errorText) as { errors?: Array<{ description: string }> };
@@ -183,6 +197,15 @@ export class AsaasProvider implements IPaymentProvider {
       }
       throw new Error(`Asaas API error [${response.status}]: ${errorsList}`);
     }
+
+    const responseClone = response.clone();
+    const successText = await responseClone.text();
+
+    console.log('================ [ASAAS AUDIT SUCCESS] ================');
+    console.log('[STATUS HTTP]:', response.status);
+    console.log('[REQUESTED URL]:', url);
+    console.log('[RESPONSE BODY]:', successText);
+    console.log('=======================================================');
 
     return response.json() as Promise<T>;
   }
