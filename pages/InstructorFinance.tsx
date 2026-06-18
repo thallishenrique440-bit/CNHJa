@@ -115,6 +115,7 @@ export const InstructorFinance: React.FC = () => {
   const [isAsaasModalOpen, setIsAsaasModalOpen] = useState(false);
   const [submittingAsaas, setSubmittingAsaas] = useState(false);
   const [cepLoading, setCepLoading] = useState(false);
+  const [syncingAsaas, setSyncingAsaas] = useState(false);
 
   // Form Fields
   const [cpfCnpj, setCpfCnpj] = useState('');
@@ -432,6 +433,39 @@ export const InstructorFinance: React.FC = () => {
     }
   };
 
+  const handleSyncAsaasStatus = async () => {
+    if (!session?.access_token) {
+      addToast('Você precisa estar logado para sincronizar o status.', 'error');
+      return;
+    }
+
+    try {
+      setSyncingAsaas(true);
+      const response = await fetch('/api/sync-asaas-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        }
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData.error || 'Falha ao sincronizar status.');
+      }
+
+      addToast('Status da conta Asaas atualizado com sucesso!', 'success');
+      
+      // Reload financial/onboarding status data in screen
+      await loadData();
+    } catch (err: any) {
+      console.error('Error syncing Asaas status:', err);
+      addToast('Erro ao sincronizar status: ' + (err.message || 'tente novamente.'), 'error');
+    } finally {
+      setSyncingAsaas(false);
+    }
+  };
+
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
   };
@@ -542,9 +576,19 @@ export const InstructorFinance: React.FC = () => {
                     )}
 
                     {asaasStatus !== 'none' && (
-                        <div className="text-xs text-gray-500 flex flex-col space-y-1">
-                            <span className="font-semibold text-gray-700">Canal de Recebimento de Aulas</span>
-                            <span className="text-[11px]">Provedor Ativo: Asaas (Sandbox)</span>
+                        <div className="flex flex-col space-y-3 w-full">
+                            <div className="text-xs text-gray-500 flex flex-col space-y-1">
+                                <span className="font-semibold text-gray-700">Canal de Recebimento de Aulas</span>
+                                <span className="text-[11px]">Provedor Ativo: Asaas (Sandbox)</span>
+                            </div>
+                            <Button 
+                                variant="outline"
+                                onClick={handleSyncAsaasStatus}
+                                loading={syncingAsaas}
+                                className="bg-white border-2 border-gray-200 text-gray-700 hover:bg-gray-50 text-xs py-2.5 px-4 h-auto shadow-none w-full"
+                            >
+                                Verificar Status Asaas
+                            </Button>
                         </div>
                     )}
                 </div>
