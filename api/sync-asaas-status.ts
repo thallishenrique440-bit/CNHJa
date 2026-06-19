@@ -35,7 +35,7 @@ export default async function handler(req: any, res: any) {
     // 2. Fetch instructor's provider_account_id
     const { data: instructor, error: instructorError } = await supabaseAdmin
       .from('instructors')
-      .select('provider_account_id, provider_status, provider_onboarding_completed')
+      .select('provider_account_id, provider_status, provider_onboarding_completed, payouts_enabled')
       .eq('id', user.id)
       .single();
 
@@ -55,13 +55,19 @@ export default async function handler(req: any, res: any) {
 
     console.log('[SyncAsaasStatus] Status fetched from Asaas:', statusRes);
 
-    // 4. Update the DB
+    // 4. Update the DB with regression protection for approved status
+    const isAlreadyApproved = instructor.provider_status === 'approved';
+
+    const finalStatus = isAlreadyApproved ? 'approved' : statusRes.status;
+    const finalOnboardingCompleted = isAlreadyApproved ? true : statusRes.onboardingCompleted;
+    const finalPayoutsEnabled = isAlreadyApproved ? true : statusRes.payoutsEnabled;
+
     const { error: updateError } = await supabaseAdmin
       .from('instructors')
       .update({
-        provider_status: statusRes.status,
-        provider_onboarding_completed: statusRes.onboardingCompleted,
-        payouts_enabled: statusRes.payoutsEnabled
+        provider_status: finalStatus,
+        provider_onboarding_completed: finalOnboardingCompleted,
+        payouts_enabled: finalPayoutsEnabled
       })
       .eq('id', user.id);
 
@@ -73,9 +79,9 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({
       success: true,
       providerAccountId,
-      status: statusRes.status,
-      onboardingCompleted: statusRes.onboardingCompleted,
-      payoutsEnabled: statusRes.payoutsEnabled
+      status: finalStatus,
+      onboardingCompleted: finalOnboardingCompleted,
+      payoutsEnabled: finalPayoutsEnabled
     });
 
   } catch (error: any) {
