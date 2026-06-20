@@ -97,6 +97,7 @@ export const StudentHome: React.FC = () => {
           whatsapp,
           meeting_point,
           categories,
+          credential_number,
           profiles!inner (
             full_name,
             city,
@@ -116,13 +117,42 @@ export const StudentHome: React.FC = () => {
           )
         `)
         .gt('base_price', 0)     // Only instructors who set a price
-        .not('categories', 'is', null) // Only instructors who selected a category
-        .eq('payouts_enabled', true);
+        .not('categories', 'is', null); // Only instructors who selected a category
 
       if (error) throw error;
       
       if (data) {
-        setInstructors(data as any);
+        // Enforce professional profile completeness rule (Etapa A)
+        // Decoupling visibility from the payouts_enabled field
+        const completeInstructors = (data as any[]).filter(inst => {
+          // 1. Basic profile valid (profiles exists and has full_name and city fill)
+          const hasBasicProfile = inst.profiles && 
+            typeof inst.profiles.full_name === 'string' && inst.profiles.full_name.trim() !== '' &&
+            typeof inst.profiles.city === 'string' && inst.profiles.city.trim() !== '';
+
+          // 2. Whatsapp preenchido
+          const hasWhatsapp = inst.whatsapp && typeof inst.whatsapp === 'string' && inst.whatsapp.trim() !== '';
+
+          // 3. Credencial preenchida
+          const hasCredential = inst.credential_number && typeof inst.credential_number === 'string' && inst.credential_number.trim() !== '';
+
+          // 4. Preço configurado (base_price > 0, or has category prices > 0)
+          const hasBasePrice = inst.base_price && inst.base_price > 0;
+          const hasCategoryPrices = inst.instructor_categories && inst.instructor_categories.some((c: any) => c.day_price > 0);
+          const hasPrice = hasBasePrice || hasCategoryPrices;
+
+          // 5. Categoria configurada (has legacy categories or category relation)
+          const hasBaseCategories = inst.categories && inst.categories.length > 0;
+          const hasCategoryRelation = inst.instructor_categories && inst.instructor_categories.length > 0;
+          const hasCategory = hasBaseCategories || hasCategoryRelation;
+
+          // 6. Pelo menos um veículo cadastrado
+          const hasVehicle = inst.instructor_vehicles && inst.instructor_vehicles.length > 0;
+
+          return hasBasicProfile && hasWhatsapp && hasCredential && hasPrice && hasCategory && hasVehicle;
+        });
+
+        setInstructors(completeInstructors);
       }
     } catch (error) {
       console.error('Error fetching instructors:', error);
