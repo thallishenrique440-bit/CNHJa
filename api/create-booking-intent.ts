@@ -114,6 +114,14 @@ providerInstance=${paymentProvider.getProviderName()}`);
       return res.status(400).json({ error: 'Student profile not found.' });
     }
 
+    // Validate CPF and Phone presence for billing (required by payment providers)
+    if (!profile.cpf || profile.cpf.trim() === '') {
+      return res.status(400).json({ error: 'O CPF é obrigatório para prosseguir com o pagamento.' });
+    }
+    if (!profile.phone || profile.phone.trim() === '') {
+      return res.status(400).json({ error: 'O Telefone é obrigatório para prosseguir com o pagamento.' });
+    }
+
     // Resolve student's customer ID for the active provider
     let customerProviderId = (profile.provider_name === providerName)
       ? profile.provider_customer_id
@@ -125,8 +133,8 @@ providerInstance=${paymentProvider.getProviderName()}`);
         const customerResponse = await paymentProvider.createCustomer({
           email: user.email || '',
           name: profile.full_name || user.email || 'Aluno',
-          phone: profile.phone || '11999999999',
-          cpfCnpj: (profile.cpf || '000.000.000-00').replace(/\D/g, '') || '00000000000',
+          phone: profile.phone.replace(/\D/g, ''),
+          cpfCnpj: profile.cpf.replace(/\D/g, ''),
         });
         
         customerProviderId = customerResponse.providerCustomerId;

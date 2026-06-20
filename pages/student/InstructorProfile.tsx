@@ -59,6 +59,49 @@ interface InstructorProfileData {
   vehicles: Vehicle[];
 }
 
+// CPF mathematical validation helper
+const validateCpf = (cpf: string): boolean => {
+  const cleanCpf = cpf.replace(/\D/g, '');
+  if (cleanCpf.length !== 11) return false;
+  
+  // Repetitive patterns check
+  if (/^(\d)\1{10}$/.test(cleanCpf)) return false;
+
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(cleanCpf.charAt(i)) * (10 - i);
+  }
+  let rev = 11 - (sum % 11);
+  if (rev === 10 || rev === 11) rev = 0;
+  if (rev !== parseInt(cleanCpf.charAt(9))) return false;
+
+  sum = 0;
+  for (let i = 0; i < 10; i++) {
+    sum += parseInt(cleanCpf.charAt(i)) * (11 - i);
+  }
+  rev = 11 - (sum % 11);
+  if (rev === 10 || rev === 11) rev = 0;
+  if (rev !== parseInt(cleanCpf.charAt(10))) return false;
+
+  return true;
+};
+
+const formatCpfInput = (value: string) => {
+  const v = value.replace(/\D/g, '').slice(0, 11);
+  if (v.length <= 3) return v;
+  if (v.length <= 6) return `${v.slice(0, 3)}.${v.slice(3)}`;
+  if (v.length <= 9) return `${v.slice(0, 3)}.${v.slice(3, 6)}.${v.slice(6)}`;
+  return `${v.slice(0, 3)}.${v.slice(3, 6)}.${v.slice(6, 9)}-${v.slice(9, 11)}`;
+};
+
+const formatPhoneInput = (value: string) => {
+  const v = value.replace(/\D/g, '').slice(0, 11);
+  if (v.length <= 2) return v;
+  if (v.length <= 6) return `(${v.slice(0, 2)}) ${v.slice(2)}`;
+  if (v.length <= 10) return `(${v.slice(0, 2)}) ${v.slice(2, 6)}-${v.slice(6)}`;
+  return `(${v.slice(0, 2)}) ${v.slice(2, 7)}-${v.slice(7)}`;
+};
+
 export const StudentInstructorProfile: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -90,6 +133,71 @@ export const StudentInstructorProfile: React.FC = () => {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   // Note: isSuccess is handled by the redirect flow mostly, but kept for transient UI states if needed
   const [isSuccess, setIsSuccess] = useState(false);
+
+  // CPF and Phone Modal State
+  const [isCpfModalOpen, setIsCpfModalOpen] = useState(false);
+  const [studentCpf, setStudentCpf] = useState('');
+  const [studentPhone, setStudentPhone] = useState('');
+  const [isSavingCpf, setIsSavingCpf] = useState(false);
+  const [cpfModalIgnoreTooClose, setCpfModalIgnoreTooClose] = useState(false);
+
+  const handleSaveCpfAndPhone = async () => {
+    const cleanCpf = studentCpf.replace(/\D/g, '');
+    const cleanPhone = studentPhone.replace(/\D/g, '');
+
+    if (!cleanCpf) {
+      addToast("CPF é obrigatório.", "warning");
+      return;
+    }
+    if (!validateCpf(cleanCpf)) {
+      addToast("CPF inválido. Por favor, verifique o número informado.", "error");
+      return;
+    }
+    if (!cleanPhone) {
+      addToast("Telefone é obrigatório.", "warning");
+      return;
+    }
+    if (cleanPhone.length < 10) {
+      addToast("Telefone inválido. Por favor, inclua o DDD.", "error");
+      return;
+    }
+
+    setIsSavingCpf(true);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) {
+        addToast("Sua sessão expirou. Faça login novamente.", 'error');
+        navigate('/login');
+        return;
+      }
+
+      const studentId = sessionData.session.user.id;
+
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          cpf: cleanCpf,
+          phone: cleanPhone
+        })
+        .eq('id', studentId);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      addToast("Dados cadastrados com sucesso!", "success");
+      setIsCpfModalOpen(false);
+      
+      // Continue automatically with payment flow!
+      handleBook(cpfModalIgnoreTooClose);
+    } catch (err: any) {
+      console.error("Erro ao salvar CPF/Telefone:", err);
+      addToast(err.message || "Erro ao salvar seus dados. Tente novamente.", "error");
+    } finally {
+      setIsSavingCpf(false);
+    }
+  };
 
   // Preview Logic
     const isPreview = searchParams.get('preview') === 'true';
@@ -816,6 +924,31 @@ export const StudentInstructorProfile: React.FC = () => {
 
       const token = sessionData.session.access_token;
       const studentId = sessionData.session.user.id;
+
+      // Check if student profile has CPF and Phone filled
+      const { data: studentProfile, error: profileErr } = await supabase
+         .from('profiles')
+         .select('cpf, phone')
+         .eq('id', studentId)
+         .single();
+
+      if (profileErr) {
+         console.error("Erro ao buscar perfil do aluno:", profileErr);
+         throw new Error("Não foi possível carregar os dados de perfil do aluno.");
+      }
+
+      const hasCpf = studentProfile?.cpf && studentProfile.cpf.trim() !== '';
+      const hasPhone = studentProfile?.phone && studentProfile.phone.trim() !== '';
+
+      if (!hasCpf || !hasPhone) {
+         // Open CPF/Phone modal
+         setStudentCpf(studentProfile?.cpf || '');
+         setStudentPhone(studentProfile?.phone || '');
+         setCpfModalIgnoreTooClose(ignoreTooClose);
+         setIsCpfModalOpen(true);
+         setIsProcessingPayment(false);
+         return;
+      }
 
       // 3. Montar Payload
       // Calculate price per slot for the payload (backend will recalculate but needs base info)
@@ -1838,6 +1971,66 @@ export const StudentInstructorProfile: React.FC = () => {
           >
             Cancelar
           </button>
+        </div>
+      </Modal>
+
+      {/* CPF and Phone Completion Modal */}
+      <Modal
+        isOpen={isCpfModalOpen}
+        onClose={() => setIsCpfModalOpen(false)}
+        title="Complete seus dados para finalizar"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Para processar pagamentos de forma segura, precisamos do seu CPF e telefone. Você só precisará preencher estes dados uma vez.
+          </p>
+          
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wilder mb-2">
+                CPF *
+              </label>
+              <input
+                type="text"
+                value={studentCpf}
+                onChange={(e) => setStudentCpf(formatCpfInput(e.target.value))}
+                placeholder="000.000.000-00"
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                disabled={isSavingCpf}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wilder mb-2">
+                Telefone Celular *
+              </label>
+              <input
+                type="text"
+                value={studentPhone}
+                onChange={(e) => setStudentPhone(formatPhoneInput(e.target.value))}
+                placeholder="(00) 00000-0000"
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                disabled={isSavingCpf}
+              />
+            </div>
+          </div>
+
+          <div className="pt-2 space-y-2">
+            <Button
+              fullWidth
+              onClick={handleSaveCpfAndPhone}
+              disabled={isSavingCpf}
+            >
+              {isSavingCpf ? "Salvando..." : "Salvar e Continuar"}
+            </Button>
+            <button
+              onClick={() => setIsCpfModalOpen(false)}
+              disabled={isSavingCpf}
+              className="w-full text-center text-sm font-medium text-gray-400 hover:text-gray-600 py-2 transition-colors"
+            >
+              Cancelar
+            </button>
+          </div>
         </div>
       </Modal>
 
