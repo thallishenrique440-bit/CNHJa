@@ -395,12 +395,16 @@ providerInstance=${paymentProvider.getProviderName()}`);
     const applicationFeeAmount = Math.round(finalPrice * 0.10); // 10% commission
     let paymentResponse;
 
+    const requestOrigin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : 'https://autoescolabrasil.com');
+    const returnUrl = `${requestOrigin}/#/student/lessons`;
+
     try {
       paymentResponse = await paymentProvider.createPayment({
         amount: finalPrice,
         description: `Agendamento - Código da reserva ${groupId}`,
         customerProviderId: customerProviderId,
         externalReferenceId: groupId,
+        returnUrl: returnUrl,
         billingAddress: {
           postalCode: '01001-000',
           address: 'Praca da Se',

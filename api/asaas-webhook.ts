@@ -87,7 +87,7 @@ export default async function handler(req: Request, res: Response) {
           provider_status: 'approved',
           provider_onboarding_completed: true,
           payouts_enabled: true
-        })
+         })
         .eq('id', instructor.id);
 
       if (updateError) {
@@ -96,8 +96,143 @@ export default async function handler(req: Request, res: Response) {
       }
 
       console.log(`✅ [ASAAS WEBHOOK] Successfully processed ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED status update for instructor ID: ${instructor.id}`);
+    } else if (['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED', 'PAYMENT_UPDATED'].includes(event.toUpperCase())) {
+      const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
+      let groupId = payload.payment?.externalReference;
+      const paymentStatus = payload.payment?.status;
+
+      // If PAYMENT_UPDATED, we only want to mark as paid if the status is actually RECEIVED or CONFIRMED or RECEIVED_IN_CASH
+      if (event.toUpperCase() === 'PAYMENT_UPDATED' && !['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(paymentStatus?.toUpperCase())) {
+        console.log(`ℹ️ [ASAAS WEBHOOK] Payment updated but status is ${paymentStatus}. Not confirming booking yet.`);
+        return res.status(200).json({
+          success: true,
+          message: 'Updated status ignored (not paid yet)',
+          event,
+          timestamp
+        });
+      }
+
+      if (!currentPaymentId) {
+        console.error('❌ Asaas Webhook: Payment ID missing for payment event.');
+        return res.status(400).json({ error: 'Missing paymentId' });
+      }
+
+      // Fallback search to find groupId if not present/sent in externalReference
+      if (!groupId) {
+        const { data: foundApts } = await supabaseAdmin
+          .from('appointments')
+          .select('group_id')
+          .eq('provider_payment_id', currentPaymentId)
+          .limit(1);
+        if (foundApts && foundApts.length > 0) {
+          groupId = foundApts[0].group_id;
+        }
+      }
+
+      if (!groupId) {
+        console.warn(`⚠️ [ASAAS WEBHOOK] No group_id found for payment identifier: ${currentPaymentId}`);
+        return res.status(200).json({
+          success: true,
+          message: 'Processed but no associated booking found',
+          event,
+          timestamp
+        });
+      }
+
+      console.log(`✍️ [ASAAS WEBHOOK] Confirming asaas booking group: ${groupId} (payment: ${currentPaymentId})`);
+
+      // Verify if any appointment in this group is already expired, cancelled, or rejected
+      const { data: existingApts, error: fetchAptsError } = await supabaseAdmin
+        .from('appointments')
+        .select('status')
+        .eq('group_id', groupId);
+
+      if (fetchAptsError) {
+        console.error(`❌ [ASAAS WEBHOOK] Error querying appointments for validation:`, fetchAptsError.message);
+        return res.status(500).json({ error: 'Database verification failed' });
+      }
+
+      if (!existingApts || existingApts.length === 0) {
+        console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for group: ${groupId}`);
+        return res.status(200).json({
+          success: true,
+          message: 'No appointments found',
+          event,
+          timestamp
+        });
+      }
+
+      const hasInvalidStatus = existingApts.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
+      if (hasInvalidStatus) {
+        console.warn(`⚠️ Pagamento recebido para reserva expirada. Necessária análise manual. (Grupo: ${groupId})`);
+        return res.status(200).json({
+          success: true,
+          message: 'Pagamento recebido para reserva expirada. Necessária análise manual.',
+          event,
+          timestamp
+        });
+      }
+
+      // Update appointments payload
+      const updatePayload = {
+        status: 'confirmed',
+        payment_status: 'paid',
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: updatedApts, error: updateErr } = await supabaseAdmin
+        .from('appointments')
+        .update(updatePayload)
+        .eq('group_id', groupId)
+        .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'reserved'])
+        .select('id, student_id');
+
+      if (updateErr) {
+        console.error(`❌ [ASAAS WEBHOOK] Error updating appointments for group ${groupId}:`, updateErr.message);
+        return res.status(500).json({ error: 'Database update failed' });
+      }
+
+      const rowsCount = updatedApts?.length || 0;
+      console.log(`✅ [ASAAS WEBHOOK] Successfully updated ${rowsCount} appointments to confirmed.`);
+
+      if (rowsCount > 0) {
+        const firstApt = updatedApts[0];
+        
+        // Log into transactions table
+        try {
+          await supabaseAdmin
+            .from('transactions')
+            .upsert({
+              payment_intent_id: currentPaymentId,
+              group_id: groupId,
+              amount: payload.payment?.value ? Math.round(payload.payment.value * 100) : 0,
+              status: 'completed',
+              updated_at: new Date().toISOString(),
+              metadata: { provider: 'asaas', pay_event: event }
+            }, { onConflict: 'payment_intent_id' });
+        } catch (txErr) {
+          console.error(`⚠️ [ASAAS WEBHOOK] Error logging transaction:`, txErr);
+        }
+
+        // Notify student about confirmation
+        const studentId = firstApt.student_id;
+        if (studentId) {
+          try {
+            await supabaseAdmin.from('notifications').upsert({
+              user_id: studentId,
+              title: 'Aula Confirmada!',
+              message: 'Seu pagamento via Asaas foi confirmado e sua aula está agendada com sucesso.',
+              type: 'booking_accepted',
+              metadata: { group_id: groupId, payment_intent_id: currentPaymentId },
+              idempotency_key: `booking_accepted:asaas:${groupId}`
+            }, { onConflict: 'idempotency_key' });
+          } catch (notifErr) {
+            console.error(`⚠️ [ASAAS WEBHOOK] Error sending notification:`, notifErr);
+          }
+        }
+      }
     } else {
-      console.log(`ℹ️ [ASAAS WEBHOOK] Event ${event} parsed but ignored (in accordance with Phase 2 rules).`);
+      console.log(`ℹ️ [ASAAS WEBHOOK] Event ${event} parsed but ignored.`);
     }
 
     // 4. Responder HTTP 200 quando o payload for válido.

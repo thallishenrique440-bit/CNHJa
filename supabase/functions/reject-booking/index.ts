@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id')
+      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id, student_id')
       .eq('id', appointment_id)
       .single()
 
@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id')
+        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id, student_id')
         .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
@@ -142,6 +142,99 @@ Deno.serve(async (req) => {
               idempotencyKey: `cancel_group_${appointment.group_id || appointment.id}`,
             }
           )
+        } else if (providerName === 'asaas') {
+          const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || '';
+          const asaasApiUrl = Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+
+          if (!asaasApiKey) {
+            console.error('❌ ASAAS_API_KEY is not defined. Cannot reject/refund Asaas payment.');
+            throw new Error('CONFIG_ERROR: Missing ASAAS_API_KEY');
+          }
+
+          const isPaid = appointment.payment_status === 'paid';
+
+          if (isPaid) {
+            console.log(`[Asaas Refund] Refunding payment ${paymentId} for group ${appointment.group_id}`);
+            const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
+            const refundRes = await fetch(refundUrl, {
+              method: 'POST',
+              headers: {
+                'access_token': asaasApiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                description: 'instructor_rejected'
+              })
+            });
+
+            if (!refundRes.ok) {
+              const errText = await refundRes.text();
+              console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
+              throw new Error(`Asaas refund failed: ${errText}`);
+            }
+
+            console.log(`✅ Asaas payment ${paymentId} refunded successfully.`);
+          } else {
+            console.log(`[Asaas Cancel] Cancelling pending payment ${paymentId} for group ${appointment.group_id}`);
+            const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
+            const cancelRes = await fetch(cancelUrl, {
+              method: 'DELETE',
+              headers: {
+                'access_token': asaasApiKey,
+                'Content-Type': 'application/json'
+              }
+            });
+
+            if (!cancelRes.ok) {
+              const errText = await cancelRes.text();
+              console.warn(`⚠️ Asaas pending payment cancel failed (may have been deleted already): ${errText}`);
+            } else {
+              console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
+            }
+          }
+
+          // Direct database update for Asaas flow since there is no cancel webhook handler
+          const { error: updateError } = await adminClient
+            .from('appointments')
+            .update({
+              status: 'cancelled',
+              payment_status: isPaid ? 'refunded' : 'released',
+              cancelled_reason: 'instructor_rejected',
+              updated_at: new Date().toISOString()
+            })
+            .eq('group_id', appointment.group_id);
+
+          if (updateError) {
+            console.error(`❌ Error updating database for rejected group ${appointment.group_id}:`, updateError.message);
+            throw updateError;
+          }
+
+          // Create notification for the student
+          if (appointment.student_id) {
+            try {
+              await adminClient.from('notifications').upsert({
+                user_id: appointment.student_id,
+                title: 'Aula cancelada',
+                message: 'Seu agendamento foi cancelado pelo instrutor e o valor correspondente foi reembolsado automaticamente.',
+                type: 'booking_rejected',
+                metadata: { group_id: appointment.group_id, payment_intent_id: paymentId },
+                idempotency_key: `booking_rejected:asaas:${appointment.group_id}`
+              }, { onConflict: 'idempotency_key' });
+            } catch (notifErr) {
+              console.error(`⚠️ Error creating notification for rejected booking:`, notifErr);
+            }
+          }
+
+          // Return immediately for Asaas
+          return new Response(
+            JSON.stringify({ 
+              message: 'Cancelamento e estorno processados com sucesso.', 
+              status: 'refunded',
+              count: appointmentsToReject.length,
+              appointment: { ...appointment, status: 'cancelled', payment_status: isPaid ? 'refunded' : 'released' }
+            }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
         } else {
           // Safe modular placeholder
           console.log(`Rejecting non-Stripe provider ${providerName} transaction ${paymentId}`);
@@ -149,7 +242,7 @@ Deno.serve(async (req) => {
       } catch (stripeError: any) {
         console.error('Payment Cancel Error:', stripeError)
 
-        // Robust Error Handling
+        // Robust Error Handling for Stripe
         if (stripeError.code === 'payment_intent_unexpected_state') {
           const retrievedIntent = await stripe.paymentIntents.retrieve(paymentId)
 

@@ -106,6 +106,10 @@ export interface AsaasPaymentPayload {
   creditCardHolderInfo: AsaasCreditCardHolderInfo;
   remoteIp?: string;
   split?: AsaasSplitRulePayload[];
+  callback?: {
+    successUrl: string;
+    autoRedirect: boolean;
+  };
 }
 
 export interface AsaasPaymentResponse {
@@ -348,6 +352,13 @@ export class AsaasProvider implements IPaymentProvider {
 
     if (dto.customerIp) {
       paymentPayload.remoteIp = dto.customerIp;
+    }
+
+    if (dto.returnUrl) {
+      paymentPayload.callback = {
+        successUrl: dto.returnUrl,
+        autoRedirect: true,
+      };
     }
 
     const response = await this.request<AsaasPaymentResponse>('/payments', {

@@ -118,6 +118,9 @@ export interface CreatePaymentDTO {
 
   // Split configurations
   splitRules?: PaymentSplitRule[];
+
+  // Optional return redirect URL after successful payment
+  returnUrl?: string;
 }
 
 export interface PaymentResponseDTO {
