@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
     // We fetch the appointment and its group_id to handle grouping
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, date, start_time, group_id')
+      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, date, start_time, group_id, student_id')
       .eq('id', appointment_id)
       .single()
 
@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
     if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, date, start_time, group_id')
+        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, date, start_time, group_id, student_id')
         .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
@@ -173,7 +173,69 @@ Deno.serve(async (req) => {
       }
     }
 
-    const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+    const providerName = appointment.provider_name || PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+
+    if (providerName === 'asaas') {
+      console.log(`[Asaas Approve] Direct DB update for group: ${appointment.group_id || appointment.id}`);
+      
+      const groupId = appointment.group_id;
+
+      let updateResult;
+      if (groupId) {
+        updateResult = await adminClient
+          .from('appointments')
+          .update({
+            status: 'confirmed',
+            payment_status: 'paid',
+            updated_at: new Date().toISOString()
+          })
+          .eq('group_id', groupId)
+          .in('status', ['pending_approval', 'pending', 'awaiting_payment'])
+          .select('id, student_id');
+      } else {
+        updateResult = await adminClient
+          .from('appointments')
+          .update({
+            status: 'confirmed',
+            payment_status: 'paid',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', appointment.id)
+          .in('status', ['pending_approval', 'pending', 'awaiting_payment'])
+          .select('id, student_id');
+      }
+
+      if (updateResult.error) {
+        console.error(`❌ Error confirming Asaas appointments:`, updateResult.error.message);
+        throw updateResult.error;
+      }
+
+      // Create notification for the student
+      if (appointment.student_id) {
+        try {
+          await adminClient.from('notifications').upsert({
+            user_id: appointment.student_id,
+            title: 'Aula Confirmada!',
+            message: 'Sua aula foi aceita pelo instrutor e está confirmada.',
+            type: 'booking_accepted',
+            metadata: { group_id: appointment.group_id, payment_intent_id: paymentId },
+            idempotency_key: `booking_accepted:asaas:${appointment.group_id || appointment.id}`
+          }, { onConflict: 'idempotency_key' });
+        } catch (notifErr) {
+          console.error(`⚠️ Error creating confirmation notification:`, notifErr);
+        }
+      }
+
+      return new Response(
+        JSON.stringify({ 
+          message: 'Aula confirmada com sucesso.', 
+          status: 'confirmed',
+          count: appointmentsToApprove.length,
+          appointment: { ...appointment, status: 'confirmed', payment_status: 'paid' }
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     console.log(JSON.stringify({
       event: "approve_group_start",
