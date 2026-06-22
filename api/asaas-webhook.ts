@@ -173,10 +173,11 @@ export default async function handler(req: Request, res: Response) {
         });
       }
 
-      // Update appointments payload
+      // Update appointments payload (pending approval instead of directly confirmed)
       const updatePayload = {
-        status: 'confirmed',
+        status: 'pending_approval',
         payment_status: 'paid',
+        expires_at: null,
         updated_at: new Date().toISOString()
       };
 
@@ -185,7 +186,7 @@ export default async function handler(req: Request, res: Response) {
         .update(updatePayload)
         .eq('group_id', groupId)
         .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'reserved'])
-        .select('id, student_id');
+        .select('id, student_id, instructor_id');
 
       if (updateErr) {
         console.error(`❌ [ASAAS WEBHOOK] Error updating appointments for group ${groupId}:`, updateErr.message);
@@ -193,7 +194,7 @@ export default async function handler(req: Request, res: Response) {
       }
 
       const rowsCount = updatedApts?.length || 0;
-      console.log(`✅ [ASAAS WEBHOOK] Successfully updated ${rowsCount} appointments to confirmed.`);
+      console.log(`✅ [ASAAS WEBHOOK] Successfully updated ${rowsCount} appointments to pending_approval.`);
 
       if (rowsCount > 0) {
         const firstApt = updatedApts[0];
@@ -214,17 +215,17 @@ export default async function handler(req: Request, res: Response) {
           console.error(`⚠️ [ASAAS WEBHOOK] Error logging transaction:`, txErr);
         }
 
-        // Notify student about confirmation
-        const studentId = firstApt.student_id;
-        if (studentId) {
+        // Notify instructor about new booking request pending approval (Idempotent)
+        const instructorId = firstApt.instructor_id;
+        if (instructorId) {
           try {
             await supabaseAdmin.from('notifications').upsert({
-              user_id: studentId,
-              title: 'Aula Confirmada!',
-              message: 'Seu pagamento via Asaas foi confirmado e sua aula está agendada com sucesso.',
-              type: 'booking_accepted',
+              user_id: instructorId,
+              title: 'Nova Solicitação de Aula',
+              message: 'Novo pagamento recebido. Aula aguardando aprovação.',
+              type: 'booking_request',
               metadata: { group_id: groupId, payment_intent_id: currentPaymentId },
-              idempotency_key: `booking_accepted:asaas:${groupId}`
+              idempotency_key: `booking_request:${groupId}`
             }, { onConflict: 'idempotency_key' });
           } catch (notifErr) {
             console.error(`⚠️ [ASAAS WEBHOOK] Error sending notification:`, notifErr);

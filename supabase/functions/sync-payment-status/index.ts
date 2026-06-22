@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
     // These are the ones that might be stuck if the webhook failed or if status is desynced.
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, group_id, status, provider_name, student_id')
+      .select('id, payment_intent_id, group_id, status, provider_name, student_id, instructor_id')
       .in('status', ['reserved', 'pending_approval', 'awaiting_payment'])
       .not('payment_intent_id', 'is', null)
 
@@ -98,20 +98,22 @@ Deno.serve(async (req) => {
           if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
             console.log(`✅ Repairing Group ${groupId}: Asaas is paid (${asaasStatus}).`);
             updates = {
-              status: 'confirmed',
-              payment_status: 'paid'
+              status: 'pending_approval',
+              payment_status: 'paid',
+              expires_at: null
             };
             action = 'repaired_succeeded';
 
-            // Notify Student (Idempotent)
-            if (student_id) {
+            // Notify Instructor instead of Student (Idempotent)
+            const instructor_id = firstApt.instructor_id;
+            if (instructor_id) {
                 await supabaseAdmin.from("notifications").upsert({
-                    user_id: student_id,
-                    title: "Aula Confirmada! (Sincronizada)",
-                    message: "Seu pagamento via Asaas foi confirmado e sua aula está agendada.",
-                    type: "booking_accepted",
+                    user_id: instructor_id,
+                    title: "Nova Solicitação de Aula (Sincronizada)",
+                    message: "Novo pagamento recebido. Aula aguardando aprovação.",
+                    type: "booking_request",
                     metadata: { group_id: groupId, payment_intent_id },
-                    idempotency_key: `booking_accepted:asaas:${groupId}`
+                    idempotency_key: `booking_request:${groupId}`
                 }, { onConflict: 'idempotency_key' });
             }
           } else {

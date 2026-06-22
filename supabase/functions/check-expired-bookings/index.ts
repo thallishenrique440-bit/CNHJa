@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
 
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, status, group_id, provider_name, student_id')
+      .select('id, payment_intent_id, status, group_id, provider_name, student_id, instructor_id')
       .in('status', ['pending', 'pending_approval', 'awaiting_payment'])
       .lt('expires_at', now)
 
@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
 
     // 2. Process each booking
     const results = await Promise.allSettled(expiredBookings.map(async (booking) => {
-      const { id, payment_intent_id, group_id, provider_name, status: currentStatus, student_id } = booking
+      const { id, payment_intent_id, group_id, provider_name, status: currentStatus, student_id, instructor_id } = booking
 
       if (provider_name === 'asaas') {
         if (!payment_intent_id) {
@@ -125,14 +125,15 @@ Deno.serve(async (req) => {
           const asaasStatus = paymentData?.status?.toUpperCase();
 
           if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
-            console.log(`🚨 Asaas payment ${payment_intent_id} is already PAID (${asaasStatus}). We will CONFIRM booking ${id} instead of expiring!`);
+            console.log(`🚨 Asaas payment ${payment_intent_id} is already PAID (${asaasStatus}). We will move booking ${id} to pending_approval instead of expiring!`);
             
-            // Auto repair to confirmed
+            // Auto repair to pending_approval
             const { error: updateAptError } = await supabaseAdmin
               .from('appointments')
               .update({
-                status: 'confirmed',
+                status: 'pending_approval',
                 payment_status: 'paid',
+                expires_at: null,
                 updated_at: new Date().toISOString()
               })
               .eq('id', id);
@@ -155,16 +156,20 @@ Deno.serve(async (req) => {
               console.error(`⚠️ Error logging transaction for recovered booking ${id}:`, txErr);
             }
 
-            // Student Notification
-            if (student_id) {
-              await supabaseAdmin.from("notifications").upsert({
-                  user_id: student_id,
-                  title: "Aula Confirmada!",
-                  message: "Seu pagamento foi confirmado e sua aula está agendada.",
-                  type: "booking_accepted",
-                  metadata: { group_id: group_id, payment_intent_id },
-                  idempotency_key: `booking_accepted:asaas:${group_id}`
-              }, { onConflict: 'idempotency_key' });
+            // Notify instructor about booking request pending approval (Idempotent)
+            if (instructor_id) {
+              try {
+                await supabaseAdmin.from('notifications').upsert({
+                  user_id: instructor_id,
+                  title: 'Nova Solicitação de Aula (Recuperada)',
+                  message: 'Novo pagamento recebido via Asaas. Aula aguardando aprovação.',
+                  type: 'booking_request',
+                  metadata: { group_id: group_id || id, payment_intent_id },
+                  idempotency_key: `booking_request:${group_id || id}`
+                }, { onConflict: 'idempotency_key' });
+              } catch (notifErr) {
+                console.error(`⚠️ Error sending notification to instructor:`, notifErr);
+              }
             }
 
             return { id, status: 'recovered_as_paid' };
