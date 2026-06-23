@@ -116,7 +116,7 @@ Deno.serve(async (req) => {
     }
 
     const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
-    const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+    const providerName = appointment.provider_name || PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
 
     console.log(JSON.stringify({
       event: "reject_group_start",

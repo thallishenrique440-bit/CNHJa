@@ -145,7 +145,7 @@ Deno.serve(async (req) => {
         }));
         
         // Resolve provider dynamically
-        const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+        const providerName = appointment.provider_name || PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
 
         // 1. Cancel PaymentIntent with metadata for reason
         try {
