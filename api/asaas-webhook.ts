@@ -186,7 +186,7 @@ export default async function handler(req: Request, res: Response) {
         .update(updatePayload)
         .eq('group_id', groupId)
         .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'reserved'])
-        .select('id, student_id, instructor_id');
+        .select('id, student_id, instructor_id, price');
 
       if (updateErr) {
         console.error(`❌ [ASAAS WEBHOOK] Error updating appointments for group ${groupId}:`, updateErr.message);
@@ -201,16 +201,49 @@ export default async function handler(req: Request, res: Response) {
         
         // Log into transactions table
         try {
-          await supabaseAdmin
-            .from('transactions')
-            .upsert({
-              payment_intent_id: currentPaymentId,
-              group_id: groupId,
-              amount: payload.payment?.value ? Math.round(payload.payment.value * 100) : 0,
-              status: 'completed',
-              updated_at: new Date().toISOString(),
-              metadata: { provider: 'asaas', pay_event: event }
-            }, { onConflict: 'payment_intent_id' });
+          for (const apt of updatedApts) {
+            // Anti-Downgrade Protection
+            const { data: existingTx } = await supabaseAdmin
+              .from('transactions')
+              .select('status')
+              .eq('appointment_id', apt.id)
+              .eq('type', 'lesson_payment')
+              .maybeSingle();
+
+            if (existingTx?.status === 'completed') {
+              console.log(`ℹ️ [ASAAS WEBHOOK] Transaction for appointment ${apt.id} is already completed. Skipping.`);
+              continue;
+            }
+
+            const gross_amount = apt.price || 0;
+            const platform_fee = Math.floor(gross_amount * 0.1);
+            const net_amount = gross_amount - platform_fee;
+
+            const { error: txErr } = await supabaseAdmin
+              .from('transactions')
+              .upsert({
+                appointment_id: apt.id,
+                student_id: apt.student_id,
+                instructor_id: apt.instructor_id,
+                type: 'lesson_payment',
+                amount: gross_amount,
+                gross_amount: gross_amount,
+                platform_fee: platform_fee,
+                net_amount: net_amount,
+                status: 'pending',
+                provider_name: 'asaas',
+                provider_payment_id: currentPaymentId,
+                event_date: new Date().toISOString(),
+                description: 'Pagamento de Aula via Asaas',
+                metadata: { provider: 'asaas', pay_event: event }
+              }, { onConflict: 'appointment_id,type' });
+
+            if (txErr) {
+              console.error(`❌ [ASAAS WEBHOOK] Error inserting transaction for appointment ${apt.id}:`, txErr.message);
+            } else {
+              console.log(`✅ [ASAAS WEBHOOK] Successfully logged pending transaction for appointment ${apt.id}`);
+            }
+          }
         } catch (txErr) {
           console.error(`⚠️ [ASAAS WEBHOOK] Error logging transaction:`, txErr);
         }

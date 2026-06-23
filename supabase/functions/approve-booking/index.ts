@@ -210,6 +210,24 @@ Deno.serve(async (req) => {
         throw updateResult.error;
       }
 
+      // Update the transaction status from pending to completed
+      try {
+        const { error: updateTxErr } = await adminClient
+          .from('transactions')
+          .update({ status: 'completed' })
+          .eq('provider_payment_id', paymentId)
+          .eq('type', 'lesson_payment')
+          .eq('provider_name', 'asaas');
+
+        if (updateTxErr) {
+          console.error(`❌ Error completing Asaas transactions for paymentId ${paymentId}:`, updateTxErr.message);
+        } else {
+          console.log(`✅ [Asaas Approve] Successfully completed pending transactions for paymentId: ${paymentId}`);
+        }
+      } catch (txErr) {
+        console.error(`⚠️ [Asaas Approve] Unexpected error updating transactions:`, txErr);
+      }
+
       // Create notification for the student
       if (appointment.student_id) {
         try {

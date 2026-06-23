@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
     // 3. Check (DB): Validate Ownership & Status
     const { data: appointment, error: fetchError } = await authClient
       .from('appointments')
-      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id, student_id')
+      .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id, student_id, price')
       .eq('id', appointment_id)
       .single()
 
@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     if (appointment.group_id) {
       const { data: groupAppointments, error: groupError } = await adminClient
         .from('appointments')
-        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id, student_id')
+        .select('id, status, instructor_id, payment_intent_id, provider_payment_id, provider_name, payment_status, cancelled_reason, group_id, student_id, price')
         .eq('group_id', appointment.group_id);
       
       if (groupError) throw new Error(`Error fetching group: ${groupError.message}`);
@@ -207,6 +207,58 @@ Deno.serve(async (req) => {
           if (updateError) {
             console.error(`❌ Error updating database for rejected group ${appointment.group_id}:`, updateError.message);
             throw updateError;
+          }
+
+          if (isPaid) {
+            // Update the original lesson_payment transaction to 'failed'
+            try {
+              const { error: failTxErr } = await adminClient
+                .from('transactions')
+                .update({ status: 'failed' })
+                .eq('provider_payment_id', paymentId)
+                .eq('type', 'lesson_payment')
+                .eq('provider_name', 'asaas');
+
+              if (failTxErr) {
+                console.error(`❌ [Asaas Reject] Error marking original transactions as failed:`, failTxErr.message);
+              } else {
+                console.log(`✅ [Asaas Reject] Marked original lesson_payment transactions as failed.`);
+              }
+
+              // Create refund transactions with negative values
+              for (const apt of appointmentsToReject) {
+                const gross_amount = apt.price || 0;
+                const platform_fee = Math.floor(gross_amount * 0.1);
+                const net_amount = gross_amount - platform_fee;
+
+                const { error: refundTxErr } = await adminClient
+                  .from('transactions')
+                  .upsert({
+                    appointment_id: apt.id,
+                    student_id: apt.student_id,
+                    instructor_id: apt.instructor_id,
+                    type: 'refund',
+                    amount: -gross_amount,
+                    gross_amount: -gross_amount,
+                    platform_fee: -platform_fee,
+                    net_amount: -net_amount,
+                    status: 'completed',
+                    provider_name: 'asaas',
+                    provider_payment_id: paymentId,
+                    event_date: new Date().toISOString(),
+                    description: 'Estorno de Aula via Asaas',
+                    metadata: { provider: 'asaas', note: 'instructor_rejected' }
+                  }, { onConflict: 'appointment_id,type' });
+
+                if (refundTxErr) {
+                  console.error(`❌ [Asaas Reject] Error creating refund transaction for appointment ${apt.id}:`, refundTxErr.message);
+                } else {
+                  console.log(`✅ [Asaas Reject] Logged refund transaction for appointment ${apt.id}`);
+                }
+              }
+            } catch (txErr) {
+              console.error(`⚠️ [Asaas Reject] Unexpected error processing financial records:`, txErr);
+            }
           }
 
           // Create notification for the student
