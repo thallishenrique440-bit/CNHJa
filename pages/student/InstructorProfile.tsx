@@ -147,6 +147,45 @@ export const StudentInstructorProfile: React.FC = () => {
   const [selectedInstallmentCount, setSelectedInstallmentCount] = useState<number>(1);
   const [paymentIgnoreTooClose, setPaymentIgnoreTooClose] = useState(false);
 
+  // platform_financial_settings State
+  const [financialSettings, setFinancialSettings] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('platform_financial_settings')
+          .select('*')
+          .limit(1)
+          .maybeSingle();
+        if (data) {
+          setFinancialSettings(data);
+        }
+      } catch (err) {
+        console.error('Error fetching financial settings:', err);
+      }
+    };
+    fetchSettings();
+  }, []);
+
+  const activeSettings = useMemo(() => {
+    return financialSettings || {
+      pix_flat_fee: 149,
+      credit_1x_fee: 3.99,
+      credit_2x_fee: 5.49,
+      credit_3x_fee: 6.49,
+      credit_4x_fee: 7.49,
+      credit_5x_fee: 8.49,
+      credit_6x_fee: 9.49,
+      credit_7x_fee: 10.49,
+      credit_8x_fee: 11.49,
+      credit_9x_fee: 12.49,
+      credit_10x_fee: 13.49,
+      credit_11x_fee: 14.49,
+      credit_12x_fee: 15.49
+    };
+  }, [financialSettings]);
+
   const handleSaveCpfAndPhone = async () => {
     const cleanCpf = studentCpf.replace(/\D/g, '');
     const cleanPhone = studentPhone.replace(/\D/g, '');
@@ -900,6 +939,21 @@ export const StudentInstructorProfile: React.FC = () => {
   }, [selectedSlots, instructor, selectedLessonCategory]);
 
   const totalPrice = priceInfo.total;
+
+  const feeInfo = useMemo(() => {
+    let fee = 0;
+    if (selectedPaymentMethod === 'PIX') {
+      fee = activeSettings.pix_flat_fee;
+    } else if (selectedPaymentMethod === 'CREDIT_CARD') {
+      const key = `credit_${selectedInstallmentCount}x_fee`;
+      const percentage = activeSettings[key] !== undefined ? Number(activeSettings[key]) : 3.99;
+      fee = Math.round(totalPrice * (percentage / 100));
+    }
+    return {
+      fee,
+      totalWithFee: totalPrice + fee
+    };
+  }, [totalPrice, selectedPaymentMethod, selectedInstallmentCount, activeSettings]);
 
 
   const handleBook = async (ignoreTooClose = false) => {
@@ -2131,10 +2185,14 @@ export const StudentInstructorProfile: React.FC = () => {
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all cursor-pointer appearance-none text-sm font-medium"
                 >
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((count) => {
-                    const installmentValue = totalPrice / count;
+                    const key = `credit_${count}x_fee`;
+                    const percentage = activeSettings[key] !== undefined ? Number(activeSettings[key]) : 3.99;
+                    const fee = Math.round(totalPrice * (percentage / 100));
+                    const totalWithFeeForOption = totalPrice + fee;
+                    const installmentValue = totalWithFeeForOption / count;
                     return (
                       <option key={count} value={count}>
-                        {count}x de {formatCurrency(installmentValue)} {count === 1 ? '(Sem juros)' : ''}
+                        {count}x de {formatCurrency(installmentValue)} (com taxa de {percentage}%)
                       </option>
                     );
                   })}
@@ -2154,14 +2212,22 @@ export const StudentInstructorProfile: React.FC = () => {
               <span>Quantidade de aulas:</span>
               <span className="font-semibold text-gray-700">{selectedSlots.length} aula(s)</span>
             </div>
-            <div className="flex justify-between text-sm pt-2 border-t border-gray-100">
-              <span className="font-medium text-gray-900">Valor Total:</span>
-              <span className="font-bold text-gray-900">{formatCurrency(totalPrice)}</span>
+            <div className="flex justify-between text-xs text-gray-500 pt-1 border-t border-gray-100 font-medium">
+              <span>Valor das aulas:</span>
+              <span>{formatCurrency(totalPrice)}</span>
             </div>
-            {selectedPaymentMethod === 'CREDIT_CARD' && selectedInstallmentCount > 1 && (
-              <div className="flex justify-between text-xs text-blue-600 font-medium">
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>Taxa de processamento ({selectedPaymentMethod === 'PIX' ? 'PIX' : `Cartão ${selectedInstallmentCount}x`}):</span>
+              <span className="font-semibold text-gray-700">{formatCurrency(feeInfo.fee)}</span>
+            </div>
+            <div className="flex justify-between text-sm pt-2 border-t border-gray-200">
+              <span className="font-bold text-gray-900">Total a pagar:</span>
+              <span className="font-extrabold text-blue-700 text-base">{formatCurrency(feeInfo.totalWithFee)}</span>
+            </div>
+            {selectedPaymentMethod === 'CREDIT_CARD' && (
+              <div className="flex justify-between text-xs text-blue-600 font-medium pt-1">
                 <span>Plano de parcelamento:</span>
-                <span>{selectedInstallmentCount}x de {formatCurrency(totalPrice / selectedInstallmentCount)}</span>
+                <span>{selectedInstallmentCount}x de {formatCurrency(feeInfo.totalWithFee / selectedInstallmentCount)}</span>
               </div>
             )}
           </div>

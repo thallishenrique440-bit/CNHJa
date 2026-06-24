@@ -125,6 +125,7 @@ export interface CreatePaymentDTO {
   // Modern payment parameters for Asaas (PIX + Installments support)
   billingType?: 'PIX' | 'CREDIT_CARD';
   installmentCount?: number;
+  metadata?: Record<string, any>;
 }
 
 export interface PaymentResponseDTO {

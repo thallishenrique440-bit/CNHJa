@@ -93,6 +93,53 @@ providerName=${providerName}`);
     console.log(`[PAYMENT_DIAGNOSTIC]
 providerInstance=${paymentProvider.getProviderName()}`);
 
+    // FASE 2 — LEITURA DAS TAXAS
+    let settings = {
+      pix_flat_fee: 149,
+      credit_1x_fee: 3.99,
+      credit_2x_fee: 5.49,
+      credit_3x_fee: 6.49,
+      credit_4x_fee: 7.49,
+      credit_5x_fee: 8.49,
+      credit_6x_fee: 9.49,
+      credit_7x_fee: 10.49,
+      credit_8x_fee: 11.49,
+      credit_9x_fee: 12.49,
+      credit_10x_fee: 13.49,
+      credit_11x_fee: 14.49,
+      credit_12x_fee: 15.49
+    };
+
+    try {
+      const { data: dbSettings, error: dbSettingsError } = await supabase
+        .from('platform_financial_settings')
+        .select('*')
+        .limit(1)
+        .maybeSingle();
+      
+      if (dbSettingsError) {
+        console.error('[ERROR] Failed to fetch platform_financial_settings:', dbSettingsError);
+      } else if (dbSettings) {
+        settings = {
+          pix_flat_fee: dbSettings.pix_flat_fee,
+          credit_1x_fee: Number(dbSettings.credit_1x_fee),
+          credit_2x_fee: Number(dbSettings.credit_2x_fee),
+          credit_3x_fee: Number(dbSettings.credit_3x_fee),
+          credit_4x_fee: Number(dbSettings.credit_4x_fee),
+          credit_5x_fee: Number(dbSettings.credit_5x_fee),
+          credit_6x_fee: Number(dbSettings.credit_6x_fee),
+          credit_7x_fee: Number(dbSettings.credit_7x_fee),
+          credit_8x_fee: Number(dbSettings.credit_8x_fee),
+          credit_9x_fee: Number(dbSettings.credit_9x_fee),
+          credit_10x_fee: Number(dbSettings.credit_10x_fee),
+          credit_11x_fee: Number(dbSettings.credit_11x_fee),
+          credit_12x_fee: Number(dbSettings.credit_12x_fee),
+        };
+      }
+    } catch (err) {
+      console.error('[ERROR] Exception fetching platform_financial_settings:', err);
+    }
+
     // Validate gateway setup for selected provider
     if (providerName === 'stripe' && !instructor?.stripe_account_id) {
       return res.status(400).json({ error: 'Instructor not ready for Stripe payments' });
@@ -293,6 +340,21 @@ providerInstance=${paymentProvider.getProviderName()}`);
       discounts
     );
 
+    // FASE 3 — CÁLCULO DA TAXA & FASE 4 — TOTAL COBRADO
+    let processingFee = 0;
+    if (providerName === 'asaas') {
+      if (paymentMethod === 'PIX') {
+        processingFee = settings.pix_flat_fee;
+      } else if (paymentMethod === 'CREDIT_CARD') {
+        const instCount = installmentCount || 1;
+        const feeKey = `credit_${instCount}x_fee` as keyof typeof settings;
+        const percentage = settings[feeKey] !== undefined ? Number(settings[feeKey]) : 3.99;
+        processingFee = Math.round(finalPrice * (percentage / 100));
+      }
+    }
+
+    const totalPriceWithFee = finalPrice + processingFee;
+
     // Create group_id
     const groupId = uuidv4();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
@@ -400,7 +462,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
 
     try {
       paymentResponse = await paymentProvider.createPayment({
-        amount: finalPrice,
+        amount: totalPriceWithFee,
         description: `Agendamento - Código da reserva ${groupId}`,
         customerProviderId: customerProviderId,
         externalReferenceId: groupId,
@@ -420,7 +482,14 @@ providerInstance=${paymentProvider.getProviderName()}`);
             walletId: providerName === 'asaas' ? (instructor.provider_wallet_id || undefined) : undefined,
             fixedValue: finalPrice - applicationFeeAmount,
           }
-        ]
+        ],
+        metadata: {
+          lesson_price: finalPrice,
+          processing_fee: processingFee,
+          gateway: 'asaas',
+          installments: installmentCount || 1,
+          payment_method: paymentMethod === 'CREDIT_CARD' ? 'credit_card' : 'pix'
+        }
       });
 
       console.log(`[PAYMENT_DIAGNOSTIC]
@@ -462,6 +531,8 @@ groupId=${groupId}`);
       clientSecret: paymentResponse.clientSecret,
       groupId,
       totalPrice: finalPrice,
+      totalPriceWithFee,
+      processingFee,
       discountAmount,
       invoiceUrl: providerName === 'asaas' ? (paymentResponse.invoiceUrl || null) : undefined
     });

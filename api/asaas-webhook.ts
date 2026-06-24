@@ -235,7 +235,11 @@ export default async function handler(req: Request, res: Response) {
                 provider_payment_id: currentPaymentId,
                 event_date: new Date().toISOString(),
                 description: 'Pagamento de Aula via Asaas',
-                metadata: { provider: 'asaas', pay_event: event }
+                metadata: { 
+                  provider: 'asaas', 
+                  pay_event: event,
+                  ...(payload?.payment?.metadata || {})
+                }
               }, { onConflict: 'appointment_id,type' });
 
             if (txErr) {

@@ -25,18 +25,19 @@ async function inspectSchema() {
     console.log('Tabela profiles vazia.');
   }
 
-  console.log('\n--- INSPECIONANDO COLUNAS DE INSTRUCTORS ---');
-  const { data: instructorData, error: instructorError } = await supabase
-    .from('instructors')
+  console.log('\n--- INSPECIONANDO COLUNAS DE PLATFORM_FINANCIAL_SETTINGS ---');
+  const { data: settingsData, error: settingsError } = await supabase
+    .from('platform_financial_settings')
     .select('*')
     .limit(1);
 
-  if (instructorError) {
-    console.error('Erro ao ler instructors:', instructorError.message);
-  } else if (instructorData && instructorData.length > 0) {
-    console.log('Colunas de instructors:', Object.keys(instructorData[0]));
+  if (settingsError) {
+    console.error('Erro ao ler platform_financial_settings:', settingsError.message);
+  } else if (settingsData && settingsData.length > 0) {
+    console.log('Colunas de platform_financial_settings:', Object.keys(settingsData[0]));
+    console.log('Registro encontrado:', settingsData[0]);
   } else {
-    console.log('Tabela instructors vazia.');
+    console.log('Tabela platform_financial_settings vazia.');
   }
 }
 

@@ -112,6 +112,7 @@ export interface AsaasPaymentPayload {
     successUrl: string;
     autoRedirect: boolean;
   };
+  metadata?: Record<string, any>;
 }
 
 export interface AsaasPaymentResponse {
@@ -372,6 +373,10 @@ export class AsaasProvider implements IPaymentProvider {
         successUrl: dto.returnUrl,
         autoRedirect: true,
       };
+    }
+
+    if (dto.metadata) {
+      paymentPayload.metadata = dto.metadata;
     }
 
     const response = await this.request<AsaasPaymentResponse>('/payments', {
