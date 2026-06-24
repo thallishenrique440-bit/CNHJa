@@ -44,7 +44,7 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { lessons, instructorId, category, ignoreTooClose } = req.body;
+  const { lessons, instructorId, category, ignoreTooClose, paymentMethod, installmentCount } = req.body;
   const secureStudentId = user.id;
 
   if (!lessons || !lessons.length) {
@@ -412,6 +412,8 @@ providerInstance=${paymentProvider.getProviderName()}`);
           city: 'Sao Paulo',
           state: 'SP',
         },
+        billingType: paymentMethod, // e.g., 'PIX' or 'CREDIT_CARD'
+        installmentCount: installmentCount, // e.g., 1 to 12
         splitRules: [
           {
             accountId: providerName === 'stripe' ? (instructor.stripe_account_id || undefined) : undefined,

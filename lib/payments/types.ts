@@ -121,6 +121,10 @@ export interface CreatePaymentDTO {
 
   // Optional return redirect URL after successful payment
   returnUrl?: string;
+
+  // Modern payment parameters for Asaas (PIX + Installments support)
+  billingType?: 'PIX' | 'CREDIT_CARD';
+  installmentCount?: number;
 }
 
 export interface PaymentResponseDTO {

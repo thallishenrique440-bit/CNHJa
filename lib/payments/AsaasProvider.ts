@@ -96,14 +96,16 @@ export interface AsaasSplitRulePayload {
 
 export interface AsaasPaymentPayload {
   customer: string;
-  billingType: 'CREDIT_CARD';
-  value: number;
+  billingType: 'CREDIT_CARD' | 'PIX';
+  value?: number;
+  totalValue?: number;
+  installmentCount?: number;
   dueDate: string;
   description: string;
   externalReference: string;
   creditCardToken?: string;
   creditCard?: AsaasCreditCard;
-  creditCardHolderInfo: AsaasCreditCardHolderInfo;
+  creditCardHolderInfo?: AsaasCreditCardHolderInfo;
   remoteIp?: string;
   split?: AsaasSplitRulePayload[];
   callback?: {
@@ -292,7 +294,7 @@ export class AsaasProvider implements IPaymentProvider {
   }
 
   /**
-   * Creates a credit card payment on Asaas (supports client-side tokens or fallback details, plus splits).
+   * Creates a credit card or PIX payment on Asaas (supports client-side tokens, installments, plus splits).
    */
   async createPayment(dto: CreatePaymentDTO): Promise<PaymentResponseDTO> {
     // To ensure accurate creditCardHolderInfo without asking for redundant inputs, 
@@ -313,24 +315,35 @@ export class AsaasProvider implements IPaymentProvider {
 
     const paymentPayload: AsaasPaymentPayload = {
       customer: dto.customerProviderId,
-      billingType: 'CREDIT_CARD',
-      value: dto.amount / 100, // Asaas accepts BRL decimals instead of raw cents
+      billingType: dto.billingType || 'CREDIT_CARD',
       dueDate: todayStr,
       description: dto.description,
       externalReference: dto.externalReferenceId,
-      creditCardHolderInfo,
     };
 
-    if (dto.cardToken) {
-      paymentPayload.creditCardToken = dto.cardToken;
-    } else if (dto.cardDetails) {
-      paymentPayload.creditCard = {
-        holderName: dto.cardDetails.holderName,
-        number: dto.cardDetails.number,
-        expiryMonth: dto.cardDetails.expiryMonth,
-        expiryYear: dto.cardDetails.expiryYear,
-        ccv: dto.cardDetails.ccv,
-      };
+    if (paymentPayload.billingType === 'CREDIT_CARD') {
+      paymentPayload.creditCardHolderInfo = creditCardHolderInfo;
+      if (dto.installmentCount && dto.installmentCount > 1) {
+        paymentPayload.installmentCount = dto.installmentCount;
+        paymentPayload.totalValue = dto.amount / 100;
+      } else {
+        paymentPayload.value = dto.amount / 100;
+      }
+
+      if (dto.cardToken) {
+        paymentPayload.creditCardToken = dto.cardToken;
+      } else if (dto.cardDetails) {
+        paymentPayload.creditCard = {
+          holderName: dto.cardDetails.holderName,
+          number: dto.cardDetails.number,
+          expiryMonth: dto.cardDetails.expiryMonth,
+          expiryYear: dto.cardDetails.expiryYear,
+          ccv: dto.cardDetails.ccv,
+        };
+      }
+    } else {
+      // For PIX, just use the flat value field
+      paymentPayload.value = dto.amount / 100;
     }
 
     // Apply strict platform splits if configured in payload

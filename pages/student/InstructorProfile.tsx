@@ -141,6 +141,12 @@ export const StudentInstructorProfile: React.FC = () => {
   const [isSavingCpf, setIsSavingCpf] = useState(false);
   const [cpfModalIgnoreTooClose, setCpfModalIgnoreTooClose] = useState(false);
 
+  // Payment Selection States (PIX + Installments)
+  const [isPaymentMethodModalOpen, setIsPaymentMethodModalOpen] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'PIX' | 'CREDIT_CARD'>('CREDIT_CARD');
+  const [selectedInstallmentCount, setSelectedInstallmentCount] = useState<number>(1);
+  const [paymentIgnoreTooClose, setPaymentIgnoreTooClose] = useState(false);
+
   const handleSaveCpfAndPhone = async () => {
     const cleanCpf = studentCpf.replace(/\D/g, '');
     const cleanPhone = studentPhone.replace(/\D/g, '');
@@ -950,24 +956,49 @@ export const StudentInstructorProfile: React.FC = () => {
          return;
       }
 
+      // If they have CPF and Phone, open Payment Method Selection Modal!
+      setPaymentIgnoreTooClose(ignoreTooClose);
+      setIsPaymentMethodModalOpen(true);
+      setIsProcessingPayment(false);
+    } catch (error: any) {
+      console.error("Booking Check Error:", error);
+      setPaymentErrorMessage(error.message || "Erro de conexão ao verificar agendamento.");
+      setIsProcessingPayment(false);
+      setIsPaymentErrorOpen(true);
+    }
+  };
+
+  const executeActualBooking = async (method: 'PIX' | 'CREDIT_CARD', installments: number) => {
+    setIsProcessingPayment(true);
+    setIsPaymentMethodModalOpen(false);
+
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError || !sessionData?.session) {
+         addToast("Sua sessão expirou. Faça login novamente.", 'error');
+         navigate('/login');
+         return; 
+      }
+
+      const token = sessionData.session.access_token;
+      const studentId = sessionData.session.user.id;
+
       // 3. Montar Payload
-      // Calculate price per slot for the payload (backend will recalculate but needs base info)
-      // Actually backend needs lessons array with date, startTime, endTime, price
-      
       const lessons = selectedSlots.map(slotKey => {
          const [dateStr, timeStr] = slotKey.split('|');
          const isNight = parseInt(timeStr.split(':')[0]) >= 18;
          
          let price = 0;
          if (selectedLessonCategory) {
-            const catPrice = instructor.categoryPrices.find(c => c.category === selectedLessonCategory);
+            const catPrice = instructor!.categoryPrices.find(c => c.category === selectedLessonCategory);
             if (catPrice) {
-              price = (isNight && instructor.hasNightLessons) ? catPrice.night_price : catPrice.day_price;
+              price = (isNight && instructor!.hasNightLessons) ? catPrice.night_price : catPrice.day_price;
             } else {
-              price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
+              price = (isNight && instructor!.hasNightLessons) ? instructor!.priceNight : instructor!.priceDay;
             }
          } else {
-             price = (isNight && instructor.hasNightLessons) ? instructor.priceNight : instructor.priceDay;
+             price = (isNight && instructor!.hasNightLessons) ? instructor!.priceNight : instructor!.priceDay;
          }
 
          // Calculate end time (50 mins later)
@@ -985,11 +1016,13 @@ export const StudentInstructorProfile: React.FC = () => {
       });
 
       const payload = {
-        instructorId: instructor.id,
+        instructorId: instructor!.id,
         studentId: studentId,
         category: selectedLessonCategory,
         lessons: lessons,
-        ignoreTooClose: ignoreTooClose
+        ignoreTooClose: paymentIgnoreTooClose,
+        paymentMethod: method,
+        installmentCount: installments
       };
 
       // 4. Call API Route
@@ -1019,7 +1052,7 @@ export const StudentInstructorProfile: React.FC = () => {
             state: { 
                clientSecret: data.clientSecret, 
                invoiceUrl: data.invoiceUrl,
-               purchaseId: data.groupId // Using groupId as purchaseId for compatibility
+               purchaseId: data.groupId
             } 
          });
       } else {
@@ -1044,7 +1077,7 @@ export const StudentInstructorProfile: React.FC = () => {
       const { data: refreshedInstructorData } = await supabase
          .from('appointments')
          .select('start_time, status, student_id')
-         .eq('instructor_id', instructor.id)
+         .eq('instructor_id', instructor!.id)
          .eq('date', dateKey)
          .not('status', 'in', '("cancelled","failed","rejected","expired")');
          
@@ -1066,7 +1099,7 @@ export const StudentInstructorProfile: React.FC = () => {
       }
       if (refreshedStudentData) {
           refreshedStudentData.forEach(apt => {
-              if (apt.instructor_id === instructor.id && (apt.status === 'awaiting_payment' || apt.status === 'reserved')) {
+              if (apt.instructor_id === instructor!.id && (apt.status === 'awaiting_payment' || apt.status === 'reserved')) {
                   return;
               }
               busySlotsSet.add(apt.start_time.substring(0, 5));
@@ -2029,6 +2062,125 @@ export const StudentInstructorProfile: React.FC = () => {
               className="w-full text-center text-sm font-medium text-gray-400 hover:text-gray-600 py-2 transition-colors"
             >
               Cancelar
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Payment Method Selection Modal (PIX + Installments) */}
+      <Modal
+        isOpen={isPaymentMethodModalOpen}
+        onClose={() => setIsPaymentMethodModalOpen(false)}
+        title="Forma de Pagamento"
+      >
+        <div className="space-y-6">
+          <p className="text-sm text-gray-500 leading-relaxed">
+            Escolha como prefere realizar o pagamento do seu agendamento de aulas.
+          </p>
+
+          <div className="space-y-3">
+            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              Selecione a opção
+            </label>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                type="button"
+                id="payment-method-pix"
+                onClick={() => {
+                  setSelectedPaymentMethod('PIX');
+                  setSelectedInstallmentCount(1);
+                }}
+                className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                  selectedPaymentMethod === 'PIX'
+                    ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <span className="text-2xl mb-1">📱</span>
+                <span className="text-sm font-medium">PIX</span>
+              </button>
+
+              <button
+                type="button"
+                id="payment-method-cc"
+                onClick={() => setSelectedPaymentMethod('CREDIT_CARD')}
+                className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                  selectedPaymentMethod === 'CREDIT_CARD'
+                    ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <span className="text-2xl mb-1">💳</span>
+                <span className="text-sm font-medium">Cartão de Crédito</span>
+              </button>
+            </div>
+          </div>
+
+          {selectedPaymentMethod === 'CREDIT_CARD' && (
+            <div className="space-y-3">
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                Parcelamento
+              </label>
+              
+              <div className="relative">
+                <select
+                  id="payment-installments-select"
+                  value={selectedInstallmentCount}
+                  onChange={(e) => setSelectedInstallmentCount(Number(e.target.value))}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all cursor-pointer appearance-none text-sm font-medium"
+                >
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((count) => {
+                    const installmentValue = totalPrice / count;
+                    return (
+                      <option key={count} value={count}>
+                        {count}x de {formatCurrency(installmentValue)} {count === 1 ? '(Sem juros)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                  <svg className="fill-current h-4 w-4" viewBox="0 0 20 20">
+                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Checkout Info Box */}
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 space-y-2">
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>Quantidade de aulas:</span>
+              <span className="font-semibold text-gray-700">{selectedSlots.length} aula(s)</span>
+            </div>
+            <div className="flex justify-between text-sm pt-2 border-t border-gray-100">
+              <span className="font-medium text-gray-900">Valor Total:</span>
+              <span className="font-bold text-gray-900">{formatCurrency(totalPrice)}</span>
+            </div>
+            {selectedPaymentMethod === 'CREDIT_CARD' && selectedInstallmentCount > 1 && (
+              <div className="flex justify-between text-xs text-blue-600 font-medium">
+                <span>Plano de parcelamento:</span>
+                <span>{selectedInstallmentCount}x de {formatCurrency(totalPrice / selectedInstallmentCount)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2 space-y-2">
+            <Button
+              fullWidth
+              id="confirm-payment-btn"
+              onClick={() => executeActualBooking(selectedPaymentMethod, selectedInstallmentCount)}
+            >
+              Confirmar e Pagar
+            </Button>
+            <button
+              type="button"
+              id="cancel-payment-btn"
+              onClick={() => setIsPaymentMethodModalOpen(false)}
+              className="w-full text-center text-sm font-medium text-gray-400 hover:text-gray-600 py-2 transition-colors cursor-pointer"
+            >
+              Voltar
             </button>
           </div>
         </div>
