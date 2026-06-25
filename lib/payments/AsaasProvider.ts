@@ -379,20 +379,91 @@ export class AsaasProvider implements IPaymentProvider {
       paymentPayload.metadata = dto.metadata;
     }
 
-    const response = await this.request<AsaasPaymentResponse>('/payments', {
+    const response = await this.request<any>('/payments', {
       method: 'POST',
       body: JSON.stringify(paymentPayload),
     });
 
-    return {
-      providerPaymentId: response.id,
-      providerName: 'asaas',
-      amount: Math.round(response.value * 100),
-      status: this.mapAsaasStatusToGeneric(response.status),
-      clientSecret: null,
-      invoiceUrl: response.invoiceUrl || null,
-      rawResponse: response as unknown as Record<string, unknown>,
-    };
+    // 1. Parse initial response
+    let parsed = this.parseAsaasResponse(response, dto.amount);
+
+    // 2. Check if invoiceUrl is already valid
+    if (this.isValidInvoiceUrl(parsed.invoiceUrl)) {
+      console.log('[ASAAS INTEGRATION] Valid invoiceUrl found in primary response. Returning immediately.');
+      return parsed;
+    }
+
+    // 3. Fallback: retrieve invoiceUrl via installment endpoint if installmentId is present
+    const rawInstallmentId = response.installment || response.installmentId || null;
+    if (rawInstallmentId) {
+      console.log(`[ASAAS INTEGRATION] Primary invoiceUrl missing/invalid. Attempting fallback via installment ID: ${rawInstallmentId}`);
+      try {
+        const listResponse = await this.request<any>(`/installments/${rawInstallmentId}/payments`);
+        const paymentsList = listResponse?.data;
+
+        if (Array.isArray(paymentsList) && paymentsList.length > 0) {
+          const selectedPayment = this.selectEligibleInstallmentPayment(paymentsList);
+          if (selectedPayment) {
+            console.log(`[ASAAS INTEGRATION] Selected payment ${selectedPayment.id} for installment checkout.`);
+            // Parse the selected payment as our primary response
+            parsed = this.parseAsaasResponse(selectedPayment, dto.amount);
+            parsed.rawResponse = {
+              createPaymentResponse: response,
+              installmentLookupResponse: listResponse,
+              selectedInstallmentPayment: selectedPayment,
+            };
+          }
+        }
+      } catch (fallbackError) {
+        console.error('[ASAAS INTEGRATION] Failed to retrieve installment payments fallback:', fallbackError);
+        // Fallback: keep the original parsed object (the app will handle missing URL gracefully if it occurs)
+      }
+    }
+
+    return parsed;
+  }
+
+  /**
+   * Helper to strictly validate an invoiceUrl.
+   */
+  private isValidInvoiceUrl(url?: string | null): boolean {
+    if (!url) return false;
+    if (typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    if (trimmed === '') return false;
+    try {
+      const parsedUrl = new URL(trimmed);
+      return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Selection strategy for choosing the most appropriate payment within an installment group.
+   * Priority 1: First payment that is officially unpaid and waiting for payment (status PENDING).
+   * Priority 2: First payment that contains a valid invoiceUrl for checkout.
+   * Priority 3: Ultimate fallback to the first element in the list (payments[0]).
+   */
+  private selectEligibleInstallmentPayment(payments: any[]): any {
+    if (!payments || payments.length === 0) {
+      return null;
+    }
+
+    // Priority 1: First payment with status 'PENDING' (officially unpaid/awaiting payment)
+    const pendingPayment = payments.find(p => p && typeof p.status === 'string' && p.status.toUpperCase() === 'PENDING');
+    if (pendingPayment) {
+      return pendingPayment;
+    }
+
+    // Priority 2: First payment with a valid invoice URL (proven checkout capability)
+    const validUrlPayment = payments.find(p => p && this.isValidInvoiceUrl(p.invoiceUrl));
+    if (validUrlPayment) {
+      return validUrlPayment;
+    }
+
+    // Priority 3: Ultimate fallback to the first element in the list
+    return payments[0];
   }
 
   /**
@@ -426,15 +497,43 @@ export class AsaasProvider implements IPaymentProvider {
    * Queries precise charge state on Asaas.
    */
   async getPayment(providerPaymentId: string): Promise<PaymentResponseDTO> {
-    const response = await this.request<AsaasPaymentResponse>(`/payments/${providerPaymentId}`);
+    const response = await this.request<any>(`/payments/${providerPaymentId}`);
+
+    return this.parseAsaasResponse(response);
+  }
+
+  /**
+   * Resiliently parses any Asaas API response (payment or installment) to a generic PaymentResponseDTO.
+   */
+  private parseAsaasResponse(response: any, fallbackAmountCents: number = 0): PaymentResponseDTO {
+    if (!response) {
+      throw new Error('Empty response from Asaas API');
+    }
+
+    const providerPaymentId = response.id || '';
+
+    // Resilient value extraction (Asaas returns decimals, our system expects cents)
+    let amountCents = fallbackAmountCents;
+    if (typeof response.value === 'number') {
+      amountCents = Math.round(response.value * 100);
+    } else if (typeof response.totalValue === 'number') {
+      amountCents = Math.round(response.totalValue * 100);
+    }
+
+    // Resilient status mapping
+    const rawStatus = response.status;
+    const status = this.mapAsaasStatusToGeneric(rawStatus);
+
+    // Resilient invoiceUrl extraction
+    const invoiceUrl = response.invoiceUrl || null;
 
     return {
-      providerPaymentId: response.id,
+      providerPaymentId,
       providerName: 'asaas',
-      amount: Math.round(response.value * 100),
-      status: this.mapAsaasStatusToGeneric(response.status),
+      amount: amountCents,
+      status,
       clientSecret: null,
-      invoiceUrl: response.invoiceUrl || null,
+      invoiceUrl,
       rawResponse: response as unknown as Record<string, unknown>,
     };
   }
@@ -518,7 +617,10 @@ export class AsaasProvider implements IPaymentProvider {
   /**
    * Generic Status Translation mechanism.
    */
-  private mapAsaasStatusToGeneric(asaasStatus: string): 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released' {
+  private mapAsaasStatusToGeneric(asaasStatus?: string | null): 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released' {
+    if (!asaasStatus || typeof asaasStatus !== 'string') {
+      return 'pending';
+    }
     switch (asaasStatus.toUpperCase()) {
       case 'CONFIRMED':
       case 'RECEIVED':
