@@ -92,6 +92,7 @@ export interface AsaasSplitRulePayload {
   walletId: string;
   fixedValue?: number;
   percentualValue?: number;
+  totalFixedValue?: number;
 }
 
 export interface AsaasPaymentPayload {
@@ -349,6 +350,7 @@ export class AsaasProvider implements IPaymentProvider {
 
     // Apply strict platform splits if configured in payload
     if (dto.splitRules && dto.splitRules.length > 0) {
+      const isInstallment = dto.billingType === 'CREDIT_CARD' && !!(dto.installmentCount && dto.installmentCount > 1);
       paymentPayload.split = dto.splitRules
         .filter(rule => !!rule.walletId) // In Asaas, walletId holds references to target instructor wallets
         .map(rule => {
@@ -356,7 +358,11 @@ export class AsaasProvider implements IPaymentProvider {
             walletId: rule.walletId as string,
           };
           if (rule.fixedValue !== undefined) {
-            splitRule.fixedValue = rule.fixedValue / 100; // Raw cents to BRL decimal
+            if (isInstallment) {
+              splitRule.totalFixedValue = rule.fixedValue / 100; // Raw cents to BRL decimal total for the installment
+            } else {
+              splitRule.fixedValue = rule.fixedValue / 100; // Raw cents to BRL decimal per payment
+            }
           } else if (rule.percentualValue !== undefined) {
             splitRule.percentualValue = rule.percentualValue;
           }
@@ -377,6 +383,21 @@ export class AsaasProvider implements IPaymentProvider {
 
     if (dto.metadata) {
       paymentPayload.metadata = dto.metadata;
+    }
+
+    // Temporary audit logs for observability
+    if (paymentPayload.split && paymentPayload.split.length > 0) {
+      paymentPayload.split.forEach(splitRule => {
+        const matchingRule = dto.splitRules?.find(r => r.walletId === splitRule.walletId);
+        const installmentCount = dto.installmentCount || 1;
+        const internalFixedValue = matchingRule?.fixedValue;
+        console.log(`[ASAAS SPLIT AUDIT]
+installmentCount: ${installmentCount}
+walletId: ${splitRule.walletId}
+internalFixedValue: ${internalFixedValue !== undefined ? internalFixedValue : 'undefined'}
+payloadSplit:
+${JSON.stringify(splitRule, null, 2)}`);
+      });
     }
 
     const response = await this.request<any>('/payments', {
