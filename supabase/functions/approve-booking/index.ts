@@ -210,19 +210,25 @@ Deno.serve(async (req) => {
         throw updateResult.error;
       }
 
+      const approvedIds = updateResult.data ? updateResult.data.map((apt: any) => apt.id) : [];
+
       // Update the transaction status from pending to completed
       try {
-        const { error: updateTxErr } = await adminClient
-          .from('transactions')
-          .update({ status: 'completed' })
-          .eq('provider_payment_id', paymentId)
-          .eq('type', 'lesson_payment')
-          .eq('provider_name', 'asaas');
+        if (approvedIds.length > 0) {
+          const { error: updateTxErr } = await adminClient
+            .from('transactions')
+            .update({ status: 'completed' })
+            .in('appointment_id', approvedIds)
+            .eq('type', 'lesson_payment')
+            .eq('provider_name', 'asaas');
 
-        if (updateTxErr) {
-          console.error(`❌ Error completing Asaas transactions for paymentId ${paymentId}:`, updateTxErr.message);
+          if (updateTxErr) {
+            console.error(`❌ Error completing Asaas transactions for approvedIds ${approvedIds.join(', ')}:`, updateTxErr.message);
+          } else {
+            console.log(`✅ [Asaas Approve] Successfully completed pending transactions for approvedIds: ${approvedIds.join(', ')}`);
+          }
         } else {
-          console.log(`✅ [Asaas Approve] Successfully completed pending transactions for paymentId: ${paymentId}`);
+          console.warn(`⚠️ [Asaas Approve] No appointments were actually updated/confirmed, skipping transactions update.`);
         }
       } catch (txErr) {
         console.error(`⚠️ [Asaas Approve] Unexpected error updating transactions:`, txErr);
