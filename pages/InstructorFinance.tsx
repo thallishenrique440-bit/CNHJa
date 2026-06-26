@@ -23,9 +23,19 @@ interface Transaction {
   status: 'pending' | 'completed' | 'failed';
   appointment_id?: string;
   stripe_payout_id?: string;
+  provider_payment_id?: string;
   profiles: {
     full_name: string;
   };
+  appointments?: {
+    id: string;
+    group_id?: string;
+    provider_payment_id?: string;
+    date: string;
+    start_time: string;
+    end_time: string;
+    status: string;
+  } | null;
 }
 
 interface Appointment {
@@ -44,7 +54,7 @@ interface HistoryItem {
   id: string;
   timestamp: string; // display timestamp
   sortDate: string;  // ISO string for sorting
-  type: 'lesson' | 'tip' | 'refund';
+  type: 'lesson' | 'tip' | 'refund' | 'combo';
   isFinancial: boolean; // true if it's a completed transaction
   amount: number;
   grossAmount?: number;
@@ -57,6 +67,18 @@ interface HistoryItem {
   appointmentDate?: string;
   appointmentTime?: string;
   isPast?: boolean;
+
+  // Package/Combo details
+  isCombo?: boolean;
+  lessonCount?: number;
+  lessons?: {
+    id: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    netAmount?: number;
+  }[];
+  groupId?: string;
 }
 
 // Updated Status Types for Asaas Dashboard Integration
@@ -227,7 +249,17 @@ export const InstructorFinance: React.FC = () => {
                 status,
                 appointment_id,
                 stripe_payout_id,
-                profiles ( full_name )
+                provider_payment_id,
+                profiles ( full_name ),
+                appointments (
+                    id,
+                    group_id,
+                    provider_payment_id,
+                    date,
+                    start_time,
+                    end_time,
+                    status
+                )
             `)
             .eq('instructor_id', userId)
             .in('status', ['completed'])
@@ -237,7 +269,8 @@ export const InstructorFinance: React.FC = () => {
 
         const typedTrans = (transData || []).map((t: any) => ({
             ...t,
-            profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles
+            profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles,
+            appointments: Array.isArray(t.appointments) ? t.appointments[0] : t.appointments
         })) as Transaction[];
 
         // --- Financial Calculations (Strictly from transactions) ---
@@ -293,24 +326,133 @@ export const InstructorFinance: React.FC = () => {
         setTipMonthRevenue(tipMRev);
         setTipTotalRevenue(tipTRev);
         
-        // --- Build History (Transactions ONLY) ---
-        const items: HistoryItem[] = typedTrans.map(t => {
+        // --- Build History (Transactions ONLY with in-memory grouping of combos) ---
+        const lessonPaymentsToGroup: Transaction[] = [];
+        const nonGroupedItems: HistoryItem[] = [];
+
+        typedTrans.forEach(t => {
             const logicalDate = t.event_date || t.created_at;
-            return {
-                id: t.id,
-                timestamp: logicalDate,
-                sortDate: logicalDate,
-                type: t.type === 'lesson_payment' ? 'lesson' : (t.type === 'tip' ? 'tip' : 'refund'),
-                isFinancial: true,
-                amount: t.net_amount, // We only use net_amount now
-                grossAmount: t.gross_amount,
-                platformFee: t.platform_fee,
-                netAmount: t.net_amount,
-                status: t.status,
-                studentName: t.profiles?.full_name || 'Aluno',
-                stripePayoutId: t.stripe_payout_id
-            };
+            if (t.type === 'lesson_payment') {
+                const groupId = t.appointments?.group_id;
+                const providerPaymentId = t.provider_payment_id || t.appointments?.provider_payment_id;
+
+                if (groupId || providerPaymentId) {
+                    lessonPaymentsToGroup.push(t);
+                } else {
+                    nonGroupedItems.push({
+                        id: t.id,
+                        timestamp: logicalDate,
+                        sortDate: logicalDate,
+                        type: 'lesson',
+                        isFinancial: true,
+                        amount: t.net_amount,
+                        grossAmount: t.gross_amount,
+                        platformFee: t.platform_fee,
+                        netAmount: t.net_amount,
+                        status: t.status,
+                        studentName: t.profiles?.full_name || 'Aluno',
+                        stripePayoutId: t.stripe_payout_id
+                    });
+                }
+            } else {
+                nonGroupedItems.push({
+                    id: t.id,
+                    timestamp: logicalDate,
+                    sortDate: logicalDate,
+                    type: t.type === 'tip' ? 'tip' : 'refund',
+                    isFinancial: true,
+                    amount: t.net_amount,
+                    grossAmount: t.gross_amount,
+                    platformFee: t.platform_fee,
+                    netAmount: t.net_amount,
+                    status: t.status,
+                    studentName: t.profiles?.full_name || 'Aluno',
+                    stripePayoutId: t.stripe_payout_id
+                });
+            }
         });
+
+        const groupMap = new Map<string, Transaction[]>();
+        lessonPaymentsToGroup.forEach(t => {
+            const groupKey = t.appointments?.group_id || t.provider_payment_id || t.appointments?.provider_payment_id || '';
+            if (groupKey) {
+                if (!groupMap.has(groupKey)) {
+                    groupMap.set(groupKey, []);
+                }
+                groupMap.get(groupKey)!.push(t);
+            }
+        });
+
+        const comboHistoryItems: HistoryItem[] = [];
+
+        groupMap.forEach((transactionsInGroup, groupKey) => {
+            if (transactionsInGroup.length === 1) {
+                const t = transactionsInGroup[0];
+                const logicalDate = t.event_date || t.created_at;
+                nonGroupedItems.push({
+                    id: t.id,
+                    timestamp: logicalDate,
+                    sortDate: logicalDate,
+                    type: 'lesson',
+                    isFinancial: true,
+                    amount: t.net_amount,
+                    grossAmount: t.gross_amount,
+                    platformFee: t.platform_fee,
+                    netAmount: t.net_amount,
+                    status: t.status,
+                    studentName: t.profiles?.full_name || 'Aluno',
+                    stripePayoutId: t.stripe_payout_id
+                });
+            } else {
+                const sortedGroup = [...transactionsInGroup].sort(
+                    (a, b) => new Date(b.event_date || b.created_at).getTime() - new Date(a.event_date || a.created_at).getTime()
+                );
+
+                const latestTrans = sortedGroup[0];
+                const logicalDate = latestTrans.event_date || latestTrans.created_at;
+
+                let totalGross = 0;
+                let totalFee = 0;
+                let totalNet = 0;
+
+                sortedGroup.forEach(t => {
+                    totalGross += t.gross_amount || 0;
+                    totalFee += t.platform_fee || 0;
+                    totalNet += t.net_amount || 0;
+                });
+
+                const subLessons = sortedGroup.map(t => ({
+                    id: t.id,
+                    date: t.appointments?.date || t.event_date || t.created_at,
+                    startTime: t.appointments?.start_time || '',
+                    endTime: t.appointments?.end_time || '',
+                    netAmount: t.net_amount
+                })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                comboHistoryItems.push({
+                    id: `combo_${groupKey}`,
+                    timestamp: logicalDate,
+                    sortDate: logicalDate,
+                    type: 'combo',
+                    isFinancial: true,
+                    amount: totalNet,
+                    grossAmount: totalGross,
+                    platformFee: totalFee,
+                    netAmount: totalNet,
+                    status: latestTrans.status,
+                    studentName: latestTrans.profiles?.full_name || 'Aluno',
+                    stripePayoutId: latestTrans.stripe_payout_id,
+                    isCombo: true,
+                    lessonCount: sortedGroup.length,
+                    lessons: subLessons,
+                    groupId: latestTrans.appointments?.group_id || groupKey
+                });
+            }
+        });
+
+        const items: HistoryItem[] = [...nonGroupedItems, ...comboHistoryItems].sort(
+            (a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime()
+        );
 
         setHistoryItems(items);
 
@@ -771,6 +913,79 @@ export const InstructorFinance: React.FC = () => {
             <div className="space-y-4">
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 overflow-hidden">
                   {visibleItems.map((item) => {
+                      if (item.isCombo) {
+                          const displayDesc = `Pacote • ${item.lessonCount} aulas`;
+                          return (
+                              <div 
+                                  key={item.id} 
+                                  onClick={() => toggleExpand(item.id)}
+                                  className="p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer border-l-4 border-green-500"
+                              >
+                                  <div className="flex justify-between items-center w-full">
+                                      <div className="flex flex-col space-y-1">
+                                          <div className="flex items-center gap-2">
+                                              <span className="text-xs text-gray-400 font-medium">{formatDate(item.sortDate)}</span>
+                                              <span className="text-[10px] text-gray-300">•</span>
+                                              <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">✅ {displayDesc}</span>
+                                          </div>
+                                          <span className="text-sm font-semibold text-gray-800">
+                                              {item.studentName}
+                                          </span>
+                                      </div>
+                                      <div className="text-right">
+                                          <span className="block font-bold text-sm text-green-600">
+                                              + {formatCurrency(Math.abs(item.netAmount || 0))}
+                                          </span>
+                                          <span className="text-[10px] text-gray-400">
+                                              {item.status === 'pending' && 'Pendente'}
+                                              {item.status === 'completed' && (
+                                                  item.stripePayoutId 
+                                                      ? 'Transferido' 
+                                                      : <span className="text-green-600 font-bold">Concluído</span>
+                                              )}
+                                              {item.status === 'failed' && 'Falha'}
+                                              {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
+                                          </span>
+                                      </div>
+                                  </div>
+
+                                  {expandedId === item.id && (
+                                      <div className="mt-3 pt-3 border-t border-gray-100 space-y-3 animate-fade-in">
+                                          <div className="text-xs font-semibold text-gray-700">Aulas do Pacote ({item.lessonCount}):</div>
+                                          <div className="space-y-1.5 bg-gray-50 p-2.5 rounded-xl border border-gray-100">
+                                              {item.lessons?.map((lesson, idx) => (
+                                                  <div key={lesson.id} className="flex justify-between text-[11px] text-gray-600">
+                                                      <span>Aula {idx + 1}: {formatDate(lesson.date)}</span>
+                                                      <span className="font-medium text-gray-500">
+                                                          {lesson.startTime ? `${lesson.startTime.slice(0, 5)} - ${lesson.endTime.slice(0, 5)}` : ''}
+                                                      </span>
+                                                  </div>
+                                              ))}
+                                          </div>
+
+                                          <div className="grid grid-cols-2 gap-y-2 text-[11px]">
+                                              <div className="text-gray-400">Valor Bruto Total:</div>
+                                              <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount || 0))}</div>
+                                              
+                                              {item.platformFee !== undefined && item.platformFee > 0 && (
+                                                  <>
+                                                      <div className="text-gray-400">Taxa Plataforma (10%):</div>
+                                                      <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee))}</div>
+                                                  </>
+                                              )}
+                                              
+                                              <div className="text-gray-400 font-bold">Valor Líquido Total:</div>
+                                              <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
+
+                                              <div className="text-gray-400">ID da Compra:</div>
+                                              <div className="text-gray-500 text-right font-mono">{(item.groupId || item.id).replace('combo_', '').slice(0, 12)}...</div>
+                                          </div>
+                                      </div>
+                                  )}
+                              </div>
+                          );
+                      }
+
                       const isTip = item.type === 'tip';
                       const isRefund = item.type === 'refund';
                       const isLesson = item.type === 'lesson';

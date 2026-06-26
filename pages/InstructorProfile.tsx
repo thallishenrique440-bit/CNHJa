@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  MessageCircle, 
   IdCard, 
   GraduationCap, 
   DollarSign, 
@@ -30,7 +29,7 @@ import { toTitleCase, normalizeCity } from '../lib/stringUtils';
 
 export const InstructorProfile: React.FC = () => {
   const navigate = useNavigate();
-  const { session, signOut, refreshProfile, isProfileComplete } = useAuth();
+  const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -454,89 +453,7 @@ export const InstructorProfile: React.FC = () => {
     return <div className="min-h-screen flex items-center justify-center bg-white text-gray-500">Carregando perfil...</div>;
   }
 
-  // --- ONBOARDING VIEW (INCOMPLETE PROFILE) ---
-  if (!isProfileComplete) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 sm:p-6">
-        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
-          {/* Header */}
-          <div className="bg-blue-600 px-6 py-10 text-center relative">
-            <div className="absolute top-4 right-4">
-              <button 
-                onClick={handleLogout}
-                className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"
-                title="Sair"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-white/20 rounded-full mb-4 backdrop-blur-sm">
-              <User className="w-10 h-10 text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-white">Complete seu perfil</h1>
-            <p className="text-blue-100 mt-2 text-sm">
-              Falta pouco! Precisamos de apenas alguns dados para você começar.
-            </p>
-          </div>
 
-          {/* Form */}
-          <div className="p-6 space-y-6">
-            <div className="space-y-4">
-              <Input 
-                label="Nome completo"
-                placeholder="Como você quer ser chamado?"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                icon={<User className="w-4 h-4 text-gray-400" />}
-              />
-
-              <Input 
-                label="WhatsApp"
-                type="tel"
-                placeholder="(11) 99999-9999"
-                value={formatPhone(whatsapp)}
-                onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
-                icon={<Phone className="w-4 h-4 text-gray-400" />}
-                inputMode="numeric"
-              />
-
-              <Input 
-                label="Sua credencial profissional" 
-                placeholder="Digite apenas números"
-                value={credential}
-                onChange={(e) => setCredential(e.target.value.replace(/\D/g, ''))}
-                icon={<IdCard className="w-4 h-4 text-gray-400" />}
-                inputMode="numeric"
-              />
-
-              <CitySelect 
-                label="Cidade"
-                value={city}
-                onChange={setCity}
-                placeholder="Onde você está?"
-              />
-            </div>
-
-            <div className="pt-4">
-              <Button 
-                variant="primary" 
-                fullWidth 
-                onClick={handleSave} 
-                disabled={saving}
-                className="py-4 text-base font-bold shadow-lg shadow-blue-100"
-              >
-                {saving ? 'Salvando...' : 'Finalizar cadastro'}
-              </Button>
-            </div>
-
-            <p className="text-center text-xs text-gray-400 px-4">
-              Ao continuar, você concorda com nossos Termos de Uso e Política de Privacidade.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // --- FULL PROFILE VIEW (COMPLETE PROFILE) ---
   return (
@@ -584,7 +501,7 @@ export const InstructorProfile: React.FC = () => {
             <div className="text-center mb-4 px-4">
               <h2 className="text-sm font-bold text-gray-900">Transforme seu perfil em novos alunos</h2>
               <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
-                Compartilhe seu link no WhatsApp, Instagram, Facebook ou X.
+                Compartilhe seu link no WhatsApp, Instagram, Facebook e TikTok.
               </p>
             </div>
             <div className="flex items-center justify-center space-x-3">
@@ -611,26 +528,6 @@ export const InstructorProfile: React.FC = () => {
         
         {/* Card de Divulgação Refatorado removido e integrado no header */}
 
-        {/* Seção: Contato */}
-        <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-          <div className="flex items-center space-x-2 mb-5">
-            <MessageCircle className="w-5 h-5 text-blue-600" />
-            <h2 className="text-base font-bold text-gray-900">Contato</h2>
-          </div>
-          <Input 
-            label="WhatsApp de atendimento" 
-            placeholder="(11) 99999-9999"
-            type="tel"
-            value={formatPhone(whatsapp)}
-            onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
-            inputMode="numeric"
-            className="bg-white border-gray-200"
-          />
-          <p className="text-xs text-gray-400 mt-2 ml-1">
-            Este número será usado pelos alunos para tirar dúvidas e agendar aulas.
-          </p>
-        </section>
-
         {/* Seção: Dados Profissionais */}
         <section className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center space-x-2 mb-5">
@@ -639,6 +536,28 @@ export const InstructorProfile: React.FC = () => {
           </div>
           <div className="space-y-4">
             <Input 
+              label="E-mail de acesso" 
+              value={session?.user?.email || ''} 
+              readOnly 
+              className="bg-gray-50 text-gray-500 border-transparent"
+            />
+
+            <div>
+              <Input 
+                label="WhatsApp de atendimento" 
+                placeholder="(11) 99999-9999"
+                type="tel"
+                value={formatPhone(whatsapp)}
+                onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                inputMode="numeric"
+                className="bg-white border-gray-200"
+              />
+              <p className="text-xs text-gray-400 mt-2 ml-1">
+                Este número será usado pelos alunos para tirar dúvidas e agendar aulas.
+              </p>
+            </div>
+
+            <Input 
               label="Sua credencial profissional" 
               placeholder="Digite apenas números"
               value={credential}
@@ -646,6 +565,7 @@ export const InstructorProfile: React.FC = () => {
               inputMode="numeric"
               className="bg-white border-gray-200"
             />
+
             <CitySelect 
               label="Cidade / Região de atuação" 
               value={city} 

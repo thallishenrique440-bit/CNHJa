@@ -16,17 +16,7 @@ export const ProfileGuard: React.FC = () => {
     );
   }
 
-  // If profile status is still being fetched (null), we allow rendering to avoid blocking the app.
-  // Once fetchProfile completes, if it's false, the user will be redirected.
-  if (isProfileComplete === false && session) {
-    const studentProfilePath = '/student/profile';
-    const instructorProfilePath = '/instructor/profile';
-    const targetPath = userRole === 'instructor' ? instructorProfilePath : studentProfilePath;
-
-    if (location.pathname !== targetPath) {
-      return <Navigate to={targetPath} replace />;
-    }
-  }
-
+  // Profile incomplete no longer blocks navigation as per FASE 5C.
+  // Instructors and students can navigate freely to any route.
   return <Outlet />;
 };
