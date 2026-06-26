@@ -204,8 +204,9 @@ Deno.serve(async (req: Request) => {
         provider_name: 'asaas',
         provider_account_id: id,
         provider_wallet_id: walletId,
-        provider_status: status || 'pending',
-        provider_onboarding_completed: false
+        provider_status: 'approved',
+        provider_onboarding_completed: true,
+        payouts_enabled: true
       })
       .eq('id', user.id);
 
@@ -229,8 +230,9 @@ Deno.serve(async (req: Request) => {
         success: true,
         provider_account_id: id,
         provider_wallet_id: walletId,
-        provider_status: status || 'pending',
-        provider_onboarding_completed: false
+        provider_status: 'approved',
+        provider_onboarding_completed: true,
+        payouts_enabled: true
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

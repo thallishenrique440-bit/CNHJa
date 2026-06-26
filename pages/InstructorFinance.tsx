@@ -3,7 +3,7 @@ import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
-import { Info } from 'lucide-react';
+import { Info, ChevronDown, CircleHelp, ExternalLink } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
@@ -105,10 +105,15 @@ export const InstructorFinance: React.FC = () => {
   // Data State
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [isInfoExpanded, setIsInfoExpanded] = useState(false);
   
   // Financial Metrics
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
+  const [lessonMonthRevenue, setLessonMonthRevenue] = useState(0);
+  const [lessonTotalRevenue, setLessonTotalRevenue] = useState(0);
+  const [tipMonthRevenue, setTipMonthRevenue] = useState(0);
+  const [tipTotalRevenue, setTipTotalRevenue] = useState(0);
   
   // Asaas States
   const [asaasStatus, setAsaasStatus] = useState<AsaasStatus>('none');
@@ -147,6 +152,33 @@ export const InstructorFinance: React.FC = () => {
   const formatTime = (isoString: string) => {
     const date = new Date(isoString);
     return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const handleOpenAsaasApp = () => {
+    const now = Date.now();
+    const playStoreUrl = "https://play.google.com/store/apps/details?id=com.asaas.android";
+    const appStoreUrl = "https://apps.apple.com/br/app/asaas-conta-digital-pj/id1040854613";
+    const officialDownloadUrl = "https://www.asaas.com/aplicativo-asaas";
+
+    const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+    let fallbackUrl = officialDownloadUrl;
+    let deepLink = "asaas://";
+
+    if (/android/i.test(userAgent)) {
+      fallbackUrl = playStoreUrl;
+      deepLink = "intent://#Intent;scheme=asaas;package=com.asaas.android;end";
+    } else if (/iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream) {
+      fallbackUrl = appStoreUrl;
+      deepLink = "asaas://";
+    }
+
+    window.location.href = deepLink;
+
+    setTimeout(() => {
+      if (Date.now() - now < 2000) {
+        window.open(fallbackUrl, '_blank');
+      }
+    }, 1500);
   };
 
   const loadData = async () => {
@@ -211,6 +243,10 @@ export const InstructorFinance: React.FC = () => {
         // --- Financial Calculations (Strictly from transactions) ---
         let totalRev = 0;
         let monthRev = 0;
+        let lessonMRev = 0;
+        let lessonTRev = 0;
+        let tipMRev = 0;
+        let tipTRev = 0;
 
         const now = new Date();
         const currentMonth = now.getMonth();
@@ -228,20 +264,34 @@ export const InstructorFinance: React.FC = () => {
             
             if (t.type === 'lesson_payment') {
                 totalRev += val;
-                if (isCurrentMonth) monthRev += val;
-            } else if (t.type === 'tip') {
-                totalRev += val;
+                lessonTRev += val;
                 if (isCurrentMonth) {
                     monthRev += val;
+                    lessonMRev += val;
+                }
+            } else if (t.type === 'tip') {
+                totalRev += val;
+                tipTRev += val;
+                if (isCurrentMonth) {
+                    monthRev += val;
+                    tipMRev += val;
                 }
             } else if (t.type === 'refund') {
                 totalRev += val; // val is negative for refunds
-                if (isCurrentMonth) monthRev += val;
+                lessonTRev += val;
+                if (isCurrentMonth) {
+                    monthRev += val;
+                    lessonMRev += val;
+                }
             }
         });
 
         setTotalRevenue(totalRev);
         setMonthlyRevenue(monthRev);
+        setLessonMonthRevenue(lessonMRev);
+        setLessonTotalRevenue(lessonTRev);
+        setTipMonthRevenue(tipMRev);
+        setTipTotalRevenue(tipTRev);
         
         // --- Build History (Transactions ONLY) ---
         const items: HistoryItem[] = typedTrans.map(t => {
@@ -477,31 +527,24 @@ export const InstructorFinance: React.FC = () => {
       
       <div className="px-6 py-6 bg-white border-b border-gray-100 sticky top-0 z-20">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-900">Financeiro</h1>
-        </div>
-        <div className="flex items-center justify-between mt-1">
-            <p className="text-xs text-gray-500">Gestão de repasses</p>
-            
-            {!loading && (
-                <div className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border flex items-center gap-1
-                    ${asaasStatus === 'active' 
-                        ? 'bg-green-50 text-green-700 border-green-100' 
-                        : asaasStatus === 'processing'
-                            ? 'bg-blue-50 text-blue-700 border-blue-100'
-                            : asaasStatus === 'pending'
-                                ? 'bg-yellow-50 text-yellow-700 border-yellow-100'
-                                : asaasStatus === 'denied'
-                                    ? 'bg-red-50 text-red-700 border-red-100'
-                                    : 'bg-gray-100 text-gray-500 border-gray-200'
-                    }`}
-                >
-                    {asaasStatus === 'active' && <span>✅ Conta Ativa</span>}
-                    {asaasStatus === 'processing' && <span>⏳ Em Análise</span>}
-                    {asaasStatus === 'pending' && <span>⚠️ Ação Necessária</span>}
-                    {asaasStatus === 'denied' && <span>❌ Rejeitada</span>}
-                    {asaasStatus === 'none' && <span>❌ Não Configurado</span>}
-                </div>
-            )}
+          {/* Left Column: Title and Subtitle */}
+          <div className="flex flex-col">
+            <h1 className="text-xl font-bold text-gray-900 leading-tight">Financeiro</h1>
+            <p className="text-xs text-gray-500 mt-0.5">Gestão de repasses</p>
+          </div>
+          
+          {/* Right Column: Institutional Financial Partner Logo and Label */}
+          <div className="flex flex-col items-center justify-center text-center min-w-[160px] shrink-0">
+            <img 
+              src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/f6f3bea8-1b9a-46c0-b405-d4d4ec6db841.jpg"
+              alt="Asaas"
+              referrerPolicy="no-referrer"
+              className="w-[100px] h-auto object-contain object-center block"
+            />
+            <span className="text-xs font-medium tracking-wide text-gray-400 mt-1.5 leading-none">
+              Parceiro Financeiro
+            </span>
+          </div>
         </div>
       </div>
 
@@ -516,52 +559,153 @@ export const InstructorFinance: React.FC = () => {
             </span>
             <p className="text-[10px] text-indigo-200 font-medium mb-4">Valor líquido após taxas</p>
             
-            <div className="pt-4 border-t border-indigo-500/50 flex justify-between items-center">
+            {/* Seção de detalhamento do mês */}
+            <div className="pt-4 border-t border-indigo-500/50 space-y-2">
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-indigo-200">Recebido em aulas</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(lessonMonthRevenue)}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-indigo-200">Recebido em caixinhas</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(tipMonthRevenue)}</span>
+              </div>
+            </div>
+
+            {/* Parte inferior do card (Ganhos Totais e Total em Caixinhas) */}
+            <div className="pt-4 mt-4 border-t border-indigo-500/50 space-y-2">
+              <div className="flex justify-between items-center">
                 <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider">Ganhos totais</span>
-                <span className="text-sm font-bold">{formatCurrency(totalRevenue)}</span>
+                <span className="text-sm font-bold">{loading ? '...' : formatCurrency(totalRevenue)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider">Total em caixinhas</span>
+                <span className="text-sm font-bold">{loading ? '...' : formatCurrency(tipTotalRevenue)}</span>
+              </div>
             </div>
           </div>
 
-          {/* Info Card */}
-          <div className="bg-gray-50 border border-gray-100 p-3.5 rounded-2xl">
-            <p className="text-[10px] text-gray-500 leading-relaxed">
-              Os repasses são feitos de forma segura e imediata pelo Asaas direto para sua conta integrada assim que os pagamentos são compensados.
-            </p>
+          {/* Info Card - Accordion */}
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl overflow-hidden transition-all duration-300">
+            <button
+              onClick={() => setIsInfoExpanded(!isInfoExpanded)}
+              className="w-full flex items-center justify-between p-4 hover:bg-gray-100/50 transition-colors text-left focus:outline-none"
+            >
+              <div className="flex items-center gap-3">
+                <CircleHelp size={18} className="text-slate-500 shrink-0" />
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800 leading-tight">Como funcionam os repasses</h4>
+                  <span className="text-[10px] text-gray-400 font-medium">Toque para saber mais</span>
+                </div>
+              </div>
+              <ChevronDown 
+                className={`w-4 h-4 text-gray-400 transition-transform duration-300 shrink-0 ${isInfoExpanded ? 'rotate-180' : ''}`}
+              />
+            </button>
+            
+            <div className={`grid transition-all duration-300 ease-in-out ${isInfoExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+              <div className="overflow-hidden">
+                <div className="px-4 pb-5 pt-1 border-t border-gray-100 space-y-4 text-xs text-gray-600">
+                  
+                  {/* Item 1 */}
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>💰</span> Comissão da plataforma
+                    </h5>
+                    <p className="leading-relaxed text-gray-500 pl-5">
+                      A plataforma retém uma comissão fixa de 10% sobre cada aula. Essa comissão é vitalícia e não aumenta conforme seu crescimento dentro da plataforma.
+                    </p>
+                  </div>
+
+                  {/* Item 2 */}
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>📈</span> Definição do valor da aula
+                    </h5>
+                    <p className="leading-relaxed text-gray-500 pl-5">
+                      Você define livremente o valor da sua aula. Se desejar receber exatamente um determinado valor líquido por aula, considere definir o preço levando em conta a comissão fixa de 10%.
+                    </p>
+                  </div>
+
+                  {/* Item 3 */}
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>💳</span> Pagamentos parcelados
+                    </h5>
+                    <p className="leading-relaxed text-gray-500 pl-5">
+                      O aluno pode parcelar o pagamento. O parcelamento não altera o valor líquido da sua aula. Seu repasse permanece exatamente o mesmo.
+                    </p>
+                  </div>
+
+                  {/* Item 4 */}
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>🎁</span> Caixinhas
+                    </h5>
+                    <p className="leading-relaxed text-gray-500 pl-5">
+                      As caixinhas são repassadas integralmente ao instrutor. Quando existirem taxas do meio de pagamento, apenas essas taxas poderão ser descontadas.
+                    </p>
+                  </div>
+
+                  {/* Item 5 */}
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>🏦</span> Recebimentos
+                    </h5>
+                    <p className="leading-relaxed text-gray-500 pl-5">
+                      Os pagamentos são processados pelo Asaas, parceiro financeiro oficial da plataforma. Você pode acompanhar seus recebimentos tanto nesta tela quanto pelo aplicativo oficial do Asaas.
+                    </p>
+                  </div>
+
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Asaas Callout Area */}
         <div className={`rounded-2xl p-5 border relative overflow-hidden transition-colors
-            ${asaasStatus === 'active' ? 'bg-indigo-50 border-indigo-100' : 
+            ${asaasStatus === 'active' ? 'bg-white border-gray-200' : 
               asaasStatus === 'processing' ? 'bg-blue-50 border-blue-100' :
               asaasStatus === 'denied' ? 'bg-red-50 border-red-100' :
+              asaasStatus === 'none' ? 'bg-white border-gray-200' :
               'bg-yellow-50 border-yellow-100'
             }`}>
             
+            {(asaasStatus === 'none' || asaasStatus === 'active') && (
+              <img 
+                src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%2026%20de%20jun.%20de%202026,%2009_42_05.png"
+                alt=""
+                referrerPolicy="no-referrer"
+                className="absolute inset-0 w-full h-full object-cover opacity-[0.09] pointer-events-none z-0"
+              />
+            )}
+            
             <div className="relative z-10">
                 <h3 className={`font-bold text-sm mb-1
-                    ${asaasStatus === 'active' ? 'text-indigo-900' : 
+                    ${asaasStatus === 'active' ? 'text-gray-900' : 
                       asaasStatus === 'processing' ? 'text-blue-900' :
                       asaasStatus === 'denied' ? 'text-red-900' :
+                      asaasStatus === 'none' ? 'text-gray-900' :
                       'text-yellow-900'
                     }`}>
-                    {asaasStatus === 'active' && 'Conta Ativa no Asaas'}
+                    {asaasStatus === 'active' && 'Sua conta financeira está pronta'}
                     {asaasStatus === 'processing' && 'Conta em Análise no Asaas'}
                     {asaasStatus === 'pending' && 'Ação Necessária Asaas'}
                     {asaasStatus === 'denied' && 'Cadastro Rejeitado Asaas'}
-                    {asaasStatus === 'none' && 'Ativar Recebimentos Asaas'}
+                    {asaasStatus === 'none' && 'Comece a receber pelas suas aulas'}
                 </h3>
                 <p className={`text-xs leading-relaxed mb-4 max-w-[85%]
-                    ${asaasStatus === 'active' ? 'text-indigo-700/80' : 
+                    ${asaasStatus === 'active' ? 'text-gray-600' : 
                       asaasStatus === 'processing' ? 'text-blue-700/80' :
                       asaasStatus === 'denied' ? 'text-red-700/80' :
+                      asaasStatus === 'none' ? 'text-gray-600' :
                       'text-yellow-800/80'
                     }`}>
-                    {asaasStatus === 'active' && 'Tudo pronto! Seus repasses automáticos de saldo estão configurados por meio do Asaas.'}
+                    {asaasStatus === 'active' && 'Agora você pode receber os pagamentos das suas aulas diretamente pela sua conta Asaas. Acompanhe seus repasses e movimentações sempre que precisar pelo aplicativo.'}
                     {asaasStatus === 'processing' && 'O Asaas está verificando seus dados e documentos. Isso pode levar alguns minutos ou horas.'}
                     {asaasStatus === 'pending' && 'Sua conta Asaas necessita do envio de documentos adicionais. Por favor, regularize no painel Asaas.'}
                     {asaasStatus === 'denied' && 'Seu cadastro de conta foi rejeitado pelo Asaas. Entre em contato com o suporte para mais informações.'}
-                    {asaasStatus === 'none' && 'Configure sua conta digital Asaas no ambiente seguro de sandbox para poder receber das suas aulas automatizadas.'}
+                    {asaasStatus === 'none' && 'Crie gratuitamente sua conta Asaas e receba os pagamentos das suas aulas com segurança. Depois de concluído o cadastro, seus repasses serão enviados diretamente para sua conta financeira.'}
                 </p>
                 
                 <div className="flex flex-col space-y-2">
@@ -575,7 +719,18 @@ export const InstructorFinance: React.FC = () => {
                         </Button>
                     )}
 
-                    {asaasStatus !== 'none' && (
+                    {asaasStatus === 'active' && (
+                        <Button 
+                            variant="primary"
+                            onClick={handleOpenAsaasApp}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white border-transparent text-xs py-2.5 px-4 h-auto shadow-none w-full flex items-center justify-center gap-2"
+                        >
+                            <ExternalLink size={14} />
+                            Abrir aplicativo Asaas 📱
+                        </Button>
+                    )}
+
+                    {asaasStatus !== 'none' && asaasStatus !== 'active' && (
                         <div className="flex flex-col space-y-3 w-full">
                             <div className="text-xs text-gray-500 flex flex-col space-y-1">
                                 <span className="font-semibold text-gray-700">Canal de Recebimento de Aulas</span>
@@ -594,12 +749,13 @@ export const InstructorFinance: React.FC = () => {
                 </div>
             </div>
             
-            <div className={`absolute -right-6 -bottom-8 w-24 h-24 rounded-full opacity-50 mix-blend-multiply filter blur-xl
-                ${asaasStatus === 'active' ? 'bg-indigo-200' : 
-                  asaasStatus === 'processing' ? 'bg-blue-200' :
-                  asaasStatus === 'denied' ? 'bg-red-200' :
-                  'bg-yellow-200'
-                }`}></div>
+            {asaasStatus !== 'none' && asaasStatus !== 'active' && (
+                <div className={`absolute -right-6 -bottom-8 w-24 h-24 rounded-full opacity-50 mix-blend-multiply filter blur-xl
+                    ${asaasStatus === 'processing' ? 'bg-blue-200' : 
+                      asaasStatus === 'denied' ? 'bg-red-200' :
+                      'bg-yellow-200'
+                    }`}></div>
+            )}
         </div>
 
         <div className="space-y-4 pt-2">
