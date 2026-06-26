@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { loadStripe } from '@stripe/stripe-js';
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { Button } from '../../components/Button';
 import { DateSelector } from '../../components/DateSelector';
@@ -94,94 +92,6 @@ const isNightLesson = (time: string) => {
   return h >= 18;
 };
 
-// --- Stripe Initialization ---
-const stripeKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
-const stripePromise = stripeKey ? loadStripe(stripeKey) : null;
-
-// --- Tip Checkout Form ---
-const TipCheckoutForm = ({ 
-  clientSecret, 
-  onSuccess, 
-  onCancel, 
-  amount, 
-  isSubmitting 
-}: { 
-  clientSecret: string; 
-  onSuccess: () => void; 
-  onCancel: () => void;
-  amount: number;
-  isSubmitting: boolean;
-}) => {
-  const stripe = useStripe();
-  const elements = useElements();
-  const { addToast } = useToast();
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-
-    if (!stripe || !elements) return;
-
-    setErrorMessage(null);
-
-    try {
-      const { error, paymentIntent } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: `${window.location.origin}/#/student/lessons`,
-        },
-        redirect: 'if_required',
-      });
-
-      if (error) {
-        setErrorMessage(error.message || 'Erro ao processar pagamento.');
-        addToast(error.message || 'Erro ao processar pagamento.', 'error');
-      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        onSuccess();
-      }
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Erro interno.');
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <PaymentElement />
-      
-      {errorMessage && (
-        <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg">
-          {errorMessage}
-        </div>
-      )}
-
-      <div className="space-y-3 pt-2">
-        <Button 
-          type="submit" 
-          fullWidth 
-          variant="primary"
-          disabled={!stripe || isSubmitting}
-          className="shadow-lg shadow-blue-100"
-        >
-          {isSubmitting ? 'Processando...' : `Confirmar R$ ${amount.toFixed(2).replace('.', ',')}`}
-        </Button>
-        <p className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-bold">
-          Pagamento imediato
-        </p>
-
-        <Button 
-          fullWidth 
-          variant="outline" 
-          onClick={onCancel}
-          disabled={isSubmitting}
-          className="border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-700 shadow-none"
-        >
-          Pular caixinha
-        </Button>
-      </div>
-    </form>
-  );
-};
-
 export const StudentLessons: React.FC = () => {
   const navigate = useNavigate();
   const { session, signOut, serverTimeOffset } = useAuth();
@@ -221,6 +131,13 @@ export const StudentLessons: React.FC = () => {
   const [customTip, setCustomTip] = useState('');
   const [isSubmittingTip, setIsSubmittingTip] = useState(false);
   const [tipClientSecret, setTipClientSecret] = useState<string | null>(null);
+  const [tipPaymentData, setTipPaymentData] = useState<{
+    paymentId: string;
+    invoiceUrl: string;
+    qrCodeImage: string;
+    copiaColaCode: string;
+    amount: number;
+  } | null>(null);
   const [tipGiven, setTipGiven] = useState(false);
 
   // Security Flow State
@@ -559,6 +476,39 @@ export const StudentLessons: React.FC = () => {
     fetchProfile();
   }, [session]);
 
+  // Poll for tip payment confirmation automatically
+  useEffect(() => {
+    if (!tipPaymentData || !finalizingLessonGroup) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const appointmentId = finalizingLessonGroup.ids[finalizingLessonGroup.ids.length - 1];
+        const { data, error } = await supabase
+          .from('transactions')
+          .select('status')
+          .eq('appointment_id', appointmentId)
+          .eq('type', 'tip')
+          .eq('status', 'completed')
+          .maybeSingle();
+
+        if (error) {
+          console.error('Error polling tip transaction:', error);
+          return;
+        }
+
+        if (data) {
+          console.log('🎉 Caixinha confirmed on database! Auto-completing modal...');
+          clearInterval(intervalId);
+          completeLessonFlow(tipPaymentData.amount);
+        }
+      } catch (err) {
+        console.error('Error in caixinha polling interval:', err);
+      }
+    }, 3000); // Check every 3 seconds
+
+    return () => clearInterval(intervalId);
+  }, [tipPaymentData, finalizingLessonGroup]);
+
   const startFinalization = async (group: LessonGroup) => {
     setFinalizingLessonGroup(group);
     setRating(0);
@@ -586,7 +536,7 @@ export const StudentLessons: React.FC = () => {
     
     setIsSubmittingTip(true);
     try {
-      // 1. Create PaymentIntent via Edge Function using secure wrapper
+      // 1. Create PIX Charge via Edge Function
       const { data, error } = await invokeSecureFunction('create-tip', {
         body: {
           appointment_id: finalizingLessonGroup.ids[finalizingLessonGroup.ids.length - 1],
@@ -602,12 +552,20 @@ export const StudentLessons: React.FC = () => {
         }
         throw error;
       }
-      if (!data?.clientSecret) throw new Error('Falha ao gerar intenção de pagamento.');
+      if (!data?.qrCodeImage) throw new Error('Falha ao gerar PIX para caixinha.');
 
-      // 2. Set clientSecret to show Stripe Elements
-      setTipClientSecret(data.clientSecret);
+      // 2. Set payment data to show PIX details
+      setTipPaymentData({
+        paymentId: data.paymentId,
+        invoiceUrl: data.invoiceUrl,
+        qrCodeImage: data.qrCodeImage,
+        copiaColaCode: data.copiaColaCode,
+        amount: data.amount
+      });
+      // Set this to non-null so that the outer modal switches steps
+      setTipClientSecret(data.paymentId);
     } catch (err: any) {
-      console.error("Error creating tip intent:", err);
+      console.error("Error creating tip PIX:", err);
       addToast(err.message || "Erro ao iniciar pagamento da caixinha.", 'error');
     } finally {
       setIsSubmittingTip(false);
@@ -975,6 +933,7 @@ export const StudentLessons: React.FC = () => {
     setFinalizingLessonGroup(null);
     setIsSubmittingTip(false);
     setTipClientSecret(null);
+    setTipPaymentData(null);
     setTipGiven(false);
     setIsAutoModal(false);
     setRating(0);
@@ -1744,7 +1703,7 @@ export const StudentLessons: React.FC = () => {
 
                   <div className="text-center space-y-1">
                     <p className="text-sm font-semibold text-gray-800">100% da caixinha vai para o instrutor ❤️</p>
-                    <p className="text-[10px] text-gray-400">Descontadas apenas taxas do cartão</p>
+                    <p className="text-[10px] text-gray-400">Descontadas apenas taxas operacionais do Asaas</p>
                     <p className="text-[11px] text-blue-600 font-medium bg-blue-50 p-2 rounded-lg border border-blue-100 italic">
                       "Ao enviar este valor, você confirma que a aula foi realizada com sucesso."
                     </p>
@@ -1761,7 +1720,7 @@ export const StudentLessons: React.FC = () => {
                       {isSubmittingTip ? 'Iniciando...' : `Enviar R$ ${(customTip ? Number(customTip) : (selectedTip || 0)).toFixed(2).replace('.', ',')} de caixinha 🎁`}
                     </Button>
                     <p className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-bold">
-                      Pagamento imediato
+                      Pagamento imediato via PIX
                     </p>
 
                     <Button 
@@ -1785,26 +1744,76 @@ export const StudentLessons: React.FC = () => {
                   </div>
                 </>
               ) : (
-                <div className="animate-fade-in">
-                  {stripePromise ? (
-                    <Elements 
-                      stripe={stripePromise} 
-                      options={{ 
-                        clientSecret: tipClientSecret,
-                        appearance: { theme: 'stripe', variables: { colorPrimary: '#2563eb' } }
-                      }}
-                    >
-                      <TipCheckoutForm 
-                        clientSecret={tipClientSecret}
-                        amount={customTip ? Number(customTip) : (selectedTip || 0)}
-                        isSubmitting={isSubmittingTip}
-                        onSuccess={() => completeLessonFlow(customTip ? Number(customTip) : (selectedTip || 0))}
-                        onCancel={closeFlow}
-                      />
-                    </Elements>
+                <div className="animate-fade-in flex flex-col items-center text-center space-y-5">
+                  {tipPaymentData ? (
+                    <>
+                      <div className="space-y-1">
+                        <span className="bg-emerald-50 text-emerald-700 text-xs font-semibold px-2.5 py-1 rounded-full border border-emerald-100">
+                          PIX Gerado com Sucesso
+                        </span>
+                        <h4 className="text-xl font-extrabold text-gray-900 mt-2">
+                          R$ {tipPaymentData.amount.toFixed(2).replace('.', ',')}
+                        </h4>
+                      </div>
+
+                      {/* QR Code Container */}
+                      <div className="relative p-3 bg-gray-50 rounded-2xl border border-gray-200/50 flex flex-col items-center justify-center shadow-inner">
+                        <img 
+                          src={tipPaymentData.qrCodeImage} 
+                          alt="QR Code PIX" 
+                          referrerPolicy="no-referrer"
+                          className="w-48 h-48 rounded-lg select-none pointer-events-none" 
+                        />
+                      </div>
+
+                      {/* Copy Pix Button */}
+                      <div className="w-full space-y-2">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(tipPaymentData.copiaColaCode);
+                            addToast("Código PIX copiado para a área de transferência!", "success");
+                          }}
+                          className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold rounded-xl transition-all shadow-md shadow-blue-200"
+                        >
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                          </svg>
+                          Copiar Código PIX
+                        </button>
+
+                        <a
+                          href={tipPaymentData.invoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs text-blue-600 hover:text-blue-800 hover:underline font-semibold transition-colors"
+                        >
+                          Pagar no ambiente Asaas (Alternativa)
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      </div>
+
+                      {/* Loading/Status indicator */}
+                      <div className="flex items-center justify-center gap-2.5 py-3 px-4 bg-gray-50 border border-gray-100 rounded-xl w-full">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-xs text-gray-500 font-medium">
+                          Aguardando confirmação do pagamento...
+                        </span>
+                      </div>
+
+                      {/* Skip/Back */}
+                      <button
+                        onClick={closeFlow}
+                        className="text-xs text-gray-400 hover:text-gray-600 font-medium pt-1"
+                      >
+                        Cancelar e voltar
+                      </button>
+                    </>
                   ) : (
-                    <div className="p-4 text-center text-red-500 bg-red-50 rounded-xl">
-                      Erro ao carregar Stripe.
+                    <div className="py-8 flex flex-col items-center justify-center space-y-3">
+                      <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm text-gray-500 font-semibold">Gerando cobrança PIX...</span>
                     </div>
                   )}
                 </div>

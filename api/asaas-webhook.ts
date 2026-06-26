@@ -117,6 +117,94 @@ export default async function handler(req: Request, res: Response) {
         return res.status(400).json({ error: 'Missing paymentId' });
       }
 
+      // Check if this is a caixinha (tip) payment
+      const externalRef = payload.payment?.externalReference || groupId || '';
+      const isTip = externalRef.startsWith('tip:');
+
+      if (isTip) {
+        console.log(`[ASAAS WEBHOOK] Processando confirmação de caixinha: ${externalRef}`);
+        const parts = externalRef.split(':');
+        const appointmentId = parts[1] || null;
+        const transactionId = parts[2] || null;
+
+        if (!appointmentId || !transactionId) {
+          console.error(`❌ [ASAAS WEBHOOK] Caixinha com referência inválida: ${externalRef}`);
+          return res.status(400).json({ error: 'Invalid tip externalReference format' });
+        }
+
+        // Fetch transaction to ensure it exists and prevent duplicates
+        const { data: tx, error: fetchTxError } = await supabaseAdmin
+          .from('transactions')
+          .select('id, status, amount, student_id, instructor_id')
+          .eq('id', transactionId)
+          .maybeSingle();
+
+        if (fetchTxError) {
+          console.error(`❌ [ASAAS WEBHOOK] Error fetching transaction ${transactionId}:`, fetchTxError.message);
+          return res.status(500).json({ error: 'Database error fetching transaction' });
+        }
+
+        if (!tx) {
+          console.error(`❌ [ASAAS WEBHOOK] Nenhuma transação provisória encontrada com ID ${transactionId}.`);
+          return res.status(404).json({ error: 'Provisional transaction not found' });
+        }
+
+        if (tx.status === 'completed') {
+          console.log(`ℹ️ [ASAAS WEBHOOK] Caixinha transação ${transactionId} já está concluída (idempotente).`);
+          return res.status(200).json({
+            success: true,
+            message: 'Caixinha already completed (idempotent)',
+            event,
+            timestamp
+          });
+        }
+
+        // Update the transaction status to 'completed'
+        const { error: updateTxError } = await supabaseAdmin
+          .from('transactions')
+          .update({
+            status: 'completed',
+            provider_payment_id: currentPaymentId,
+            event_date: new Date().toISOString()
+          })
+          .eq('id', transactionId);
+
+        if (updateTxError) {
+          console.error(`❌ [ASAAS WEBHOOK] Error completing tip transaction ${transactionId}:`, updateTxError.message);
+          return res.status(500).json({ error: 'Database error completing transaction' });
+        }
+
+        console.log(`✅ [ASAAS WEBHOOK] Caixinha transação ${transactionId} marcada como completed com sucesso!`);
+
+        // Send a beautiful notification to the instructor
+        const amountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
+        const amountFormatted = (amountCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        const instructorId = tx.instructor_id;
+
+        if (instructorId) {
+          try {
+            await supabaseAdmin.from('notifications').upsert({
+              user_id: instructorId,
+              title: 'Caixinha Recebida! 🎁',
+              message: `Parabéns! Você recebeu uma caixinha de ${amountFormatted} pelo seu excelente trabalho.`,
+              type: 'tip',
+              metadata: { appointment_id: appointmentId, transaction_id: transactionId },
+              idempotency_key: `tip_notification:${transactionId}`
+            }, { onConflict: 'idempotency_key' });
+            console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha enviada ao instrutor ${instructorId}`);
+          } catch (notifErr) {
+            console.error(`⚠️ [ASAAS WEBHOOK] Error sending tip notification:`, notifErr);
+          }
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: 'Caixinha payment confirmed and processed successfully',
+          event,
+          timestamp
+        });
+      }
+
       // Fallback search to find groupId if not present/sent in externalReference
       if (!groupId) {
         const { data: foundApts } = await supabaseAdmin
