@@ -119,6 +119,24 @@ const formatPhone = (value: string) => {
   }
 };
 
+const formatToBRL = (value: string): string => {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return '';
+  const cents = parseInt(digits, 10);
+  if (isNaN(cents)) return '';
+  const amount = cents / 100;
+  return "R$ " + amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const parseBRLToNumber = (value: string): number => {
+  const clean = value
+    .replace(/R\$\s?/g, '') // remove R$
+    .replace(/\s/g, '')     // remove any spaces
+    .replace(/\./g, '')     // remove thousands dots
+    .replace(',', '.');     // replace decimal comma with dot
+  return parseFloat(clean);
+};
+
 export const InstructorFinance: React.FC = () => {
   const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
@@ -558,7 +576,7 @@ export const InstructorFinance: React.FC = () => {
       return;
     }
 
-    const numIncome = parseFloat(incomeValue);
+    const numIncome = parseBRLToNumber(incomeValue);
     if (!incomeValue || isNaN(numIncome) || numIncome <= 0) {
       const fieldName = isIndividual ? 'Renda Mensal Estimada' : 'Faturamento Mensal Estimado';
       addToast(`Informe o campo: ${fieldName}, com um valor maior que zero.`, 'error');
@@ -1108,7 +1126,7 @@ export const InstructorFinance: React.FC = () => {
       >
         <form onSubmit={handleSubmitAsaas} className="space-y-4">
           <p className="text-xs text-gray-500 leading-relaxed mb-2">
-            Insira suas informações cadastrais para habilitar transferências automáticas via Asaas Sandbox.
+            Complete seu cadastro para ativar sua Conta de Recebimentos Asaas. Após a aprovação, você poderá receber pagamentos das aulas, acompanhar seu saldo, realizar pagamentos e solicitar o Cartão Asaas, utilizando sua própria conta Asaas sem precisar transferir o dinheiro para outro banco.
           </p>
 
           <Input
@@ -1215,7 +1233,7 @@ export const InstructorFinance: React.FC = () => {
             <div className="col-span-2">
               <Input
                 label="Cidade"
-                placeholder="Ex: São Paulo"
+                placeholder="Ex.: São Paulo"
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
                 type="text"
@@ -1226,7 +1244,7 @@ export const InstructorFinance: React.FC = () => {
             <div>
               <Input
                 label="UF"
-                placeholder="Ex: SP"
+                placeholder="SP"
                 value={state}
                 onChange={(e) => setState(e.target.value.toUpperCase().slice(0, 2))}
                 type="text"
@@ -1237,8 +1255,8 @@ export const InstructorFinance: React.FC = () => {
           </div>
 
           <Input
-            label="Telefone (Opcional)"
-            placeholder="(00) 00000-0000"
+            label="Telefone *"
+            placeholder="(11) 99999-9999"
             value={phone}
             onChange={(e) => setPhone(formatPhone(e.target.value))}
             type="text"
@@ -1248,14 +1266,13 @@ export const InstructorFinance: React.FC = () => {
           <div className="flex flex-col space-y-1">
             <Input
               label={cpfCnpj.replace(/\D/g, '').length <= 11 ? "Renda Mensal Estimada (R$)" : "Faturamento Mensal Estimado (R$)"}
-              placeholder="Ex: 3000.00"
+              placeholder="R$ 0,00"
               value={incomeValue}
-              onChange={(e) => setIncomeValue(e.target.value)}
-              type="number"
+              onChange={(e) => setIncomeValue(formatToBRL(e.target.value))}
+              type="text"
+              inputMode="numeric"
               required
               disabled={submittingAsaas}
-              min="0.01"
-              step="any"
             />
             <p className="text-[11px] text-gray-500 ml-1 leading-relaxed">
               Informação exigida pelo parceiro financeiro Asaas para validação regulatória da conta de recebimentos.
