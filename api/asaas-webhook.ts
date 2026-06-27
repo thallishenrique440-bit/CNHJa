@@ -199,17 +199,93 @@ export default async function handler(req: Request, res: Response) {
 
         if (instructorId) {
           try {
-            await supabaseAdmin.from('notifications').upsert({
-              user_id: instructorId,
-              title: 'Caixinha Recebida! 🎁',
-              message: `Parabéns! Você recebeu uma caixinha de ${amountFormatted} pelo seu excelente trabalho.`,
-              type: 'tip',
-              metadata: { appointment_id: appointmentId, transaction_id: transactionId },
-              idempotency_key: `tip_notification:${transactionId}`
-            }, { onConflict: 'idempotency_key' });
-            console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha enviada ao instrutor ${instructorId}`);
+            // 1. Idempotency Check using notification_logs
+            const { error: logError } = await supabaseAdmin
+              .from('notification_logs')
+              .insert({
+                appointment_id: appointmentId,
+                status: 'tip',
+                target_user_id: instructorId
+              });
+
+            if (logError) {
+              if (logError.code === '23505') {
+                console.log(`ℹ️ [ASAAS WEBHOOK] Notificação de caixinha já enviada para o appointment ${appointmentId} (idempotente via notification_logs).`);
+                return res.status(200).json({
+                  success: true,
+                  message: 'Tip notification already processed (idempotency)',
+                  event,
+                  timestamp
+                });
+              }
+              throw logError;
+            }
+
+            const title = '🎉 Você recebeu uma caixinha!';
+            const message = `Seu aluno enviou uma caixinha de ${amountFormatted}. O valor já está disponível no seu histórico financeiro.`;
+
+            // 2. Insert In-App Notification
+            const { error: notifError } = await supabaseAdmin
+              .from('notifications')
+              .insert({
+                user_id: instructorId,
+                title,
+                message,
+                type: 'tip',
+                metadata: { 
+                  appointment_id: appointmentId, 
+                  transaction_id: transactionId,
+                  status: 'completed'
+                },
+                idempotency_key: `tip_notification:${transactionId}`
+              });
+
+            if (notifError) {
+              if (notifError.code === '23505') {
+                console.log(`ℹ️ [ASAAS WEBHOOK] Notificação de caixinha já existente na tabela de notificações para ${transactionId}.`);
+              } else {
+                throw notifError;
+              }
+            } else {
+              console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha salva para o instrutor ${instructorId}`);
+            }
+
+            // 3. Dispatch Push Notification via send-push-notification Edge Function
+            const edgeFunctionUrl = `${process.env.SUPABASE_URL}/functions/v1/send-push-notification`;
+            console.log(`[ASAAS WEBHOOK] Chamando Edge Function para envio de Push: ${edgeFunctionUrl}`);
+            
+            const response = await fetch(edgeFunctionUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+              },
+              body: JSON.stringify({
+                table: 'notifications',
+                type: 'INSERT',
+                record: {
+                  user_id: instructorId,
+                  title,
+                  message,
+                  type: 'tip',
+                  metadata: {
+                    appointment_id: appointmentId,
+                    transaction_id: transactionId,
+                    status: 'completed'
+                  }
+                }
+              })
+            });
+
+            if (!response.ok) {
+              const errBody = await response.text();
+              console.error(`❌ [ASAAS WEBHOOK] Falha ao chamar Edge Function de push:`, response.status, errBody);
+            } else {
+              console.log(`✅ [ASAAS WEBHOOK] Edge Function de push concluída com sucesso!`);
+            }
+
           } catch (notifErr) {
-            console.error(`⚠️ [ASAAS WEBHOOK] Error sending tip notification:`, notifErr);
+            console.error(`⚠️ [ASAAS WEBHOOK] Error processing tip notification & push:`, notifErr);
           }
         }
 

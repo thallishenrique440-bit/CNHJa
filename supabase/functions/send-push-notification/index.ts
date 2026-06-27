@@ -109,266 +109,293 @@ Deno.serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json()
     
-    // Only process UPDATE to the appointments table
-    if (payload.table !== 'appointments' || payload.type !== 'UPDATE') {
-      return new Response(JSON.stringify({ message: 'Ignored: Not an appointment update' }), {
+    // Check if it is a tip notification insert
+    const isTipNotification = payload.table === 'notifications' && payload.type === 'INSERT' && payload.record?.type === 'tip'
+
+    // Only process UPDATE to the appointments table OR INSERT of a tip to the notifications table
+    if (!isTipNotification && (payload.table !== 'appointments' || payload.type !== 'UPDATE')) {
+      return new Response(JSON.stringify({ message: 'Ignored: Not a valid event' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
     }
 
-    const oldStatus = payload.old_record?.status
-    const newStatus = payload.record?.status
-    const actorId = payload.record?.updated_by
-    const groupId = payload.record?.group_id
-    const cancelledReason = payload.record?.cancelled_reason
-
-    // Reschedule changes
-    const oldReschedReq = payload.old_record?.reschedule_requested_at
-    const newReschedReq = payload.record?.reschedule_requested_at
-    const oldRescheduled = payload.old_record?.rescheduled_at
-    const newRescheduled = payload.record?.rescheduled_at
-
-    const isRescheduleRequested = !oldReschedReq && newReschedReq
-    const isRescheduleApproved = !oldRescheduled && newRescheduled && oldReschedReq && !newReschedReq
-    const isRescheduleRejected = oldReschedReq && !newReschedReq && !newRescheduled
-
-    const isRescheduleEvent = isRescheduleRequested || isRescheduleApproved || isRescheduleRejected
-
-    // Only process if the status actually changed (for UPDATE) OR if a reschedule event occurred
-    if (oldStatus === newStatus && !isRescheduleEvent) {
-      return new Response(JSON.stringify({ message: 'Ignored: Status did not change and no reschedule event' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
+    let targetUserId: string | null = null
+    let title = ''
+    let body = ''
+    let notificationType: string = ''
+    let appointmentId: string | null = null
+    let newStatus = 'completed'
 
     // Initialize Supabase client early
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // --- LOG [PUSH REQUEST] ---
-    console.log('[PUSH REQUEST] Received webhook event:', {
-      table: payload.table,
-      type: payload.type,
-      oldStatus,
-      newStatus,
-      appointmentId: payload.record?.id,
-      groupId,
-      actorId,
-      cancelledReason
-    });
+    if (isTipNotification) {
+      targetUserId = payload.record.user_id
+      title = payload.record.title
+      body = payload.record.message
+      notificationType = payload.record.type
+      appointmentId = payload.record.metadata?.appointment_id || null
+      newStatus = 'completed'
 
-    // Ignore technical cancellations for checkout retries to avoid confusing users
-    if (newStatus === 'cancelled' && cancelledReason === 'user_retry_new_attempt') {
-      console.log('[PUSH REQUEST] Ignored: Technical cancellation (user_retry_new_attempt)');
-      return new Response(JSON.stringify({ message: 'Ignored: Technical cancellation for user retry' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-
-    // Determine who should receive the notification and what the message is
-    let targetUserId: string | null = null
-    let title = ''
-    let body = ''
-    let notificationType: string = ''
-
-    if (isRescheduleRequested) {
-      // Aluno solicita remarcação -> Instrutor recebe
-      targetUserId = payload.record.instructor_id
-      notificationType = 'booking_request'
-    } else if (isRescheduleApproved) {
-      // Instrutor aprova remarcação -> Aluno recebe
-      targetUserId = payload.record.student_id
-      notificationType = 'booking_accepted'
-    } else if (isRescheduleRejected) {
-      // Instrutor rejeita remarcação -> Aluno recebe
-      targetUserId = payload.record.student_id
-      notificationType = 'booking_rejected'
-    } else if (newStatus === 'pending_approval' && oldStatus !== 'pending_approval') {
-      // 1. Student requested a class (payment confirmed) -> Notify Instructor
-      targetUserId = payload.record.instructor_id
-      notificationType = 'booking_request'
-    } else if (newStatus === 'confirmed' && oldStatus === 'pending_approval') {
-      // 2. Instructor approved -> Notify Student
-      targetUserId = payload.record.student_id
-      notificationType = 'booking_accepted'
-    } else if (newStatus === 'cancelled') {
-      // 3. Someone cancelled -> Notify the other party
-      targetUserId = payload.record.cancelled_by === 'student' ? payload.record.instructor_id : payload.record.student_id
-      notificationType = 'booking_cancelled'
-    } else if (newStatus === 'rejected') {
-      targetUserId = payload.record.student_id
-      notificationType = 'booking_rejected'
-    } else if (newStatus === 'expired') {
-      targetUserId = payload.record.student_id
-      notificationType = 'booking_cancelled'
-    }
-
-    if (!targetUserId) {
-      console.log('[PUSH REQUEST] Ignored: No target user identified for status code change');
-      return new Response(JSON.stringify({ message: 'Ignored: No notification needed for this status change' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-
-    // --- PROTEÇÃO CONTRA AUTO-NOTIFICAÇÃO ---
-    if (actorId && targetUserId === actorId) {
-      console.log('[PUSH REQUEST] Ignored: Actor is the target user itself');
-      return new Response(JSON.stringify({ message: 'Ignored: Actor is the target user' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-
-    const notificationStatus = isRescheduleRequested
-      ? 'reschedule_requested'
-      : isRescheduleApproved
-      ? 'reschedule_approved'
-      : isRescheduleRejected
-      ? 'reschedule_rejected'
-      : newStatus;
-
-    // --- IDEMPOTÊNCIA INDIVIDUAL (INSERT-FIRST) ---
-    // Reservamos a idempotência antes de qualquer outra lógica.
-    // Se falhar por restrição de unicidade (appointment_id, status, target_user_id), 
-    // significa que esta aula específica já foi processada.
-    const { error: logInsertError } = await supabase
-      .from('notification_logs')
-      .insert({
-        appointment_id: payload.record.id,
-        group_id: groupId,
-        status: notificationStatus,
-        target_user_id: targetUserId
-      })
-
-    if (logInsertError) {
-      if (logInsertError.code === '23505') {
-        console.log('[PUSH REQUEST] Ignored: Notification already processed (idempotency constraint)');
-        return new Response(JSON.stringify({ message: 'Ignored: Notification already processed (idempotency)' }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        })
-      }
-      console.error('[PUSH ERROR] Error inserting notification log:', logInsertError)
-    }
-
-    // Fetch student's full name to personalize title and body
-    const studentId = payload.record.student_id
-    let studentName = 'Um aluno'
-    if (studentId) {
-      const { data: studentProfile, error: studentError } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', studentId)
-        .maybeSingle()
-      if (!studentError && studentProfile?.full_name) {
-        studentName = studentProfile.full_name
-      }
-    }
-
-    const startTime = payload.record.start_time ? payload.record.start_time.substring(0, 5) : 'horário marcado'
-
-    let isCombo = false
-    let comboCount = 1
-
-    // --- AGRUPAMENTO (DEBOUNCE POR GROUP_ID) ---
-    // Se houver um group_id, verificamos se houve algum disparo para esse grupo nos últimos 20 segundos
-    if (groupId) {
-      const twentySecondsAgo = new Date(Date.now() - 20000).toISOString()
-      const { data: recentGroupLog, error: groupLogError } = await supabase
+      // --- IDEMPOTÊNCIA INDIVIDUAL (INSERT-FIRST) ---
+      // Para caixinha, registramos na notification_logs com status = 'tip_push'
+      const { error: logInsertError } = await supabase
         .from('notification_logs')
-        .select('id')
-        .eq('group_id', groupId)
-        .eq('status', notificationStatus)
-        .eq('target_user_id', targetUserId)
-        .neq('appointment_id', payload.record.id) // Exclui o log que acabamos de criar
-        .gt('created_at', twentySecondsAgo)
-        .maybeSingle()
+        .insert({
+          appointment_id: appointmentId,
+          status: 'tip_push',
+          target_user_id: targetUserId
+        })
 
-      if (groupLogError) {
-        console.error('[PUSH ERROR] Error checking group notification log:', groupLogError)
+      if (logInsertError) {
+        if (logInsertError.code === '23505') {
+          console.log('[PUSH REQUEST] Ignored: Tip push notification already processed (idempotency constraint)');
+          return new Response(JSON.stringify({ message: 'Ignored: Tip push notification already processed (idempotency)' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          })
+        }
+        console.error('[PUSH ERROR] Error inserting tip notification log:', logInsertError)
       }
 
-      if (recentGroupLog) {
-        console.log('[PUSH REQUEST] Ignored: Group already notified recently (debounce check)');
-        return new Response(JSON.stringify({ message: 'Ignored: Group already notified recently (debounce)' }), {
+    } else {
+      const oldStatus = payload.old_record?.status
+      const newStatusVal = payload.record?.status
+      const actorId = payload.record?.updated_by
+      const groupId = payload.record?.group_id
+      const cancelledReason = payload.record?.cancelled_reason
+
+      // Reschedule changes
+      const oldReschedReq = payload.old_record?.reschedule_requested_at
+      const newReschedReq = payload.record?.reschedule_requested_at
+      const oldRescheduled = payload.old_record?.rescheduled_at
+      const newRescheduled = payload.record?.rescheduled_at
+
+      const isRescheduleRequested = !oldReschedReq && newReschedReq
+      const isRescheduleApproved = !oldRescheduled && newRescheduled && oldReschedReq && !newReschedReq
+      const isRescheduleRejected = oldReschedReq && !newReschedReq && !newRescheduled
+
+      const isRescheduleEvent = isRescheduleRequested || isRescheduleApproved || isRescheduleRejected
+
+      // Only process if the status actually changed (for UPDATE) OR if a reschedule event occurred
+      if (oldStatus === newStatusVal && !isRescheduleEvent) {
+        return new Response(JSON.stringify({ message: 'Ignored: Status did not change and no reschedule event' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           status: 200,
         })
       }
 
-      // --- AGREGAÇÃO (CONTAGEM DE AULAS NO GRUPO) ---
-      // Se for o "vencedor" do grupo, contamos quantas aulas estão no mesmo status
-      const { count, error: countError } = await supabase
-        .from('appointments')
-        .select('id', { count: 'exact', head: true })
-        .eq('group_id', groupId)
-        .eq('status', newStatus)
-        .eq('instructor_id', payload.record.instructor_id)
-        .eq('student_id', payload.record.student_id)
+      // --- LOG [PUSH REQUEST] ---
+      console.log('[PUSH REQUEST] Received webhook event:', {
+        table: payload.table,
+        type: payload.type,
+        oldStatus,
+        newStatus: newStatusVal,
+        appointmentId: payload.record?.id,
+        groupId,
+        actorId,
+        cancelledReason
+      });
 
-      if (countError) {
-        console.error('[PUSH ERROR] Error counting group appointments:', countError)
+      // Ignore technical cancellations for checkout retries to avoid confusing users
+      if (newStatusVal === 'cancelled' && cancelledReason === 'user_retry_new_attempt') {
+        console.log('[PUSH REQUEST] Ignored: Technical cancellation (user_retry_new_attempt)');
+        return new Response(JSON.stringify({ message: 'Ignored: Technical cancellation for user retry' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        })
       }
 
-      if (count && count > 1) {
-        isCombo = true
-        comboCount = count
-      }
-    }
+      appointmentId = payload.record?.id
+      newStatus = newStatusVal
 
-    // Dynamic messaging formatting
-    if (isRescheduleRequested) {
-      title = 'Solicitação de remarcação'
-      body = `${studentName} pediu para remarcar a aula das ${startTime}.`
-    } else if (isRescheduleApproved) {
-      title = 'Remarcação aceita'
-      body = 'Seu instrutor aceitou a solicitação de remarcação.'
-    } else if (isRescheduleRejected) {
-      title = 'Remarcação recusada'
-      body = 'O instrutor recusou o pedido de remarcação da aula.'
-    } else if (newStatus === 'pending_approval') {
-      if (isCombo) {
-        title = 'Novo combo solicitado'
-        body = `${studentName} solicitou um combo com ${comboCount} aulas.`
-      } else {
-        title = 'Nova solicitação de aula'
-        body = `${studentName} solicitou uma aula às ${startTime}.`
+      if (isRescheduleRequested) {
+        targetUserId = payload.record.instructor_id
+        notificationType = 'booking_request'
+      } else if (isRescheduleApproved) {
+        targetUserId = payload.record.student_id
+        notificationType = 'booking_accepted'
+      } else if (isRescheduleRejected) {
+        targetUserId = payload.record.student_id
+        notificationType = 'booking_rejected'
+      } else if (newStatusVal === 'pending_approval' && oldStatus !== 'pending_approval') {
+        targetUserId = payload.record.instructor_id
+        notificationType = 'booking_request'
+      } else if (newStatusVal === 'confirmed' && oldStatus === 'pending_approval') {
+        targetUserId = payload.record.student_id
+        notificationType = 'booking_accepted'
+      } else if (newStatusVal === 'cancelled') {
+        targetUserId = payload.record.cancelled_by === 'student' ? payload.record.instructor_id : payload.record.student_id
+        notificationType = 'booking_cancelled'
+      } else if (newStatusVal === 'rejected') {
+        targetUserId = payload.record.student_id
+        notificationType = 'booking_rejected'
+      } else if (newStatusVal === 'expired') {
+        targetUserId = payload.record.student_id
+        notificationType = 'booking_cancelled'
       }
-    } else if (newStatus === 'confirmed') {
-      title = 'Aula confirmada'
-      body = 'Seu instrutor confirmou sua aula.'
-    } else if (newStatus === 'rejected') {
-      title = 'Aula recusada'
-      body = 'Sua solicitação de aula foi recusada.'
-    } else if (newStatus === 'cancelled') {
-      title = 'Aula cancelada'
-      body = 'Uma aula foi cancelada.'
-    } else if (newStatus === 'expired') {
-      title = 'Agendamento expirado'
-      body = 'O prazo para aceitar sua aula expirou.'
-    }
 
-    // --- INSERÇÃO NA TABELA DE NOTIFICAÇÕES (In-App) ---
-    const { error: inAppError } = await supabase
-      .from('notifications')
-      .insert({
-        user_id: targetUserId,
-        title,
-        message: body,
-        type: notificationType,
-        metadata: {
-          appointment_id: payload.record.id,
-          status: newStatus
+      if (!targetUserId) {
+        console.log('[PUSH REQUEST] Ignored: No target user identified for status code change');
+        return new Response(JSON.stringify({ message: 'Ignored: No notification needed for this status change' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        })
+      }
+
+      // --- PROTEÇÃO CONTRA AUTO-NOTIFICAÇÃO ---
+      if (actorId && targetUserId === actorId) {
+        console.log('[PUSH REQUEST] Ignored: Actor is the target user itself');
+        return new Response(JSON.stringify({ message: 'Ignored: Actor is the target user' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        })
+      }
+
+      const notificationStatus = isRescheduleRequested
+        ? 'reschedule_requested'
+        : isRescheduleApproved
+        ? 'reschedule_approved'
+        : isRescheduleRejected
+        ? 'reschedule_rejected'
+        : newStatusVal;
+
+      // --- IDEMPOTÊNCIA INDIVIDUAL (INSERT-FIRST) ---
+      const { error: logInsertError } = await supabase
+        .from('notification_logs')
+        .insert({
+          appointment_id: appointmentId,
+          group_id: groupId,
+          status: notificationStatus,
+          target_user_id: targetUserId
+        })
+
+      if (logInsertError) {
+        if (logInsertError.code === '23505') {
+          console.log('[PUSH REQUEST] Ignored: Notification already processed (idempotency constraint)');
+          return new Response(JSON.stringify({ message: 'Ignored: Notification already processed (idempotency)' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          })
         }
-      })
+        console.error('[PUSH ERROR] Error inserting notification log:', logInsertError)
+      }
 
-    if (inAppError) {
-      console.error('[PUSH ERROR] Error inserting in-app notification:', inAppError)
+      // Fetch student's full name to personalize title and body
+      const studentId = payload.record.student_id
+      let studentName = 'Um aluno'
+      if (studentId) {
+        const { data: studentProfile, error: studentError } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', studentId)
+          .maybeSingle()
+        if (!studentError && studentProfile?.full_name) {
+          studentName = studentProfile.full_name
+        }
+      }
+
+      const startTime = payload.record.start_time ? payload.record.start_time.substring(0, 5) : 'horário marcado'
+
+      let isCombo = false
+      let comboCount = 1
+
+      // --- AGRUPAMENTO (DEBOUNCE POR GROUP_ID) ---
+      if (groupId) {
+        const twentySecondsAgo = new Date(Date.now() - 20000).toISOString()
+        const { data: recentGroupLog, error: groupLogError } = await supabase
+          .from('notification_logs')
+          .select('id')
+          .eq('group_id', groupId)
+          .eq('status', notificationStatus)
+          .eq('target_user_id', targetUserId)
+          .neq('appointment_id', appointmentId) // Exclui o log que acabamos de criar
+          .gt('created_at', twentySecondsAgo)
+          .maybeSingle()
+
+        if (groupLogError) {
+          console.error('[PUSH ERROR] Error checking group notification log:', groupLogError)
+        }
+
+        if (recentGroupLog) {
+          console.log('[PUSH REQUEST] Ignored: Group already notified recently (debounce check)');
+          return new Response(JSON.stringify({ message: 'Ignored: Group already notified recently (debounce)' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          })
+        }
+
+        // --- AGREGAÇÃO (CONTAGEM DE AULAS NO GRUPO) ---
+        const { count, error: countError } = await supabase
+          .from('appointments')
+          .select('id', { count: 'exact', head: true })
+          .eq('group_id', groupId)
+          .eq('status', newStatusVal)
+          .eq('instructor_id', payload.record.instructor_id)
+          .eq('student_id', payload.record.student_id)
+
+        if (countError) {
+          console.error('[PUSH ERROR] Error counting group appointments:', countError)
+        }
+
+        if (count && count > 1) {
+          isCombo = true
+          comboCount = count
+        }
+      }
+
+      // Dynamic messaging formatting
+      if (isRescheduleRequested) {
+        title = 'Solicitação de remarcação'
+        body = `${studentName} pediu para remarcar a aula das ${startTime}.`
+      } else if (isRescheduleApproved) {
+        title = 'Remarcação aceita'
+        body = 'Seu instrutor aceitou a solicitação de remarcação.'
+      } else if (isRescheduleRejected) {
+        title = 'Remarcação recusada'
+        body = 'O instrutor recusou o pedido de remarcação da aula.'
+      } else if (newStatusVal === 'pending_approval') {
+        if (isCombo) {
+          title = 'Novo combo solicitado'
+          body = `${studentName} solicitou um combo com ${comboCount} aulas.`
+        } else {
+          title = 'Nova solicitação de aula'
+          body = `${studentName} solicitou uma aula às ${startTime}.`
+        }
+      } else if (newStatusVal === 'confirmed') {
+        title = 'Aula confirmada'
+        body = 'Seu instrutor confirmou sua aula.'
+      } else if (newStatusVal === 'rejected') {
+        title = 'Aula recusada'
+        body = 'Sua solicitação de aula foi recusada.'
+      } else if (newStatusVal === 'cancelled') {
+        title = 'Aula cancelada'
+        body = 'Uma aula foi cancelada.'
+      } else if (newStatusVal === 'expired') {
+        title = 'Agendamento expirado'
+        body = 'O prazo para aceitar sua aula expirou.'
+      }
+
+      // --- INSERÇÃO NA TABELA DE NOTIFICAÇÕES (In-App) ---
+      const { error: inAppError } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: targetUserId,
+          title,
+          message: body,
+          type: notificationType,
+          metadata: {
+            appointment_id: appointmentId,
+            status: newStatus
+          }
+        })
+
+      if (inAppError) {
+        console.error('[PUSH ERROR] Error inserting in-app notification:', inAppError)
+      }
     }
 
     // --- ENVIO PUSH (FCM) ---
@@ -420,7 +447,7 @@ Deno.serve(async (req) => {
     const projectId = serviceAccount.project_id
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`
 
-    const url = targetUserId === payload.record.student_id ? '/#/student/lessons' : '/#/instructor/agenda'
+    const url = isTipNotification ? '/#/instructor/finance' : (targetUserId === payload.record?.student_id ? '/#/student/lessons' : '/#/instructor/agenda')
 
     const sendPromises = tokens.map(async (token) => {
       const message = {
@@ -437,7 +464,7 @@ Deno.serve(async (req) => {
             }
           },
           data: {
-            appointmentId: payload.record.id,
+            appointmentId: appointmentId || '',
             status: newStatus,
             url
           }

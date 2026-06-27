@@ -587,32 +587,19 @@ export const StudentLessons: React.FC = () => {
     const mainReferenceId = lessonIds[lessonIds.length - 1]; 
 
     try {
-       // 1. Create or Update Review (ONLY if rating > 0)
+       // 1. Create Review (ONLY if rating > 0)
        if (rating > 0) {
-         // Check if student already has a review for this instructor
-         const { data: existingReviews } = await supabase
-           .from('reviews')
-           .select('id, appointment_id')
-           .eq('student_id', session.user.id)
-           .eq('instructor_id', finalizingLessonGroup.instructorId)
-           .order('created_at', { ascending: false })
-           .limit(1);
-
          const reviewData: any = {
-           appointment_id: existingReviews?.[0]?.appointment_id || mainReferenceId,
+           appointment_id: mainReferenceId,
            student_id: session.user.id,
            instructor_id: finalizingLessonGroup.instructorId,
            rating: rating,
            comment: comment
          };
 
-         if (existingReviews && existingReviews.length > 0) {
-           reviewData.id = existingReviews[0].id;
-         }
-
          const { error: reviewError } = await supabase
            .from('reviews')
-           .upsert(reviewData);
+           .insert(reviewData);
          
          if (reviewError) throw reviewError;
        }
