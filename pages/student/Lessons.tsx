@@ -1759,7 +1759,7 @@ export const StudentLessons: React.FC = () => {
                       {/* QR Code Container */}
                       <div className="relative p-3 bg-gray-50 rounded-2xl border border-gray-200/50 flex flex-col items-center justify-center shadow-inner">
                         <img 
-                          src={tipPaymentData.qrCodeImage} 
+                          src={`data:image/png;base64,${tipPaymentData.qrCodeImage}`} 
                           alt="QR Code PIX" 
                           referrerPolicy="no-referrer"
                           className="w-48 h-48 rounded-lg select-none pointer-events-none" 

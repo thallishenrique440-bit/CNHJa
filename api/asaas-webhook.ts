@@ -135,7 +135,7 @@ export default async function handler(req: Request, res: Response) {
         // Fetch transaction to ensure it exists and prevent duplicates
         const { data: tx, error: fetchTxError } = await supabaseAdmin
           .from('transactions')
-          .select('id, status, amount, student_id, instructor_id')
+          .select('id, status, amount, student_id, instructor_id, metadata')
           .eq('id', transactionId)
           .maybeSingle();
 
@@ -159,13 +159,29 @@ export default async function handler(req: Request, res: Response) {
           });
         }
 
+        const grossAmountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
+        const netValue = payload.payment?.netValue;
+        const netAmountCents = netValue !== undefined ? Math.round(netValue * 100) : grossAmountCents;
+        const asaasFeeCents = grossAmountCents - netAmountCents;
+
+        const existingMetadata = tx.metadata && typeof tx.metadata === 'object' ? tx.metadata : {};
+        const updatedMetadata = {
+          ...existingMetadata,
+          asaas_payment_id: currentPaymentId,
+          asaas_fee_cents: asaasFeeCents,
+          payment_type: 'PIX_TIP'
+        };
+
         // Update the transaction status to 'completed'
         const { error: updateTxError } = await supabaseAdmin
           .from('transactions')
           .update({
             status: 'completed',
             provider_payment_id: currentPaymentId,
-            event_date: new Date().toISOString()
+            event_date: new Date().toISOString(),
+            net_amount: netAmountCents,
+            platform_fee: 0,
+            metadata: updatedMetadata
           })
           .eq('id', transactionId);
 
