@@ -1815,15 +1815,7 @@ export const InstructorAgenda: React.FC = () => {
                                     <span className="text-sm font-bold text-green-600">{formatCurrency(selectedLesson.price || 0)}</span>
                                 </div>
                             )}
-                            {/* Phone Display */}
-                            <div className="flex flex-col items-center bg-blue-50/50 rounded-lg p-3 border border-blue-100">
-                                <span className="text-[10px] text-blue-800 uppercase font-bold tracking-wider mb-1">WhatsApp do Aluno</span>
-                                {selectedLesson.studentPhone ? (
-                                    <span className="text-sm font-semibold text-gray-800">{selectedLesson.studentPhone}</span>
-                                ) : (
-                                    <span className="text-sm text-gray-400 italic">Não informado</span>
-                                )}
-                            </div>
+
 
                             <div className="grid grid-cols-2 gap-3 text-center">
                                 <div className="bg-gray-50 rounded-lg p-2 border border-gray-100">
