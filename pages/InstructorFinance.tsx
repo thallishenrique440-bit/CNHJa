@@ -128,6 +128,72 @@ const formatToBRL = (value: string): string => {
   return "R$ " + amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+const formatBirthDateInput = (value: string): string => {
+  const digits = value.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) {
+    return digits;
+  }
+  if (digits.length <= 4) {
+    return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  }
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const isValidBirthDate = (birthDateStr: string): { valid: boolean; reason?: string } => {
+  const regex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+  if (!regex.test(birthDateStr)) {
+    return { valid: false, reason: 'Informe a data no formato dd/mm/aaaa.' };
+  }
+
+  const [, dayStr, monthStr, yearStr] = birthDateStr.match(regex)!;
+  const day = parseInt(dayStr, 10);
+  const month = parseInt(monthStr, 10);
+  const year = parseInt(yearStr, 10);
+
+  if (year < 1900) {
+    return { valid: false, reason: 'O ano de nascimento não pode ser anterior a 1900.' };
+  }
+  const currentYear = new Date().getFullYear();
+  if (year > currentYear) {
+    return { valid: false, reason: 'O ano de nascimento não pode ser no futuro.' };
+  }
+
+  if (month < 1 || month > 12) {
+    return { valid: false, reason: 'Mês de nascimento inválido.' };
+  }
+
+  if (day < 1 || day > 31) {
+    return { valid: false, reason: 'Dia de nascimento inválido.' };
+  }
+
+  const tempDate = new Date(year, month - 1, day);
+  const isRealDate = (
+    tempDate.getFullYear() === year &&
+    tempDate.getMonth() === month - 1 &&
+    tempDate.getDate() === day
+  );
+
+  if (!isRealDate) {
+    return { valid: false, reason: 'Esta data de nascimento não é válida no calendário.' };
+  }
+
+  const today = new Date();
+  let age = today.getFullYear() - year;
+  const monthDiff = today.getMonth() - (month - 1);
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < day)) {
+    age--;
+  }
+
+  if (age < 18) {
+    return { valid: false, reason: 'Apenas maiores de 18 anos podem se cadastrar.' };
+  }
+  if (age > 120) {
+    return { valid: false, reason: 'Idade máxima permitida é de 120 anos.' };
+  }
+
+  return { valid: true };
+};
+
 const parseBRLToNumber = (value: string): number => {
   const clean = value
     .replace(/R\$\s?/g, '') // remove R$
@@ -546,8 +612,9 @@ export const InstructorFinance: React.FC = () => {
         addToast('Informe sua data de nascimento para concluir o cadastro financeiro.', 'error');
         return;
       }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
-        addToast('Informe uma data de nascimento válida.', 'error');
+      const validation = isValidBirthDate(birthDate);
+      if (!validation.valid) {
+        addToast(validation.reason || 'Informe uma data de nascimento válida.', 'error');
         return;
       }
     }
@@ -609,7 +676,10 @@ export const InstructorFinance: React.FC = () => {
       };
 
       if (isIndividual && birthDate) {
-        payload.birthDate = birthDate;
+        const [, d, m, y] = birthDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/) || [];
+        if (d && m && y) {
+          payload.birthDate = `${y}-${m}-${d}`;
+        }
       }
 
       const { data, error } = await invokeSecureFunction('create-asaas-account', {
@@ -1143,8 +1213,11 @@ export const InstructorFinance: React.FC = () => {
             <Input
               label="Data de Nascimento"
               value={birthDate}
-              onChange={(e) => setBirthDate(e.target.value)}
-              type="date"
+              onChange={(e) => setBirthDate(formatBirthDateInput(e.target.value))}
+              type="text"
+              inputMode="numeric"
+              placeholder="dd/mm/aaaa"
+              maxLength={10}
               required={cpfCnpj.replace(/\D/g, '').length <= 11}
               disabled={submittingAsaas}
             />

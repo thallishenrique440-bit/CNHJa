@@ -9,6 +9,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getGoogleMapsUrl } from '../../src/utils/maps';
 import { AGENDA_SLOTS } from '../../lib/slots';
+import { getLowestActiveCategoryPrice } from '../../lib/instructorPricing';
 
 // Define Interface for the State matches DB structure
 interface DiscountRule {
@@ -378,12 +379,32 @@ export const StudentInstructorProfile: React.FC = () => {
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [isIdCopied, setIsIdCopied] = useState(false);
 
-  const handleCopyId = () => {
+  const handleShare = async () => {
     if (instructor?.publicId) {
-      navigator.clipboard.writeText(instructor.publicId);
-      setIsIdCopied(true);
-      addToast('ID copiado para a área de transferência!', 'success');
-      setTimeout(() => setIsIdCopied(false), 2000);
+      const profileUrl = `${window.location.origin}/#/i/${instructor.publicId}`;
+      const shareData = {
+        title: 'CNHJá • Instrutor de Direção',
+        text: `Gostei deste instrutor no CNHJá e recomendo.\n\nFaça uma aula com ele, acho que você vai gostar.\n\n👤 ${instructor.name}\n🆔 Código: ${instructor.publicId}\n\nAgende suas aulas pelo link abaixo.`,
+        url: profileUrl,
+      };
+
+      if (navigator.share) {
+        try {
+          await navigator.share(shareData);
+        } catch (err) {
+          console.log('Error sharing:', err);
+          // Fallback to clipboard on error
+          navigator.clipboard.writeText(profileUrl);
+          setIsIdCopied(true);
+          addToast('Link do instrutor copiado! Compartilhe onde desejar.', 'success');
+          setTimeout(() => setIsIdCopied(false), 2000);
+        }
+      } else {
+        navigator.clipboard.writeText(profileUrl);
+        setIsIdCopied(true);
+        addToast('Link do instrutor copiado! Compartilhe onde desejar.', 'success');
+        setTimeout(() => setIsIdCopied(false), 2000);
+      }
     }
   };
 
@@ -884,11 +905,7 @@ export const StudentInstructorProfile: React.FC = () => {
 
   const startingPrice = useMemo(() => {
     if (!instructor) return 0;
-    let minPrice = instructor.priceDay || 0;
-    if (instructor.categoryPrices && instructor.categoryPrices.length > 0) {
-      minPrice = Math.min(...instructor.categoryPrices.map(c => c.day_price));
-    }
-    return minPrice;
+    return getLowestActiveCategoryPrice(instructor.category, instructor.categoryPrices, instructor.priceDay || 0);
   }, [instructor]);
 
   const priceInfo = useMemo(() => {
@@ -1553,7 +1570,7 @@ export const StudentInstructorProfile: React.FC = () => {
                   </span>
                   
                   <button 
-                    onClick={handleCopyId}
+                    onClick={handleShare}
                     className="group flex items-center gap-2 mt-1 px-3 py-1.5 text-gray-500 hover:text-gray-800 transition-colors"
                   >
                     <span className="font-mono text-sm font-semibold tracking-wide text-gray-700 group-hover:text-gray-900 transition-colors">
@@ -1569,17 +1586,21 @@ export const StudentInstructorProfile: React.FC = () => {
                         </>
                       ) : (
                         <>
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="18" cy="5" r="3"/>
+                            <circle cx="6" cy="12" r="3"/>
+                            <circle cx="18" cy="19" r="3"/>
+                            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                           </svg>
-                          <span className="text-[10px] font-medium">Copiar</span>
+                          <span className="text-[10px] font-medium">Compartilhar</span>
                         </>
                       )}
                     </span>
                   </button>
 
                   <p className="text-[10px] text-gray-400 mt-1">
-                    Gostou deste instrutor? Compartilhe seu código.
+                    Gostou deste instrutor?<br />Então compartilhe com seus amigos.
                   </p>
                 </div>
               )}

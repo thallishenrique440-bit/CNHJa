@@ -6,6 +6,7 @@ import { RatingBadge } from '../components/RatingBadge';
 import { supabase } from '../lib/supabase';
 import { CitySelect } from '../components/CitySelect';
 import { useAuth } from '../contexts/AuthContext';
+import { getLowestActiveCategoryPrice } from '../lib/instructorPricing';
 
 interface Vehicle {
   type: 'car' | 'bike';
@@ -288,15 +289,7 @@ export const StudentHome: React.FC = () => {
 
   // Helper to get Lowest Price (Starting Price)
   const getLowestPrice = (inst: Instructor) => {
-    // 1. Try to find lowest price from new table
-    if (inst.instructor_categories && inst.instructor_categories.length > 0) {
-      const prices = inst.instructor_categories.map(c => c.day_price).filter(p => p > 0);
-      if (prices.length > 0) {
-        return Math.min(...prices);
-      }
-    }
-    // 2. Fallback to legacy base_price
-    return inst.base_price;
+    return getLowestActiveCategoryPrice(inst.categories, inst.instructor_categories, inst.base_price || 0);
   };
 
   return (
