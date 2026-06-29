@@ -86,6 +86,15 @@ export const InstructorProfile: React.FC = () => {
   const [bikeYear, setBikeYear] = useState('');
   const [bikeTransmission, setBikeTransmission] = useState('manual');
 
+  // Enforce Single Source of Truth: sync hasCar/hasBike based on category
+  useEffect(() => {
+    if (category === 'A') {
+      setHasCar(false);
+    } else if (category === 'B') {
+      setHasBike(false);
+    }
+  }, [category]);
+
   // 6. Location
   const [defaultLocation, setDefaultLocation] = useState('');
   const [meetingPointLat, setMeetingPointLat] = useState<number | null>(null);
@@ -197,27 +206,46 @@ export const InstructorProfile: React.FC = () => {
           .select('*')
           .eq('instructor_id', userId);
 
+        // Determine current category active to enforce allowed vehicle types on load
+        let currentCategory = 'B';
+        if (instructor && instructor.categories && instructor.categories.length > 0) {
+          const cats = instructor.categories;
+          if (cats.includes('A') && cats.includes('B')) currentCategory = 'AB';
+          else if (cats.includes('A')) currentCategory = 'A';
+          else currentCategory = 'B';
+        }
+
+        const isCarAllowed = currentCategory === 'B' || currentCategory === 'AB';
+        const isBikeAllowed = currentCategory === 'A' || currentCategory === 'AB';
+
         if (vehicles) {
           const car = vehicles.find(v => v.type === 'car');
           const bike = vehicles.find(v => v.type === 'bike');
           
-          if (car) {
+          if (car && isCarAllowed) {
             setHasCar(true);
             setCarId(car.id);
             setCarModel(car.model || '');
             setCarYear(String(car.year || ''));
             setCarTransmission(car.transmission || 'manual');
           } else {
-             setHasCar(true); 
+            setHasCar(false);
+            setCarId(car ? car.id : null);
           }
 
-          if (bike) {
+          if (bike && isBikeAllowed) {
             setHasBike(true);
             setBikeId(bike.id);
             setBikeModel(bike.model || '');
             setBikeYear(String(bike.year || ''));
             setBikeTransmission(bike.transmission || 'manual');
+          } else {
+            setHasBike(false);
+            setBikeId(bike ? bike.id : null);
           }
+        } else {
+          setHasCar(false);
+          setHasBike(false);
         }
 
       } catch (error) {
@@ -374,32 +402,67 @@ export const InstructorProfile: React.FC = () => {
         if (catError) throw catError;
       }
       
-      // Vehicles logic (simplified for brevity)
-      if (hasCar) {
-        await supabase.from('instructor_vehicles').upsert({
-          id: carId || undefined,
-          instructor_id: userId,
-          type: 'car',
-          model: carModel,
-          year: parseInt(carYear) || 0,
-          transmission: carTransmission
-        });
-      } else if (carId) {
-        await supabase.from('instructor_vehicles').delete().eq('id', carId);
+      // Vehicles logic - Enforce single source of truth and automatic database cleanup
+      const isCarAllowed = category === 'B' || category === 'AB';
+      const isBikeAllowed = category === 'A' || category === 'AB';
+
+      if (isCarAllowed && hasCar) {
+        const { data: upsertedCar, error: carUpsertError } = await supabase
+          .from('instructor_vehicles')
+          .upsert({
+            id: carId || undefined,
+            instructor_id: userId,
+            type: 'car',
+            model: carModel,
+            year: parseInt(carYear) || 0,
+            transmission: carTransmission
+          })
+          .select('id')
+          .maybeSingle();
+          
+        if (carUpsertError) throw carUpsertError;
+        if (upsertedCar) {
+          setCarId(upsertedCar.id);
+        }
+      } else {
+        // Automatically delete any existing car records for this instructor to avoid ghost entries
+        const { error: carDeleteError } = await supabase
+          .from('instructor_vehicles')
+          .delete()
+          .eq('instructor_id', userId)
+          .eq('type', 'car');
+          
+        if (carDeleteError) throw carDeleteError;
         setCarId(null);
       }
 
-      if (hasBike) {
-        await supabase.from('instructor_vehicles').upsert({
-          id: bikeId || undefined,
-          instructor_id: userId,
-          type: 'bike',
-          model: bikeModel,
-          year: parseInt(bikeYear) || 0,
-          transmission: bikeTransmission
-        });
-      } else if (bikeId) {
-        await supabase.from('instructor_vehicles').delete().eq('id', bikeId);
+      if (isBikeAllowed && hasBike) {
+        const { data: upsertedBike, error: bikeUpsertError } = await supabase
+          .from('instructor_vehicles')
+          .upsert({
+            id: bikeId || undefined,
+            instructor_id: userId,
+            type: 'bike',
+            model: bikeModel,
+            year: parseInt(bikeYear) || 0,
+            transmission: bikeTransmission
+          })
+          .select('id')
+          .maybeSingle();
+
+        if (bikeUpsertError) throw bikeUpsertError;
+        if (upsertedBike) {
+          setBikeId(upsertedBike.id);
+        }
+      } else {
+        // Automatically delete any existing bike records for this instructor to avoid ghost entries
+        const { error: bikeDeleteError } = await supabase
+          .from('instructor_vehicles')
+          .delete()
+          .eq('instructor_id', userId)
+          .eq('type', 'bike');
+
+        if (bikeDeleteError) throw bikeDeleteError;
         setBikeId(null);
       }
 
