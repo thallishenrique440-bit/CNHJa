@@ -111,6 +111,7 @@ export const StudentLessons: React.FC = () => {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [shouldCreateReview, setShouldCreateReview] = useState(false);
 
   // Cancellation Flow State
   const [lessonToCancel, setLessonToCancel] = useState<LessonGroup | null>(null);
@@ -141,7 +142,7 @@ export const StudentLessons: React.FC = () => {
   const [tipGiven, setTipGiven] = useState(false);
 
   // Security Flow State
-  const [isLocating, setIsLocating] = useState(false);
+  // (isLocating state removed as GPS/geolocation captures are no longer needed)
 
   // Pending Review State
   const [pendingReviewAptId, setPendingReviewAptId] = useState<string | null>(null);
@@ -510,6 +511,7 @@ export const StudentLessons: React.FC = () => {
   }, [tipPaymentData, finalizingLessonGroup]);
 
   const startFinalization = async (group: LessonGroup) => {
+    if (!session?.user?.id) return;
     setFinalizingLessonGroup(group);
     setRating(0);
     setComment('');
@@ -517,7 +519,19 @@ export const StudentLessons: React.FC = () => {
     setCustomTip('');
     setIsSubmittingTip(false);
     setTipClientSecret(null);
-    setFlowStep('rating'); // Always start with rating
+
+    // Fonte Única de Verdade: Check if already reviewed this instructor in memory
+    const hasAlreadyReviewed = lessons.some(
+      (l) => l.instructorId === group.instructorId && l.isReviewed
+    );
+
+    if (hasAlreadyReviewed) {
+      setShouldCreateReview(false);
+      setFlowStep('tip');
+    } else {
+      setShouldCreateReview(true);
+      setFlowStep('rating');
+    }
   };
 
   const submitRating = async () => {
@@ -588,7 +602,7 @@ export const StudentLessons: React.FC = () => {
 
     try {
        // 1. Create Review (ONLY if rating > 0)
-       if (rating > 0) {
+       if (shouldCreateReview && rating > 0) {
          const reviewData: any = {
            appointment_id: mainReferenceId,
            student_id: session.user.id,
@@ -618,7 +632,7 @@ export const StudentLessons: React.FC = () => {
        // 3. Update Local State (Optimistic UI)
        setRawLessons(prev => prev.map(l => 
           lessonIds.includes(l.id)
-             ? { ...l, reviews: rating > 0 ? [{ id: 'new' }] : [], status: 'completed' } 
+             ? { ...l, reviews: (shouldCreateReview && rating > 0) ? [{ id: 'new' }] : [], status: 'completed' } 
              : l
        ));
        
@@ -925,49 +939,30 @@ export const StudentLessons: React.FC = () => {
     setIsAutoModal(false);
     setRating(0);
     setComment('');
+    setShouldCreateReview(false);
   };
 
   const handleSecurityClick = () => {
-    setIsLocating(true);
-    
     // Use state data instead of localStorage
     const contact = trustedContact || '';
     const cleanContact = contact.replace(/\D/g, '');
 
     if (!cleanContact) {
         addToast("Você precisa cadastrar um contato de confiança no seu Perfil primeiro.", 'warning');
-        setIsLocating(false);
         navigate('/student/profile');
         return;
     }
 
-    if (!navigator.geolocation) {
-      addToast("Geolocalização não é suportada.", 'error');
-      setIsLocating(false);
-      return;
-    }
+    const text = `Olá!\n\nEstou em uma aula pelo CNHJá.\n\nVou compartilhar minha localização em tempo real pelo WhatsApp para que você possa acompanhar meu deslocamento com segurança.`;
+    const encodedText = encodeURIComponent(text);
+    
+    // Ensure country code
+    const fullContact = cleanContact.startsWith('55') ? cleanContact : `55${cleanContact}`;
+    
+    const waLink = `https://wa.me/${fullContact}?text=${encodedText}`;
+    window.open(waLink, '_blank');
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        const mapsLink = `https://maps.google.com/?q=${latitude},${longitude}`;
-        const text = `${securityMessage}\n\nMinha localização atual:\n${mapsLink}`;
-        const encodedText = encodeURIComponent(text);
-        
-        // Ensure country code
-        const fullContact = cleanContact.startsWith('55') ? cleanContact : `55${cleanContact}`;
-        
-        const waLink = `https://wa.me/${fullContact}?text=${encodedText}`;
-        window.open(waLink, '_blank');
-        setIsLocating(false);
-      },
-      (error) => {
-        console.error("Geolocation error:", error);
-        addToast("Não foi possível obter a localização. Verifique as permissões do navegador.", 'error');
-        setIsLocating(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+    addToast("Compartilhe sua Localização em tempo real pelo WhatsApp.", 'info');
   };
 
   const handleWhatsappClick = (whatsapp: string) => {
@@ -1297,11 +1292,14 @@ export const StudentLessons: React.FC = () => {
                         {group.status === 'in_progress' && (
                             <Button
                                 onClick={handleSecurityClick}
-                                disabled={isLocating}
-                                className="bg-white text-gray-500 hover:text-gray-700 border-gray-200 shadow-none px-3 py-1.5 text-xs h-8 min-h-0 flex items-center"
+                                className="bg-white text-gray-500 hover:text-gray-700 border-gray-200 shadow-none px-3 py-1.5 text-xs h-8 min-h-0 flex items-center gap-1.5"
                                 variant="outline"
                             >
-                                {isLocating ? '...' : '📍 Compartilhar'}
+                                <svg className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
+                                Compartilhe sua localização
                             </Button>
                         )}
                     </div>

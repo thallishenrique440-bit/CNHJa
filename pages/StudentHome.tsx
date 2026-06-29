@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 import { CitySelect } from '../components/CitySelect';
 import { useAuth } from '../contexts/AuthContext';
 import { getLowestActiveCategoryPrice } from '../lib/instructorPricing';
+import { calculateInstructorRating } from '../lib/instructorRating';
 
 interface Vehicle {
   type: 'car' | 'bike';
@@ -261,14 +262,13 @@ export const StudentHome: React.FC = () => {
     
     // 2. If in fallback mode, prioritize by rating and review count
     if (isFallback) {
-      const aReviews = a.reviews || [];
-      const bReviews = b.reviews || [];
+      const aSummary = calculateInstructorRating(a.reviews);
+      const bSummary = calculateInstructorRating(b.reviews);
       
-      const aRating = aReviews.length > 0 ? aReviews.reduce((acc, r) => acc + r.rating, 0) / aReviews.length : 0;
-      const bRating = bReviews.length > 0 ? bReviews.reduce((acc, r) => acc + r.rating, 0) / bReviews.length : 0;
-      
-      if (aRating !== bRating) return bRating - aRating;
-      return bReviews.length - aReviews.length;
+      if (aSummary.averageRating !== bSummary.averageRating) {
+        return bSummary.averageRating - aSummary.averageRating;
+      }
+      return bSummary.reviewsCount - aSummary.reviewsCount;
     }
     
     return 0;
@@ -368,10 +368,7 @@ export const StudentHome: React.FC = () => {
             const bikeDetails = inst.instructor_vehicles.find(v => v.type === 'bike');
 
             // --- REAL RATING CALCULATION ---
-            const reviews = inst.reviews || [];
-            const reviewsCount = reviews.length;
-            const totalRating = reviews.reduce((acc, r) => acc + r.rating, 0);
-            const avgRating = reviewsCount > 0 ? (totalRating / reviewsCount) : 0;
+            const { formattedRating, reviewsCount } = calculateInstructorRating(inst.reviews);
 
             const lowestPrice = getLowestPrice(inst);
 
@@ -409,7 +406,7 @@ export const StudentHome: React.FC = () => {
                       <div className="flex items-center text-xs text-gray-500 mt-1 space-x-2">
                         {reviewsCount > 0 && (
                           <>
-                            <RatingBadge rating={avgRating} count={reviewsCount} variant="compact" />
+                            <RatingBadge rating={formattedRating} count={reviewsCount} variant="compact" />
                             <span className="text-gray-300">•</span>
                           </>
                         )}

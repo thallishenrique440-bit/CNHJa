@@ -10,6 +10,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { getGoogleMapsUrl } from '../../src/utils/maps';
 import { AGENDA_SLOTS } from '../../lib/slots';
 import { getLowestActiveCategoryPrice } from '../../lib/instructorPricing';
+import { calculateInstructorRating } from '../../lib/instructorRating';
 
 // Define Interface for the State matches DB structure
 interface DiscountRule {
@@ -42,8 +43,9 @@ interface InstructorProfileData {
   meetingPointPlaceId: string | null;
   credential: string;
   whatsapp: string;
-  rating: number;
+  rating: string;
   reviewsCount: number;
+  formattedReviewsCount: string;
   photoUrl: string | null;
   lessonsTaught: number;
   priceDay: number; // Legacy Fallback
@@ -555,9 +557,7 @@ export const StudentInstructorProfile: React.FC = () => {
           }) : [];
 
           // Calculate Rating
-          const totalRating = formattedReviews.reduce((acc, r) => acc + r.rating, 0);
-          const avgRating = formattedReviews.length > 0 ? (totalRating / formattedReviews.length) : 0;
-          const displayRating = Number(avgRating.toFixed(1));
+          const { formattedRating, reviewsCount, formattedReviewsCount } = calculateInstructorRating(formattedReviews);
 
           // Handle profiles relation which might be an array or single object
           // Supabase types often infer arrays for joined relations
@@ -582,8 +582,9 @@ export const StudentInstructorProfile: React.FC = () => {
             meetingPointLat: data.meeting_point_lat || null,
             meetingPointLng: data.meeting_point_lng || null,
             meetingPointPlaceId: data.meeting_point_place_id || null,
-            rating: displayRating,
-            reviewsCount: formattedReviews.length,
+            rating: formattedRating,
+            reviewsCount: reviewsCount,
+            formattedReviewsCount: formattedReviewsCount,
             lessonsTaught: lessonsTaughtCount || 0, 
             priceDay: basePrice,
             priceNight: data.night_price || basePrice,
@@ -1319,7 +1320,29 @@ export const StudentInstructorProfile: React.FC = () => {
         .order('created_at', { ascending: false });
 
       if (reviewsData) {
-        setInstructor(prev => prev ? { ...prev, reviews: reviewsData } : null);
+        const formattedReviews = reviewsData.map((r: any) => {
+          const studentName = Array.isArray(r.profiles) 
+            ? r.profiles[0]?.full_name 
+            : r.profiles?.full_name || 'Aluno';
+          
+          return {
+            id: r.id,
+            studentName: studentName,
+            date: new Date(r.created_at).toLocaleDateString('pt-BR'),
+            rating: r.rating,
+            comment: r.comment
+          };
+        });
+
+        const { formattedRating, reviewsCount, formattedReviewsCount } = calculateInstructorRating(formattedReviews);
+
+        setInstructor(prev => prev ? { 
+          ...prev, 
+          reviews: formattedReviews,
+          rating: formattedRating,
+          reviewsCount: reviewsCount,
+          formattedReviewsCount: formattedReviewsCount
+        } : null);
       }
 
     } catch (err: any) {
@@ -1407,7 +1430,7 @@ export const StudentInstructorProfile: React.FC = () => {
                       </span>
                       <span className="font-bold text-gray-800 mr-1">{instructor.rating}</span>
                       <button onClick={handleOpenReviews} disabled={instructor.reviews.length === 0} className={`text-gray-500 underline decoration-gray-300 underline-offset-2 ${instructor.reviews.length > 0 ? 'hover:text-gray-700' : 'cursor-default'}`}>
-                        ({instructor.reviewsCount} avaliações)
+                        ({instructor.formattedReviewsCount})
                       </button>
                     </div>
                     {instructor.lessonsTaught > 0 && (
