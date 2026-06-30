@@ -112,6 +112,7 @@ export const StudentLessons: React.FC = () => {
   const [comment, setComment] = useState('');
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [shouldCreateReview, setShouldCreateReview] = useState(false);
+  const processingFinalizationRef = React.useRef(false);
 
   // Cancellation Flow State
   const [lessonToCancel, setLessonToCancel] = useState<LessonGroup | null>(null);
@@ -481,7 +482,17 @@ export const StudentLessons: React.FC = () => {
   useEffect(() => {
     if (!tipPaymentData || !finalizingLessonGroup) return;
 
+    let isActive = true;
+    let isQueryPending = false;
+
     const intervalId = setInterval(async () => {
+      if (!isActive) return;
+      if (isQueryPending) {
+        console.log('[Polling] A query is already pending, skipping this interval tick.');
+        return;
+      }
+
+      isQueryPending = true;
       try {
         const appointmentId = finalizingLessonGroup.ids[finalizingLessonGroup.ids.length - 1];
         const { data, error } = await supabase
@@ -497,17 +508,25 @@ export const StudentLessons: React.FC = () => {
           return;
         }
 
+        if (!isActive) return;
+
         if (data) {
           console.log('🎉 Caixinha confirmed on database! Auto-completing modal...');
+          isActive = false; // Intercept further executions immediately
           clearInterval(intervalId);
           completeLessonFlow(tipPaymentData.amount);
         }
       } catch (err) {
         console.error('Error in caixinha polling interval:', err);
+      } finally {
+        isQueryPending = false;
       }
     }, 3000); // Check every 3 seconds
 
-    return () => clearInterval(intervalId);
+    return () => {
+      isActive = false;
+      clearInterval(intervalId);
+    };
   }, [tipPaymentData, finalizingLessonGroup]);
 
   const startFinalization = async (group: LessonGroup) => {
@@ -591,7 +610,12 @@ export const StudentLessons: React.FC = () => {
   };
 
   const completeLessonFlow = async (tipAmount: number) => {
-    if (!finalizingLessonGroup || !session?.user || isFinalizing) return;
+    if (!finalizingLessonGroup || !session?.user) return;
+    if (processingFinalizationRef.current) {
+      console.log('[Lock] completeLessonFlow already running (synchronous ref lock).');
+      return;
+    }
+    processingFinalizationRef.current = true;
     setIsFinalizing(true);
     setIsSubmittingTip(true);
     if (tipAmount > 0) setTipGiven(true);
@@ -615,7 +639,17 @@ export const StudentLessons: React.FC = () => {
            .from('reviews')
            .insert(reviewData);
          
-         if (reviewError) throw reviewError;
+         if (reviewError) {
+           const isDuplicate = reviewError.code === '23505' || 
+                              (reviewError.message && reviewError.message.toLowerCase().includes('duplicate key')) ||
+                              (reviewError.message && reviewError.message.toLowerCase().includes('already exists'));
+           
+           if (isDuplicate) {
+             console.log('[Idempotency] Review already exists (duplicate key). Treating as success.');
+           } else {
+             throw reviewError;
+           }
+         }
        }
 
        // 1.5 Update Appointment Status to 'completed'
@@ -648,6 +682,7 @@ export const StudentLessons: React.FC = () => {
     } finally {
         setIsSubmittingTip(false);
         setIsFinalizing(false);
+        processingFinalizationRef.current = false;
     }
   };
 
