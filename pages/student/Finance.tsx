@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Shield } from 'lucide-react';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -438,6 +439,19 @@ export const StudentFinance: React.FC = () => {
              <span className="text-xl font-bold text-blue-600">
                 {loading ? '...' : summary.classesScheduled}
              </span>
+          </div>
+        </div>
+
+        {/* Informative Trust Card */}
+        <div className="bg-blue-50/55 border border-blue-100 rounded-2xl p-4 flex items-start gap-3">
+          <Shield className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-bold text-gray-900 text-xs flex items-center gap-1">
+              🛡️ Sua segurança em primeiro lugar
+            </h3>
+            <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
+              Sempre que um reembolso for devido, ele será processado automaticamente pelo <span className="font-semibold text-gray-800">Asaas</span>, sem necessidade de solicitação.
+            </p>
           </div>
         </div>
 
