@@ -151,45 +151,108 @@ Deno.serve(async (req) => {
             throw new Error('CONFIG_ERROR: Missing ASAAS_API_KEY');
           }
 
-          const isPaid = appointment.payment_status === 'paid';
-
-          if (isPaid) {
-            console.log(`[Asaas Refund] Refunding payment ${paymentId} for group ${appointment.group_id}`);
-            const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
-            const refundRes = await fetch(refundUrl, {
-              method: 'POST',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                description: 'instructor_rejected'
-              })
-            });
-
-            if (!refundRes.ok) {
-              const errText = await refundRes.text();
-              console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
-              throw new Error(`Asaas refund failed: ${errText}`);
+          // Fetch payment status and check for installments directly from Asaas
+          console.log(`[Asaas] Fetching payment details for ${paymentId}`);
+          const paymentUrl = `${asaasApiUrl}/payments/${paymentId}`;
+          const paymentRes = await fetch(paymentUrl, {
+            method: 'GET',
+            headers: {
+              'access_token': asaasApiKey,
+              'Content-Type': 'application/json'
             }
+          });
 
-            console.log(`✅ Asaas payment ${paymentId} refunded successfully.`);
-          } else {
-            console.log(`[Asaas Cancel] Cancelling pending payment ${paymentId} for group ${appointment.group_id}`);
-            const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
-            const cancelRes = await fetch(cancelUrl, {
-              method: 'DELETE',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
+          if (!paymentRes.ok) {
+            const errText = await paymentRes.text();
+            console.error(`❌ Failed to retrieve Asaas payment ${paymentId}: ${errText}`);
+            throw new Error(`Asaas verification failed: ${errText}`);
+          }
+
+          const paymentData = await paymentRes.json();
+          const installmentId = paymentData.installment;
+          const isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
+
+          console.log(`[Asaas] Retrieved payment details. Status: ${paymentData.status}, Installment: ${installmentId || 'none'}, isPaid: ${isPaid}`);
+
+          if (!installmentId) {
+            // Flow for simple/no-installment payments
+            if (isPaid) {
+              console.log(`[Asaas Refund] Refunding payment ${paymentId} for group ${appointment.group_id}`);
+              const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
+              const refundRes = await fetch(refundUrl, {
+                method: 'POST',
+                headers: {
+                  'access_token': asaasApiKey,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  description: 'instructor_rejected'
+                })
+              });
+
+              if (!refundRes.ok) {
+                const errText = await refundRes.text();
+                console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
+                throw new Error(`Asaas refund failed: ${errText}`);
               }
-            });
 
-            if (!cancelRes.ok) {
-              const errText = await cancelRes.text();
-              console.warn(`⚠️ Asaas pending payment cancel failed (may have been deleted already): ${errText}`);
+              console.log(`✅ Asaas payment ${paymentId} refunded successfully.`);
             } else {
-              console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
+              console.log(`[Asaas Cancel] Cancelling pending payment ${paymentId} for group ${appointment.group_id}`);
+              const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
+              const cancelRes = await fetch(cancelUrl, {
+                method: 'DELETE',
+                headers: {
+                  'access_token': asaasApiKey,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              if (!cancelRes.ok) {
+                const errText = await cancelRes.text();
+                console.warn(`⚠️ Asaas pending payment cancel failed (may have been deleted already): ${errText}`);
+              } else {
+                console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
+              }
+            }
+          } else {
+            // Flow for installment payments
+            if (isPaid) {
+              console.log(`[Asaas Installment Refund] Refunding installment ${installmentId} (linked to payment ${paymentId}) for group ${appointment.group_id}`);
+              const refundUrl = `${asaasApiUrl}/installments/${installmentId}/refund`;
+              const refundRes = await fetch(refundUrl, {
+                method: 'POST',
+                headers: {
+                  'access_token': asaasApiKey,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              if (!refundRes.ok) {
+                const errText = await refundRes.text();
+                console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${errText}`);
+                throw new Error(`Asaas installment refund failed: ${errText}`);
+              }
+
+              console.log(`✅ Asaas installment ${installmentId} refunded successfully.`);
+            } else {
+              console.log(`[Asaas Installment Cancel] Cancelling pending installment ${installmentId} (linked to payment ${paymentId}) for group ${appointment.group_id}`);
+              const cancelUrl = `${asaasApiUrl}/installments/${installmentId}`;
+              const cancelRes = await fetch(cancelUrl, {
+                method: 'DELETE',
+                headers: {
+                  'access_token': asaasApiKey,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              if (!cancelRes.ok) {
+                const errText = await cancelRes.text();
+                console.error(`❌ Asaas installment cancellation failed for installment ${installmentId}: ${errText}`);
+                throw new Error(`Asaas installment cancel failed: ${errText}`);
+              }
+
+              console.log(`✅ Asaas installment ${installmentId} cancelled successfully.`);
             }
           }
 

@@ -36,6 +36,25 @@ export async function invokeSecureFunction<T = any>(
       },
     });
 
+    if (error) {
+      let customMessage = '';
+      if (error.context && typeof error.context.clone === 'function') {
+        try {
+          const clonedContext = error.context.clone();
+          const errorBody = await clonedContext.json();
+          customMessage = errorBody.error || errorBody.message || '';
+        } catch {
+          try {
+            const clonedContext = error.context.clone();
+            customMessage = await clonedContext.text();
+          } catch {}
+        }
+      }
+      if (customMessage) {
+        return { data: null, error: new Error(customMessage) };
+      }
+    }
+
     return { data, error };
   } catch (err) {
     console.error(`[SecureFunction] Unexpected error invoking ${functionName}:`, err);
