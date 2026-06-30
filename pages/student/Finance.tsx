@@ -16,6 +16,16 @@ interface Transaction {
   status: 'pending' | 'completed' | 'failed';
   instructorName: string;
   appointment_id?: string;
+  provider_payment_id?: string;
+  appointments?: {
+    id: string;
+    group_id?: string;
+    provider_payment_id?: string;
+    date: string;
+    start_time: string;
+    end_time: string;
+    status: string;
+  } | null;
 }
 
 interface Appointment {
@@ -36,7 +46,7 @@ interface HistoryItem {
   id: string;
   timestamp: string; // display timestamp
   sortDate: string;  // ISO string for sorting
-  type: 'lesson' | 'tip' | 'refund';
+  type: 'lesson' | 'tip' | 'refund' | 'combo';
   isFinancial: boolean;
   amount: number;
   grossAmount?: number;
@@ -47,6 +57,18 @@ interface HistoryItem {
   appointmentDate?: string;
   appointmentTime?: string;
   isPast?: boolean;
+
+  // Package/Combo details
+  isCombo?: boolean;
+  lessonCount?: number;
+  lessons?: {
+    id: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    netAmount?: number;
+  }[];
+  groupId?: string;
 }
 
 interface FinanceSummary {
@@ -66,6 +88,12 @@ export const StudentFinance: React.FC = () => {
     classesDone: 0,
     classesScheduled: 0,
   });
+
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const toggleExpand = (id: string) => {
+    setExpandedId(prev => prev === id ? null : id);
+  };
 
   // Helper for currency
   const formatCurrency = (valInCents: number) => {
@@ -114,7 +142,7 @@ export const StudentFinance: React.FC = () => {
         const userId = session.user.id;
         const now = new Date(Date.now() + serverTimeOffset);
 
-        // 1. Fetch Transactions
+        // 1. Fetch Transactions (including appointments for grouping)
         const { data: transData, error: transError } = await supabase
           .from('transactions')
           .select(`
@@ -122,19 +150,28 @@ export const StudentFinance: React.FC = () => {
             created_at,
             event_date,
             type,
-            amount,
             gross_amount,
             platform_fee,
             net_amount,
             status,
             appointment_id,
+            provider_payment_id,
             instructors (
               profiles ( full_name )
+            ),
+            appointments (
+              id,
+              group_id,
+              provider_payment_id,
+              date,
+              start_time,
+              end_time,
+              status
             )
           `)
           .eq('student_id', userId)
           .in('status', ['completed'])
-          .in('type', ['lesson_payment', 'tip'])
+          .in('type', ['lesson_payment', 'tip', 'refund'])
           .order('event_date', { ascending: false });
 
         if (transError) throw transError;
@@ -159,10 +196,14 @@ export const StudentFinance: React.FC = () => {
 
         if (apptError) throw apptError;
 
-        const typedTrans = (transData || []).map((t: any) => ({
-          ...t,
-          instructorName: t.instructors?.profiles?.full_name || 'Sistema'
-        })) as Transaction[];
+        const typedTrans = (transData || []).map((t: any) => {
+          const instructorObj = Array.isArray(t.instructors) ? t.instructors[0] : t.instructors;
+          return {
+            ...t,
+            instructorName: instructorObj?.profiles?.full_name || 'Sistema',
+            appointments: Array.isArray(t.appointments) ? t.appointments[0] : t.appointments
+          };
+        }) as Transaction[];
 
         const typedAppts = (apptData || []).map((a: any) => ({
           ...a,
@@ -197,30 +238,130 @@ export const StudentFinance: React.FC = () => {
           }
         });
 
-        // --- Build Hybrid History ---
-        const items: HistoryItem[] = [];
+        // --- Build History with Grouping ---
+        const lessonPaymentsToGroup: Transaction[] = [];
+        const nonGroupedItems: HistoryItem[] = [];
 
-        // Add Transactions
         typedTrans.forEach(t => {
           const logicalDate = t.event_date || t.created_at;
-          items.push({
-            id: t.id,
-            timestamp: logicalDate,
-            sortDate: logicalDate,
-            type: t.type === 'lesson_payment' ? 'lesson' : (t.type === 'tip' ? 'tip' : 'refund'),
-            isFinancial: true,
-            amount: t.gross_amount,
-            grossAmount: t.gross_amount,
-            platformFee: t.platform_fee,
-            netAmount: t.net_amount,
-            status: t.status,
-            instructorName: t.instructorName
-          });
+          if (t.type === 'lesson_payment') {
+            const groupId = t.appointments?.group_id;
+            const providerPaymentId = t.provider_payment_id || t.appointments?.provider_payment_id;
+
+            if (groupId || providerPaymentId) {
+              lessonPaymentsToGroup.push(t);
+            } else {
+              nonGroupedItems.push({
+                id: t.id,
+                timestamp: logicalDate,
+                sortDate: logicalDate,
+                type: 'lesson',
+                isFinancial: true,
+                amount: t.gross_amount,
+                grossAmount: t.gross_amount,
+                platformFee: t.platform_fee,
+                netAmount: t.net_amount,
+                status: t.status,
+                instructorName: t.instructorName
+              });
+            }
+          } else {
+            nonGroupedItems.push({
+              id: t.id,
+              timestamp: logicalDate,
+              sortDate: logicalDate,
+              type: t.type === 'tip' ? 'tip' : 'refund',
+              isFinancial: true,
+              amount: t.gross_amount,
+              grossAmount: t.gross_amount,
+              platformFee: t.platform_fee,
+              netAmount: t.net_amount,
+              status: t.status,
+              instructorName: t.instructorName
+            });
+          }
         });
 
-        // Sort by sortDate descending
-        items.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
-        
+        const groupMap = new Map<string, Transaction[]>();
+        lessonPaymentsToGroup.forEach(t => {
+          const groupKey = t.appointments?.group_id || t.provider_payment_id || t.appointments?.provider_payment_id || '';
+          if (groupKey) {
+            if (!groupMap.has(groupKey)) {
+              groupMap.set(groupKey, []);
+            }
+            groupMap.get(groupKey)!.push(t);
+          }
+        });
+
+        const comboHistoryItems: HistoryItem[] = [];
+
+        groupMap.forEach((transactionsInGroup, groupKey) => {
+          if (transactionsInGroup.length === 1) {
+            const t = transactionsInGroup[0];
+            const logicalDate = t.event_date || t.created_at;
+            nonGroupedItems.push({
+              id: t.id,
+              timestamp: logicalDate,
+              sortDate: logicalDate,
+              type: 'lesson',
+              isFinancial: true,
+              amount: t.gross_amount,
+              grossAmount: t.gross_amount,
+              platformFee: t.platform_fee,
+              netAmount: t.net_amount,
+              status: t.status,
+              instructorName: t.instructorName
+            });
+          } else {
+            const sortedGroup = [...transactionsInGroup].sort(
+              (a, b) => new Date(b.event_date || b.created_at).getTime() - new Date(a.event_date || a.created_at).getTime()
+            );
+
+            const latestTrans = sortedGroup[0];
+            const logicalDate = latestTrans.event_date || latestTrans.created_at;
+
+            let totalGross = 0;
+            let totalFee = 0;
+            let totalNet = 0;
+
+            sortedGroup.forEach(t => {
+              totalGross += t.gross_amount || 0;
+              totalFee += t.platform_fee || 0;
+              totalNet += t.net_amount || 0;
+            });
+
+            const subLessons = sortedGroup.map(t => ({
+              id: t.id,
+              date: t.appointments?.date || t.event_date || t.created_at,
+              startTime: t.appointments?.start_time || '',
+              endTime: t.appointments?.end_time || '',
+              netAmount: t.net_amount
+            })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+            comboHistoryItems.push({
+              id: `combo_${groupKey}`,
+              timestamp: logicalDate,
+              sortDate: logicalDate,
+              type: 'combo',
+              isFinancial: true,
+              amount: totalGross,
+              grossAmount: totalGross,
+              platformFee: totalFee,
+              netAmount: totalNet,
+              status: latestTrans.status,
+              instructorName: latestTrans.instructorName,
+              isCombo: true,
+              lessonCount: sortedGroup.length,
+              lessons: subLessons,
+              groupId: latestTrans.appointments?.group_id || groupKey
+            });
+          }
+        });
+
+        const items: HistoryItem[] = [...nonGroupedItems, ...comboHistoryItems].sort(
+          (a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime()
+        );
+
         setHistoryItems(items);
         setSummary({
           totalSpent,
@@ -243,11 +384,27 @@ export const StudentFinance: React.FC = () => {
     <div className="min-h-screen bg-gray-50 flex flex-col pb-24 sm:max-w-md sm:mx-auto relative">
       
       {/* Header */}
-      <div className="bg-white px-6 pt-6 pb-4 border-b border-gray-100 sticky top-0 z-10">
-        <h1 className="text-xl font-bold text-gray-900">Financeiro</h1>
-        <p className="text-xs text-gray-500 mt-1">
-          Acompanhe seus gastos no app
-        </p>
+      <div className="px-6 py-6 bg-white border-b border-gray-100 sticky top-0 z-20">
+        <div className="flex items-center justify-between">
+          {/* Left Column: Title and Subtitle */}
+          <div className="flex flex-col">
+            <h1 className="text-xl font-bold text-gray-900 leading-tight">Financeiro</h1>
+            <p className="text-xs text-gray-500 mt-0.5">Histórico de compras e pagamentos</p>
+          </div>
+          
+          {/* Right Column: Institutional Financial Partner Logo and Label */}
+          <div className="flex flex-col items-center justify-center text-center min-w-[160px] shrink-0">
+            <img 
+              src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/f6f3bea8-1b9a-46c0-b405-d4d4ec6db841.jpg"
+              alt="Asaas"
+              referrerPolicy="no-referrer"
+              className="w-[100px] h-auto object-contain object-center block"
+            />
+            <span className="text-xs font-medium tracking-wide text-gray-400 mt-1.5 leading-none">
+              Parceiro Financeiro
+            </span>
+          </div>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
@@ -297,16 +454,94 @@ export const StudentFinance: React.FC = () => {
           ) : historyItems.length === 0 ? (
              <div className="text-center py-12 bg-white rounded-2xl border border-gray-100 border-dashed px-6">
                 <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <span className="text-xl">⏳</span>
+                   <span className="text-xl">⏳</span>
                 </div>
                 <h3 className="text-gray-900 font-bold text-sm mb-1">Aguardando processamento</h3>
                 <p className="text-gray-400 text-xs leading-relaxed">
-                  Se você realizou um pagamento recentemente, ele aparecerá aqui em alguns instantes assim que for confirmado.
+                   Se você realizou um pagamento recentemente, ele aparecerá aqui em alguns instantes assim que for confirmado.
                 </p>
              </div>
           ) : (
             <div className="space-y-3">
               {historyItems.map((item) => {
+                if (item.isCombo) {
+                  const displayDesc = `Combo • ${item.lessonCount} aulas`;
+                  const isExpanded = expandedId === item.id;
+                  return (
+                    <div 
+                      key={item.id} 
+                      onClick={() => toggleExpand(item.id)}
+                      className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-green-500 flex flex-col cursor-pointer transition-all hover:bg-gray-50"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4">
+                          <div className="w-10 h-10 rounded-full bg-green-50 text-green-600 flex items-center justify-center text-lg">
+                            📦
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-gray-900 text-sm leading-tight">{displayDesc}</h3>
+                            <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
+                              {item.instructorName}
+                            </p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(item.sortDate)}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="block font-bold text-sm text-gray-900">
+                            {formatCurrency(Math.abs(item.amount))}
+                          </span>
+                          <span className="text-[10px] text-gray-400">
+                            {item.status === 'pending' && (
+                              <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">
+                                Pendente
+                              </span>
+                            )}
+                            {item.status === 'completed' && (
+                              <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
+                                Concluído
+                              </span>
+                            )}
+                            {item.status === 'failed' && (
+                              <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
+                                Falhou
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Dropdown Indicator */}
+                      <div className="flex items-center justify-center mt-2 text-[10px] text-gray-400 font-medium">
+                        {isExpanded ? '▲ Ocultar aulas' : '▼ Ver aulas'}
+                      </div>
+
+                      {isExpanded && (
+                        <div className="mt-3 pt-3 border-t border-gray-100 space-y-3 animate-fade-in" onClick={(e) => e.stopPropagation()}>
+                          <div className="text-xs font-semibold text-gray-700">Aulas do Combo ({item.lessonCount}):</div>
+                          <div className="space-y-1.5 bg-gray-50 p-2.5 rounded-xl border border-gray-100">
+                            {item.lessons?.map((lesson, idx) => (
+                              <div key={lesson.id} className="flex justify-between text-[11px] text-gray-600">
+                                <span>Aula {idx + 1}: {formatDate(lesson.date)}</span>
+                                <span className="font-medium text-gray-500">
+                                  {lesson.startTime ? `${lesson.startTime.slice(0, 5)} - ${lesson.endTime.slice(0, 5)}` : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-y-2 text-[11px]">
+                            <div className="text-gray-400">Valor Pago Total:</div>
+                            <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.amount || 0))}</div>
+
+                            <div className="text-gray-400">ID da Compra:</div>
+                            <div className="text-gray-500 text-right font-mono">{(item.groupId || item.id).replace('combo_', '').slice(0, 12)}...</div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
                 const isRefund = item.type === 'refund';
                 const isTip = item.type === 'tip';
                 const isLesson = item.type === 'lesson';
