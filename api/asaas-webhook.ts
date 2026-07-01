@@ -357,7 +357,6 @@ export default async function handler(req: Request, res: Response) {
       const updatePayload = {
         status: 'pending_approval',
         payment_status: 'paid',
-        expires_at: null,
         updated_at: new Date().toISOString()
       };
 

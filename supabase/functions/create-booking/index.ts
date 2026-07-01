@@ -304,8 +304,26 @@ Deno.serve(async (req: any) => {
 
     let totalPrice = 0;
     const groupId = crypto.randomUUID();
-    // Expira em 30 min para dar tempo de pagar
-    const reservationExpiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString(); 
+    
+    // Find earliest slot
+    let earliestSlotDateTime = new Date(`${slots[0].date}T${slots[0].time}:00-03:00`);
+    for (const slot of slots) {
+      const slotDateTime = new Date(`${slot.date}T${slot.time}:00-03:00`);
+      if (slotDateTime.getTime() < earliestSlotDateTime.getTime()) {
+        earliestSlotDateTime = slotDateTime;
+      }
+    }
+
+    const firstSlotTime = earliestSlotDateTime.getTime();
+    const nowTime = Date.now();
+    const diffMinutes = (firstSlotTime - nowTime) / (1000 * 60);
+
+    let reservationExpiresAt: string;
+    if (diffMinutes > 20) {
+      reservationExpiresAt = new Date(firstSlotTime - 20 * 60 * 1000).toISOString();
+    } else {
+      reservationExpiresAt = new Date(nowTime + 2 * 60 * 1000).toISOString();
+    } 
 
     // Preparar inserts com PREÇO CALCULADO NO BACKEND
     const appointmentsToInsert = slots.map((slot: any) => {

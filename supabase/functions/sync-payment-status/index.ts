@@ -99,8 +99,7 @@ Deno.serve(async (req) => {
             console.log(`✅ Repairing Group ${groupId}: Asaas is paid (${asaasStatus}).`);
             updates = {
               status: 'pending_approval',
-              payment_status: 'paid',
-              expires_at: null
+              payment_status: 'paid'
             };
             action = 'repaired_succeeded';
 
@@ -129,8 +128,7 @@ Deno.serve(async (req) => {
                 console.log(`✅ Repairing Group ${groupId}: Stripe is authorized.`)
                 updates = {
                     status: 'pending_approval',
-                    payment_status: 'authorized',
-                    expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString()
+                    payment_status: 'authorized'
                 };
                 action = 'repaired_authorized';
 

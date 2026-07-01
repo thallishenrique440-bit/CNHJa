@@ -124,7 +124,9 @@ Deno.serve(async (req) => {
           const paymentData = await response.json();
           const asaasStatus = paymentData?.status?.toUpperCase();
 
-          if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
+          // Under the new 20-minute rule (20 minutes before first lesson), if the booking has expired
+          // and has not been accepted by the instructor, it must expire normally. Thus, we disable auto-repair.
+          if (false && ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
             console.log(`🚨 Asaas payment ${payment_intent_id} is already PAID (${asaasStatus}). We will move booking ${id} to pending_approval instead of expiring!`);
             
             // Auto repair to pending_approval

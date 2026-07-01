@@ -314,7 +314,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
         return res.status(400).json({ 
           error: 'Um ou mais horários selecionados já passaram.' 
         });
-      } else if (diffMinutes <= 10 && !ignoreTooClose) {
+      } else if (diffMinutes <= 20 && !ignoreTooClose) {
         return res.status(409).json({ 
           errorCode: 'TOO_CLOSE',
           error: 'Horário muito próximo para agendamento automático.' 
@@ -357,7 +357,26 @@ providerInstance=${paymentProvider.getProviderName()}`);
 
     // Create group_id
     const groupId = uuidv4();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
+    
+    // Find the chronologically first lesson in the combo or single booking
+    let earliestLessonDateTime = new Date(`${lessons[0].date}T${lessons[0].startTime}:00-03:00`);
+    for (const lesson of lessons) {
+      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
+      if (lessonDateTime.getTime() < earliestLessonDateTime.getTime()) {
+        earliestLessonDateTime = lessonDateTime;
+      }
+    }
+
+    const firstLessonTime = earliestLessonDateTime.getTime();
+    const nowTime = now.getTime();
+    const firstLessonDiffMinutes = (firstLessonTime - nowTime) / (1000 * 60);
+
+    let expiresAt: string;
+    if (firstLessonDiffMinutes > 20) {
+      expiresAt = new Date(firstLessonTime - 20 * 60 * 1000).toISOString();
+    } else {
+      expiresAt = new Date(nowTime + 2 * 60 * 1000).toISOString();
+    }
 
     // 3.5 Double check availability for ALL lessons in the batch
     for (const lesson of lessons) {
@@ -404,12 +423,12 @@ providerInstance=${paymentProvider.getProviderName()}`);
     const remainder = finalPrice % lessons.length;
 
     const appointmentsToInsert = lessons.map((lesson: any, index: number) => {
-      // Check if it's last minute (within 10 mins)
+      // Check if it's last minute (within 20 mins)
       const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
       const startTimeUtc = lessonDateTime.toISOString();
       const diffMs = lessonDateTime.getTime() - now.getTime();
       const diffMinutes = diffMs / (1000 * 60);
-      const isLastMinute = diffMinutes <= 10;
+      const isLastMinute = diffMinutes <= 20;
 
       console.log(`[DEBUG] Creating appointment: Date=${lesson.date}, Time=${lesson.startTime}, UTC=${startTimeUtc}, isLastMinute=${isLastMinute}`);
 

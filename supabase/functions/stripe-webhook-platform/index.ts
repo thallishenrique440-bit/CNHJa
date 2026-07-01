@@ -110,7 +110,7 @@ Deno.serve(async (req: Request) => {
                status: "pending_approval",
                payment_status: "authorized",
                payment_intent_id: paymentIntentId,
-               expires_at: expiresAt,
+               // expires_at: expiresAt,
                updated_by: studentId
              })
              .eq("group_id", groupId)
@@ -179,8 +179,7 @@ Deno.serve(async (req: Request) => {
                 .from("appointments")
                 .update({
                     status: "pending_approval",
-                    payment_status: "authorized",
-                    expires_at: expiresAt
+                    payment_status: "authorized"
                 })
                 .eq("payment_intent_id", paymentIntentId)
                 .select();

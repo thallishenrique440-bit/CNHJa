@@ -447,6 +447,95 @@ Deno.serve(async (req) => {
     const projectId = serviceAccount.project_id
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`
 
+    // --- SPECIAL HANDLING FOR EXPIRED BOOKINGS: NOTIFY INSTRUCTOR ---
+    if (newStatus === 'expired' && payload.record?.instructor_id) {
+      const instId = payload.record.instructor_id;
+      const instTitle = 'Solicitação expirada';
+      const instBody = 'A solicitação expirou porque não foi aceita até 20 minutos antes do horário da aula.';
+      
+      console.log(`[PUSH SPECIAL] Booking ${appointmentId} expired. Sending notification to instructor: ${instId}`);
+
+      try {
+        // 1. Insert In-App Notification for instructor
+        const { error: instInAppError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: instId,
+            title: instTitle,
+            message: instBody,
+            type: 'booking_cancelled',
+            metadata: {
+              appointment_id: appointmentId,
+              status: 'expired'
+            }
+          });
+        if (instInAppError) {
+          console.error('[PUSH ERROR] Error inserting instructor in-app notification:', instInAppError);
+        } else {
+          console.log('[PUSH SPECIAL] Instructor in-app notification inserted successfully.');
+        }
+
+        // 2. Fetch FCM tokens for instructor and send push
+        const { data: instTokensData, error: instTokensErr } = await supabase
+          .from('fcm_tokens')
+          .select('token')
+          .eq('user_id', instId);
+        
+        if (instTokensErr) {
+          console.error('[PUSH ERROR] Error fetching instructor tokens:', instTokensErr);
+        } else if (instTokensData && instTokensData.length > 0) {
+          const instTokens = instTokensData.map(t => t.token);
+          console.log(`[PUSH SPECIAL] Found ${instTokens.length} tokens for instructor. Dispatching FCM push messages.`);
+          
+          const instSendPromises = instTokens.map(async (token) => {
+            const message = {
+              message: {
+                token: token,
+                notification: {
+                  title: instTitle,
+                  body: instBody,
+                },
+                webpush: {
+                  notification: {
+                    icon: '/android-chrome-192x192.png',
+                    badge: '/android-chrome-192x192.png',
+                  }
+                },
+                data: {
+                  appointmentId: appointmentId || '',
+                  status: 'expired',
+                  url: '/#/instructor/agenda'
+                }
+              }
+            };
+            try {
+              const res = await fetch(fcmUrl, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(message),
+              });
+              const resData = await res.json();
+              if (!res.ok) {
+                console.error(`[PUSH SPECIAL ERROR] FCM failed for instructor token:`, resData);
+              } else {
+                console.log(`[PUSH SPECIAL SUCCESS] FCM succeeded for instructor token:`, resData.name);
+              }
+            } catch (e) {
+              console.error('Error sending instructor FCM:', e);
+            }
+          });
+          await Promise.all(instSendPromises);
+        } else {
+          console.log('[PUSH SPECIAL] No FCM tokens found for instructor.');
+        }
+      } catch (e) {
+        console.error('Error during special instructor notification:', e);
+      }
+    }
+
     const url = isTipNotification ? '/#/instructor/finance' : (targetUserId === payload.record?.student_id ? '/#/student/lessons' : '/#/instructor/agenda')
 
     const sendPromises = tokens.map(async (token) => {
