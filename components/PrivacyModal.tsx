@@ -73,10 +73,10 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onA
         <div className="space-y-2">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
-            Pagamentos Seguros (Stripe)
+            Pagamentos Seguros (Asaas)
           </h3>
           <p>
-            Seus pagamentos são processados pela Stripe, líder mundial em segurança. <strong>Nós não temos acesso e não armazenamos os dados do seu cartão</strong> em nossos sistemas.
+            Seus pagamentos são processados com total segurança através do <strong>Asaas</strong>, nosso parceiro financeiro e instituição autorizada pelo Banco Central. <strong>Nós não temos acesso e não armazenamos os dados de pagamento</strong> em nossos sistemas.
           </p>
         </div>
 

@@ -502,7 +502,7 @@ export const StudentProfile: React.FC = () => {
             <strong>3. Compartilhamento:</strong> Compartilhamos seu WhatsApp com o instrutor somente após a confirmação da aula para facilitar a comunicação.
           </p>
           <p>
-            <strong>4. Pagamentos:</strong> Usamos a Stripe para pagamentos seguros. Não armazenamos os dados do seu cartão em nossos sistemas.
+            <strong>4. Pagamentos:</strong> Usamos o Asaas para pagamentos seguros. Não armazenamos os dados do seu cartão ou de pagamento em nossos sistemas.
           </p>
           <p>
             <strong>5. Seus Direitos:</strong> Você tem total controle sobre seus dados e pode acessar, corrigir ou excluir suas informações a qualquer momento.

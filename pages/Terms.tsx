@@ -67,14 +67,14 @@ export const Terms: React.FC = () => {
           <section className="space-y-3">
             <h2 className="text-xl font-bold text-gray-900">4. Agendamento de aulas</h2>
             <p>
-              As aulas são agendadas diretamente através da agenda do instrutor. O agendamento é confirmado apenas após a validação do pagamento via Stripe. O Aluno deve comparecer ao ponto de encontro no horário combinado.
+              As aulas são agendadas diretamente através da agenda do instrutor. O agendamento é confirmado apenas após a validação do pagamento pela nossa instituição de pagamento parceira. O Aluno deve comparecer ao ponto de encontro no horário combinado.
             </p>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-xl font-bold text-gray-900">5. Pagamentos (Stripe)</h2>
+            <h2 className="text-xl font-bold text-gray-900">5. Pagamentos e Transações</h2>
             <p>
-              Todos os pagamentos são processados via Stripe. A CNHJá não armazena dados sensíveis de cartões de crédito. O Aluno concorda com o valor total da aula e eventuais taxas aplicáveis no momento da reserva.
+              Todos os pagamentos são processados com total segurança através de nossa instituição de pagamento parceira (atualmente o <strong>Asaas</strong>). A CNHJá não armazena dados sensíveis de cartões de crédito. O Aluno concorda com o valor total da aula e eventuais taxas aplicáveis no momento da reserva.
             </p>
           </section>
 

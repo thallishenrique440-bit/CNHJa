@@ -90,13 +90,13 @@ export const Privacy: React.FC = () => {
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-xl font-bold text-gray-900">5. Pagamentos (Stripe)</h2>
+            <h2 className="text-xl font-bold text-gray-900">5. Pagamentos e Transações Financeiras</h2>
             <p>
-              Todos os pagamentos são processados pela plataforma <strong>Stripe</strong>.
+              Todos os pagamentos na plataforma são processados por uma <strong>instituição de pagamento parceira</strong> (atualmente o <strong>Asaas</strong>).
             </p>
             <ul className="list-disc pl-5 space-y-2">
-              <li><strong>Segurança:</strong> Os dados do seu cartão de crédito ou débito são inseridos diretamente no ambiente criptografado da Stripe.</li>
-              <li><strong>Não Armazenamento:</strong> Nossa plataforma <strong>NÃO armazena</strong> dados sensíveis de pagamento (como número do cartão ou CVV) em nossos servidores.</li>
+              <li><strong>Segurança:</strong> Os dados de pagamento, incluindo cartão de crédito ou débito, pix ou boletos, são inseridos diretamente no ambiente seguro e criptografado da instituição parceira.</li>
+              <li><strong>Não Armazenamento:</strong> Nossa plataforma <strong>NÃO armazena</strong> dados sensíveis de pagamento (como número do cartão ou código de segurança) em nossos servidores.</li>
             </ul>
           </section>
 

@@ -26,7 +26,7 @@ import { supabase } from './lib/supabase';
 import { ProfileGuard } from './components/ProfileGuard';
 import { PushNotificationManager } from './components/PushNotificationManager';
 
-import { InstructorStripeBanner } from './components/InstructorStripeBanner';
+import { InstructorFinanceBanner } from './components/InstructorFinanceBanner';
 
 // --- GUARDS ---
 
@@ -79,7 +79,7 @@ const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) =
 const InstructorLayout: React.FC = () => {
   return (
     <>
-      <InstructorStripeBanner />
+      <InstructorFinanceBanner />
       <Outlet />
     </>
   );

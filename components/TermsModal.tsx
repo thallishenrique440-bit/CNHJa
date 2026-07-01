@@ -76,7 +76,7 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
             Pagamentos Seguros
           </h3>
           <p>
-            Usamos a Stripe para processar seus pagamentos com total segurança.
+            Usamos o <strong>Asaas</strong>, nosso parceiro financeiro homologado pelo Banco Central, para processar seus pagamentos com total segurança.
           </p>
         </div>
 
