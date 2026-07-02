@@ -10,7 +10,8 @@ import {
   LogOut,
   ChevronRight,
   User,
-  Phone
+  Phone,
+  HelpCircle
 } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
@@ -22,6 +23,14 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { toTitleCase, normalizeCity } from '../../lib/stringUtils';
+
+const formatPhone = (value: string) => {
+  const numbers = value.replace(/\D/g, '');
+  if (numbers.length === 0) return '';
+  if (numbers.length <= 2) return `(${numbers}`;
+  if (numbers.length <= 7) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`;
+  return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7, 11)}`;
+};
 
 export const StudentProfile: React.FC = () => {
   const navigate = useNavigate();
@@ -41,7 +50,6 @@ export const StudentProfile: React.FC = () => {
   const [city, setCity] = useState('');
   
   const [trustedContact, setTrustedContact] = useState('');
-  const [defaultMessage, setDefaultMessage] = useState('');
   
   const [experience, setExperience] = useState('');
   const [cnhProcess, setCnhProcess] = useState('');
@@ -91,14 +99,13 @@ export const StudentProfile: React.FC = () => {
           setName(profile.full_name || '');
           setEmail(profile.email || session.user.email || ''); 
           setCity(profile.city || '');
-          setPhone(profile.phone || ''); // Load Phone
+          setPhone(formatPhone(profile.phone || '')); // Load Phone
           
           if (profile.avatar_url) {
             setProfileImage(profile.avatar_url);
           }
 
-          setTrustedContact(profile.trusted_contact || '');
-          setDefaultMessage(profile.security_message || 'Estou em aula agora e compartilho minha localização.');
+          setTrustedContact(formatPhone(profile.trusted_contact || ''));
           setExperience(profile.experience_level || '');
           setCnhProcess(profile.cnh_process_type || '');
         }
@@ -116,7 +123,8 @@ export const StudentProfile: React.FC = () => {
   const handleSave = async () => {
     if (!session?.user) return;
     
-    if (!name || !phone || phone.length < 10 || !city) {
+    const cleanPhone = phone.replace(/\D/g, '');
+    if (!name || !cleanPhone || cleanPhone.length < 10 || !city) {
         addToast("Por favor, preencha todos os campos obrigatórios para continuar.", 'warning');
         return;
     }
@@ -129,6 +137,12 @@ export const StudentProfile: React.FC = () => {
     const normalizedName = toTitleCase(name);
     const normalizedCity = normalizeCity(city);
 
+    const cleanTrustedContact = trustedContact.replace(/\D/g, '');
+    if (cleanTrustedContact.length > 0 && cleanTrustedContact.length !== 11) {
+        addToast("Informe um telefone válido no formato (00) 00000-0000.", 'warning');
+        return;
+    }
+
     setSaving(true);
     const userId = session.user.id;
 
@@ -137,10 +151,9 @@ export const StudentProfile: React.FC = () => {
           .from('profiles')
           .update({
             full_name: normalizedName,
-            phone: phone,
+            phone: cleanPhone,
             city: normalizedCity,
-            trusted_contact: trustedContact,
-            security_message: defaultMessage,
+            trusted_contact: cleanTrustedContact,
             experience_level: experience,
             cnh_process_type: cnhProcess,
             is_profile_complete: true,
@@ -260,9 +273,13 @@ export const StudentProfile: React.FC = () => {
                 type="tel"
                 placeholder="(11) 99999-9999"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                  setPhone(formatPhone(digits));
+                }}
                 icon={<Phone className="w-4 h-4 text-gray-400" />}
                 inputMode="numeric"
+                autoComplete="tel"
               />
 
               <CitySelect 
@@ -356,9 +373,13 @@ export const StudentProfile: React.FC = () => {
                   type="tel"
                   placeholder="(11) 99999-9999"
                   value={phone} 
-                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                    setPhone(formatPhone(digits));
+                  }}
                   className="bg-white border-blue-200 focus:ring-blue-500"
                   inputMode="numeric"
+                  autoComplete="tel"
               />
               <p className="text-xs text-blue-700 mt-2 leading-tight">
                   É através deste número que os instrutores entrarão em contato para combinar as aulas.
@@ -385,34 +406,41 @@ export const StudentProfile: React.FC = () => {
             <div>
               <Input 
                 label="Contato de confiança (Opcional)" 
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
                 placeholder="Ex: (11) 99999-9999"
                 value={trustedContact} 
-                onChange={(e) => setTrustedContact(e.target.value)}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                  setTrustedContact(formatPhone(digits));
+                }}
               />
               <p className="text-xs text-gray-500 mt-2 leading-relaxed">
                 Este contato pode receber sua localização em tempo real durante uma aula, caso você solicite.
               </p>
             </div>
 
-            <div className="flex flex-col space-y-2 w-full text-left">
-              <label className="text-sm font-semibold text-gray-700 ml-1">
-                Mensagem padrão
-              </label>
-              <textarea
-                className="w-full px-4 py-3.5 rounded-xl bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all duration-200 resize-none h-24"
-                placeholder="Ex: Estou em aula agora e compartilho minha localização."
-                maxLength={120}
-                value={defaultMessage}
-                onChange={(e) => setDefaultMessage(e.target.value)}
-              />
-              <div className="flex justify-between items-start px-1">
-                <p className="text-xs text-gray-500 leading-relaxed pr-4">
-                  Esta mensagem será enviada junto com sua localização quando você compartilhar durante uma aula.
-                </p>
-                <span className="text-[10px] text-gray-400 whitespace-nowrap mt-0.5">
-                  {defaultMessage.length}/120
-                </span>
-              </div>
+            <div className="bg-blue-50/50 rounded-xl p-4 border border-blue-100 flex flex-col gap-2 w-full text-left">
+              <span className="text-xs font-bold text-blue-800 flex items-center gap-1.5">
+                <HelpCircle className="w-4 h-4 text-blue-800" /> Como funciona?
+              </span>
+              <p className="text-xs text-blue-700 leading-relaxed">
+                Durante a aula, o botão "Compartilhar localização" ficará disponível para uso.
+              </p>
+              <ul className="text-xs text-blue-700 space-y-1.5 list-none pl-1">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-blue-500 mt-0.5">•</span>
+                  <span>Ao tocar no botão, o WhatsApp será aberto na conversa do seu contato de confiança.</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-blue-500 mt-0.5">•</span>
+                  <span>Em seguida, basta compartilhar sua localização em tempo real pelo próprio WhatsApp.</span>
+                </li>
+              </ul>
+              <p className="text-xs text-blue-700/90 leading-relaxed pt-2 mt-1 border-t border-blue-100/50">
+                <strong className="font-semibold text-blue-900">Importante:</strong> A localização em tempo real é compartilhada pelo próprio WhatsApp. O aplicativo apenas facilita a abertura da conversa com seu contato de confiança.
+              </p>
             </div>
           </div>
         </section>

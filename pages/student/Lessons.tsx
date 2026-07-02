@@ -100,7 +100,6 @@ export const StudentLessons: React.FC = () => {
   
   // Security Profile Data
   const [trustedContact, setTrustedContact] = useState<string | null>(null);
-  const [securityMessage, setSecurityMessage] = useState<string>('Estou em aula agora e compartilho minha localização.');
   
   const [selectedDate, setSelectedDate] = useState(new Date());
   
@@ -458,7 +457,7 @@ export const StudentLessons: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('profiles')
-          .select('trusted_contact, security_message')
+          .select('trusted_contact')
           .eq('id', session.user.id)
           .single();
 
@@ -466,9 +465,6 @@ export const StudentLessons: React.FC = () => {
 
         if (data) {
           setTrustedContact(data.trusted_contact);
-          if (data.security_message) {
-            setSecurityMessage(data.security_message);
-          }
         }
       } catch (error) {
         console.error('Error fetching profile for security:', error);

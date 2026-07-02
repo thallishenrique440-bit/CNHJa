@@ -10,6 +10,14 @@ import { supabase } from '../lib/supabase';
 import { useToast } from '../contexts/ToastContext';
 import { toTitleCase, sanitizeEmail, normalizeCity } from '../lib/stringUtils';
 
+const formatPhone = (value: string) => {
+  const numbers = value.replace(/\D/g, '');
+  if (numbers.length === 0) return '';
+  if (numbers.length <= 2) return `(${numbers}`;
+  if (numbers.length <= 7) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`;
+  return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7, 11)}`;
+};
+
 export const RegisterStudent: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -32,13 +40,13 @@ export const RegisterStudent: React.FC = () => {
       const data = JSON.parse(savedData);
       setName(data.name || '');
       setEmail(data.email || '');
-      setWhatsapp(data.whatsapp || '');
+      setWhatsapp(formatPhone(data.whatsapp || ''));
       setCity(data.city || '');
     }
   }, []);
 
   useEffect(() => {
-    const data = { name, email, whatsapp, city };
+    const data = { name, email, whatsapp: whatsapp.replace(/\D/g, ''), city };
     sessionStorage.setItem('ab_student_register_data', JSON.stringify(data));
   }, [name, email, whatsapp, city]);
 
@@ -74,7 +82,8 @@ export const RegisterStudent: React.FC = () => {
       return;
     }
 
-    if (whatsapp.length < 10) {
+    const cleanWhatsapp = whatsapp.replace(/\D/g, '');
+    if (cleanWhatsapp.length < 10) {
       addToast("Digite um número de WhatsApp válido (DDD + Número).", 'warning');
       return;
     }
@@ -104,7 +113,7 @@ export const RegisterStudent: React.FC = () => {
       full_name: normalizedName,
       city: normalizedCityVal, 
       role: 'student',
-      phone: whatsapp,
+      phone: cleanWhatsapp,
       terms_accepted_at: new Date().toISOString(),
       privacy_accepted_at: new Date().toISOString()
     };
@@ -211,7 +220,10 @@ export const RegisterStudent: React.FC = () => {
                   autoComplete="tel"
                   placeholder="(11) 99999-9999"
                   value={whatsapp}
-                  onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                    setWhatsapp(formatPhone(digits));
+                  }}
                   inputMode="numeric"
                 />
                 <p className="text-[11px] text-gray-400 px-1 leading-tight">

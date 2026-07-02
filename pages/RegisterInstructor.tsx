@@ -10,10 +10,18 @@ import { supabase } from '../lib/supabase';
 import { useToast } from '../contexts/ToastContext';
 import { toTitleCase, sanitizeEmail, normalizeCity } from '../lib/stringUtils';
 
+const formatPhone = (value: string) => {
+  const numbers = value.replace(/\D/g, '');
+  if (numbers.length === 0) return '';
+  if (numbers.length <= 2) return `(${numbers}`;
+  if (numbers.length <= 7) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`;
+  return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7, 11)}`;
+};
+
 export const RegisterInstructor: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
- 
+  
   const [name, setName] = useState('');
   const [detranCredential, setDetranCredential] = useState('');
   const [email, setEmail] = useState('');
@@ -34,13 +42,13 @@ export const RegisterInstructor: React.FC = () => {
       setName(data.name || '');
       setDetranCredential(data.detranCredential || '');
       setEmail(data.email || '');
-      setWhatsapp(data.whatsapp || '');
+      setWhatsapp(formatPhone(data.whatsapp || ''));
       setCity(data.city || '');
     }
   }, []);
 
   useEffect(() => {
-    const data = { name, detranCredential, email, whatsapp, city };
+    const data = { name, detranCredential, email, whatsapp: whatsapp.replace(/\D/g, ''), city };
     sessionStorage.setItem('ab_instructor_register_data', JSON.stringify(data));
   }, [name, detranCredential, email, whatsapp, city]);
 
@@ -81,7 +89,8 @@ export const RegisterInstructor: React.FC = () => {
       return;
     }
 
-    if (!whatsapp || whatsapp.length < 10 || whatsapp.length > 11) {
+    const cleanWhatsapp = whatsapp.replace(/\D/g, '');
+    if (!cleanWhatsapp || cleanWhatsapp.length < 10 || cleanWhatsapp.length > 11) {
       addToast("Informe um número de WhatsApp válido com DDD.", 'warning');
       return;
     }
@@ -110,8 +119,8 @@ export const RegisterInstructor: React.FC = () => {
     const signupData = {
       full_name: normalizedName,
       city: normalizedCityVal,
-      phone: whatsapp,
-      whatsapp: whatsapp,
+      phone: cleanWhatsapp,
+      whatsapp: cleanWhatsapp,
       credential: detranCredential,
       role: 'instructor',
       terms_accepted_at: new Date().toISOString(),
@@ -225,7 +234,10 @@ export const RegisterInstructor: React.FC = () => {
                   autoComplete="tel"
                   placeholder="(11) 99999-9999"
                   value={whatsapp}
-                  onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                    setWhatsapp(formatPhone(digits));
+                  }}
                   inputMode="numeric"
                 />
                 <p className="text-[11px] text-gray-400 px-1 leading-tight">
