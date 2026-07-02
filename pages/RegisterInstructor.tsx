@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { CitySelect, isValidCity } from '../components/CitySelect';
@@ -20,6 +20,7 @@ const formatPhone = (value: string) => {
 
 export const RegisterInstructor: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { addToast } = useToast();
   
   const [name, setName] = useState('');
@@ -158,7 +159,7 @@ export const RegisterInstructor: React.FC = () => {
         addToast("Este email já está em uso.", 'error');
       } else if (!data.session) {
         addToast("Cadastro realizado! Verifique seu email para confirmar a conta.", 'success');
-        navigate('/login');
+        navigate('/login', { state: { from: location.state?.from } });
       } else {
         navigate('/instructor/profile');
       }
@@ -343,7 +344,7 @@ export const RegisterInstructor: React.FC = () => {
 
         <div className="pt-4 flex justify-center">
           <button 
-            onClick={() => navigate('/login')} 
+            onClick={() => navigate('/login', { state: { from: location.state?.from } })} 
             className="text-sm text-gray-500 font-medium hover:text-blue-600 py-2 px-4 transition-colors"
           >
             Já tem uma conta? <span className="text-blue-600 font-bold">Fazer login</span>

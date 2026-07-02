@@ -375,7 +375,7 @@ export const StudentHome: React.FC = () => {
             return (
               <div 
                 key={inst.id} 
-                onClick={() => navigate(`/student/instructor/${inst.id}`)}
+                onClick={() => navigate(`/student/instructor/${inst.id}`, { state: { fromApp: true } })}
                 className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden transition-all hover:shadow-md active:scale-[0.99] cursor-pointer"
               >
                 

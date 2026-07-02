@@ -1,10 +1,11 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { APP_CONFIG } from '../constants';
 
 export const Welcome: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50/80 via-white to-white flex flex-col px-6 py-6 sm:max-w-md sm:mx-auto relative overflow-hidden">
@@ -43,7 +44,7 @@ export const Welcome: React.FC = () => {
           <Button 
             variant="primary" 
             fullWidth 
-            onClick={() => navigate('/register-student')}
+            onClick={() => navigate('/register-student', { state: { from: location.state?.from } })}
             className="py-4 text-lg font-bold shadow-lg shadow-blue-200/50"
           >
             Quero tirar minha CNH
@@ -52,7 +53,7 @@ export const Welcome: React.FC = () => {
           <Button 
             variant="outline" 
             fullWidth 
-            onClick={() => navigate('/register-instructor')}
+            onClick={() => navigate('/register-instructor', { state: { from: location.state?.from } })}
             className="py-4 text-lg font-semibold bg-white/60 backdrop-blur-sm border-blue-200 text-blue-700 hover:bg-blue-50"
           >
             Sou instrutor
@@ -61,7 +62,7 @@ export const Welcome: React.FC = () => {
 
         <div className="pt-2 flex justify-center">
           <button 
-            onClick={() => navigate('/login')}
+            onClick={() => navigate('/login', { state: { from: location.state?.from } })}
             className="group flex items-center text-sm font-medium text-gray-500 hover:text-blue-600 transition-colors px-4 py-2"
           >
             Já tem uma conta? 

@@ -263,11 +263,11 @@ export const StudentInstructorProfile: React.FC = () => {
       setIsSuccess(true);
       addToast('Pagamento concluído com sucesso! Suas aulas foram agendadas.', 'success');
       // Clean up URL
-      navigate(`/student/instructor/${id}`, { replace: true });
+      navigate(`/student/instructor/${id}`, { replace: true, state: location.state });
     } else if (canceled === 'true') {
       addToast('Pagamento cancelado. Seus horários continuam reservados temporariamente.', 'error');
       // Clean up URL
-      navigate(`/student/instructor/${id}`, { replace: true });
+      navigate(`/student/instructor/${id}`, { replace: true, state: location.state });
     }
   }, [searchParams, id, navigate, addToast]);
 
@@ -1398,7 +1398,14 @@ export const StudentInstructorProfile: React.FC = () => {
 
       <div className={`px-4 py-4 sticky ${showPreviewBanner ? 'top-[52px]' : 'top-0'} bg-white/90 backdrop-blur-md z-20 border-b border-gray-100 flex items-center transition-all duration-300`}>
         <button 
-          onClick={() => navigate(-1)} 
+          onClick={() => {
+            const hasHistory = (location.state?.fromApp || location.state?.fromInstructor) && window.history.length > 1;
+            if (hasHistory) {
+              navigate(-1);
+            } else {
+              navigate('/student/home');
+            }
+          }} 
           className="p-2 -ml-2 text-gray-600 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

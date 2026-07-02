@@ -55,7 +55,7 @@ const AuthGuard: React.FC<{ allowedRole: string | 'any' }> = ({ allowedRole }) =
 
   // 1. Not authenticated
   if (!session) {
-    return <Navigate to="/welcome" replace />;
+    return <Navigate to="/welcome" state={{ from: location }} replace />;
   }
 
   // 2. Authenticated but accessing wrong role area

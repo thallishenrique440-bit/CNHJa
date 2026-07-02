@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { supabase } from '../lib/supabase';
@@ -8,6 +8,7 @@ import { APP_CONFIG } from '../constants';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { addToast } = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,10 +48,17 @@ export const Login: React.FC = () => {
       const role = data.user.user_metadata.role;
       localStorage.setItem('ab_user_type', role);
       
+      const from = location.state?.from;
+      if (from) {
+        const target = `${from.pathname}${from.search || ''}${from.hash || ''}`;
+        navigate(target, { replace: true });
+        return;
+      }
+      
       if (role === 'student') {
-        navigate('/student/home');
+        navigate('/student/home', { replace: true });
       } else if (role === 'instructor') {
-        navigate('/instructor/agenda');
+        navigate('/instructor/agenda', { replace: true });
       } else {
         addToast("Erro: Tipo de usuário desconhecido.", 'error');
       }
