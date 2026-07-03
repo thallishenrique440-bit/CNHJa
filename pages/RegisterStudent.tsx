@@ -321,12 +321,14 @@ export const RegisterStudent: React.FC = () => {
           isOpen={isTermsModalOpen}
           onClose={() => setIsTermsModalOpen(false)}
           onAccept={() => setAcceptedTerms(true)}
+          role="student"
         />
 
         <PrivacyModal 
           isOpen={isPrivacyModalOpen}
           onClose={() => setIsPrivacyModalOpen(false)}
           onAccept={() => setAcceptedTerms(true)}
+          role="student"
         />
       </div>
 

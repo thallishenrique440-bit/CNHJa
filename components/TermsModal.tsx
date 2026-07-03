@@ -2,14 +2,16 @@ import React from 'react';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { Link } from 'react-router-dom';
+import { APP_CONFIG } from '../constants';
 
 interface TermsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAccept: () => void;
+  role?: 'student' | 'instructor';
 }
 
-export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccept }) => {
+export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccept, role = 'student' }) => {
   return (
     <Modal
       isOpen={isOpen}
@@ -40,25 +42,75 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
     >
       <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-6 text-sm text-gray-600 leading-relaxed custom-scrollbar">
         
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold bg-blue-50 text-blue-700 border border-blue-100 uppercase tracking-wider w-fit">
+          Perfil: {role === 'instructor' ? 'Instrutor' : 'Aluno'}
+        </div>
+
         <div className="space-y-2">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
             O que somos
           </h3>
           <p>
-            Somos um marketplace que conecta você a instrutores independentes. Facilitamos o agendamento e o pagamento.
+            Somos um marketplace que conecta {role === 'instructor' ? 'instrutores de direção independentes a alunos interessados' : 'você a instrutores independentes'}. Facilitamos o agendamento e o pagamento.
           </p>
         </div>
 
-        <div className="space-y-2">
-          <h3 className="font-bold text-gray-900 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
-            Sem Garantia de Aprovação
-          </h3>
-          <p>
-            A plataforma é uma ferramenta de auxílio ao aprendizado. <strong>Não garantimos a sua aprovação nos exames da CNH.</strong>
-          </p>
-        </div>
+        {role === 'student' ? (
+          <>
+            <div className="space-y-2">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+                Sem Garantia de Aprovação
+              </h3>
+              <p>
+                A plataforma é uma ferramenta de auxílio ao aprendizado. <strong>Não garantimos a sua aprovação nos exames da CNH.</strong>
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+                Compromisso e Faltas
+              </h3>
+              <p>
+                Fique atento ao horário. Cancelamentos com menos de 24h ou faltas não dão direito a reembolso.
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+                Credenciamento e Obrigações
+              </h3>
+              <p>
+                O Instrutor deve possuir credencial ativa do DETRAN, CNH com EAR, e veículo em perfeitas condições de uso, licenciamento e seguro.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+                Repasses e Subconta Asaas
+              </h3>
+              <p>
+                Seus ganhos são processados e repassados de forma segura através da sua subconta Asaas. Retemos uma comissão sobre cada aula intermediada.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+                Atuação Independente
+              </h3>
+              <p>
+                O Instrutor atua de forma autônoma e assume total responsabilidade civil, criminal e de trânsito pela condução e segurança das aulas práticas.
+              </p>
+            </div>
+          </>
+        )}
 
         <div className="space-y-2">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
@@ -76,17 +128,7 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
             Pagamentos Seguros
           </h3>
           <p>
-            Usamos o <strong>Asaas</strong>, nosso parceiro financeiro homologado pelo Banco Central, para processar seus pagamentos com total segurança.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="font-bold text-gray-900 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
-            Compromisso e Faltas
-          </h3>
-          <p>
-            Fique atento ao horário. Cancelamentos com menos de 24h ou faltas não dão direito a reembolso.
+            Usamos o <strong>Asaas</strong>, nosso parceiro financeiro homologado pelo Banco Central, para processar todos os pagamentos e repasses com total segurança.
           </p>
         </div>
 
@@ -96,7 +138,9 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
             Segurança
           </h3>
           <p>
-            Você pode compartilhar sua localização em tempo real pelo app durante a aula para sua segurança pessoal.
+            {role === 'instructor' 
+              ? 'O aluno poderá compartilhar sua localização em tempo real pelo app durante a aula para segurança de ambos.'
+              : 'Você pode compartilhar sua localização em tempo real pelo app durante a aula para sua segurança pessoal.'}
           </p>
         </div>
 
@@ -106,7 +150,7 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
             Respeito Mútuo
           </h3>
           <p>
-            Não toleramos desrespeito. Avalie com honestidade e mantenha a conduta ética.
+            Não toleramos desrespeito de qualquer parte. Mantenha sempre a conduta ética e o profissionalismo.
           </p>
         </div>
 
@@ -123,6 +167,7 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
         <div className="pt-4 flex justify-center">
           <Link 
             to="/terms?from=register" 
+            state={{ role }}
             className="text-blue-600 font-bold hover:underline flex items-center gap-1.5"
           >
             Ver versão completa dos Termos de Uso

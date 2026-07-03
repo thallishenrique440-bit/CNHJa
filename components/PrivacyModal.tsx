@@ -7,9 +7,10 @@ interface PrivacyModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAccept: () => void;
+  role?: 'student' | 'instructor';
 }
 
-export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onAccept }) => {
+export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onAccept, role = 'student' }) => {
   return (
     <Modal
       isOpen={isOpen}
@@ -40,13 +41,17 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onA
     >
       <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-6 text-sm text-gray-600 leading-relaxed custom-scrollbar">
         
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold bg-blue-50 text-blue-700 border border-blue-100 uppercase tracking-wider w-fit">
+          Perfil: {role === 'instructor' ? 'Instrutor' : 'Aluno'}
+        </div>
+
         <div className="space-y-2">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
             O que coletamos
           </h3>
           <p>
-            Coletamos dados básicos como seu nome, e-mail, WhatsApp e cidade para criar seu perfil e permitir que você agende suas aulas com segurança.
+            Coletamos dados básicos como seu nome, e-mail, WhatsApp e cidade para criar seu perfil e permitir {role === 'instructor' ? 'que você atenda seus alunos' : 'o agendamento das aulas'} com segurança.
           </p>
         </div>
 
@@ -56,19 +61,31 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onA
             Como usamos seus dados
           </h3>
           <p>
-            Suas informações são usadas para gerenciar seus agendamentos, processar pagamentos e garantir que você tenha a melhor experiência de aprendizado possível.
+            Suas informações são usadas para gerenciar seus agendamentos, processar pagamentos e garantir {role === 'instructor' ? 'o bom andamento de suas atividades na plataforma' : 'que você tenha a melhor experiência de aprendizado possível'}.
           </p>
         </div>
 
-        <div className="space-y-2">
-          <h3 className="font-bold text-gray-900 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
-            Compartilhamento com Instrutores
-          </h3>
-          <p>
-            Para facilitar a aula, compartilhamos seu nome e WhatsApp com o instrutor escolhido <strong>somente após a confirmação do agendamento</strong>. O instrutor passa a ser responsável pelo uso adequado dessas informações.
-          </p>
-        </div>
+        {role === 'student' ? (
+          <div className="space-y-2">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+              Compartilhamento com Instrutores
+            </h3>
+            <p>
+              Para facilitar a aula, compartilhamos seu nome e WhatsApp com o instrutor escolhido <strong>somente após a confirmação do agendamento</strong>. O instrutor passa a ser responsável pelo uso adequado dessas informações.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
+              Tratamento de Dados de Alunos
+            </h3>
+            <p>
+              O Instrutor concorda em receber o nome e o WhatsApp do Aluno unicamente para coordenação das aulas práticas e compromete-se a tratar tais dados pessoais em total conformidade com a LGPD, sendo vedado o uso para fins publicitários ou compartilhamento com terceiros não autorizados.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
@@ -76,7 +93,7 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onA
             Pagamentos Seguros (Asaas)
           </h3>
           <p>
-            Seus pagamentos são processados com total segurança através do <strong>Asaas</strong>, nosso parceiro financeiro e instituição autorizada pelo Banco Central. <strong>Nós não temos acesso e não armazenamos os dados de pagamento</strong> em nossos sistemas.
+            Seus pagamentos e repasses são processados com total segurança através do <strong>Asaas</strong>, nosso parceiro financeiro e instituição autorizada pelo Banco Central. <strong>Nós não temos acesso e não armazenamos os dados de pagamento</strong> em nossos sistemas.
           </p>
         </div>
 
@@ -106,23 +123,14 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({ isOpen, onClose, onA
             Transparência Total
           </h3>
           <p>
-            Não vendemos seus dados para terceiros. O uso das informações é estritamente operacional, focado em conectar você ao instrutor e melhorar o serviço.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="font-bold text-gray-900 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span>
-            Versão Completa
-          </h3>
-          <p>
-            Você pode acessar a versão completa da nossa Política de Privacidade a qualquer momento através do link abaixo ou nas configurações do app.
+            Não vendemos seus dados para terceiros. O uso das informações é estritamente operacional, focado na intermediação de serviços e na melhoria da plataforma.
           </p>
         </div>
 
         <div className="pt-4 flex justify-center">
           <Link 
             to="/privacy?from=register" 
+            state={{ role }}
             className="text-blue-600 font-bold hover:underline flex items-center gap-1.5"
           >
             Ver versão completa da Política de Privacidade
