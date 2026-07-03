@@ -23,7 +23,7 @@ export const ForgotPassword: React.FC = () => {
     // We use window.location.origin to redirect back to the root.
     // The App.tsx listener will catch the PASSWORD_RECOVERY event and redirect to /update-password.
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/`,
+      redirectTo: `${window.location.origin}/update-password`,
     });
 
     setLoading(false);
