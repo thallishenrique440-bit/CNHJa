@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Shield } from 'lucide-react';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
+import { AsaasPartnerSeal } from '../../components/AsaasPartnerSeal';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -394,17 +395,7 @@ export const StudentFinance: React.FC = () => {
           </div>
           
           {/* Right Column: Institutional Financial Partner Logo and Label */}
-          <div className="flex flex-col items-center justify-center text-center min-w-[160px] shrink-0">
-            <img 
-              src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/f6f3bea8-1b9a-46c0-b405-d4d4ec6db841.jpg"
-              alt="Asaas"
-              referrerPolicy="no-referrer"
-              className="w-[100px] h-auto object-contain object-center block"
-            />
-            <span className="text-xs font-medium tracking-wide text-gray-400 mt-1.5 leading-none">
-              Parceiro Financeiro
-            </span>
-          </div>
+          <AsaasPartnerSeal className="min-w-[160px] shrink-0" />
         </div>
       </div>
 

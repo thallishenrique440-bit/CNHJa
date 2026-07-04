@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
+import { AsaasPartnerSeal } from '../components/AsaasPartnerSeal';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
@@ -764,17 +765,7 @@ export const InstructorFinance: React.FC = () => {
           </div>
           
           {/* Right Column: Institutional Financial Partner Logo and Label */}
-          <div className="flex flex-col items-center justify-center text-center min-w-[160px] shrink-0">
-            <img 
-              src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/f6f3bea8-1b9a-46c0-b405-d4d4ec6db841.jpg"
-              alt="Asaas"
-              referrerPolicy="no-referrer"
-              className="w-[100px] h-auto object-contain object-center block"
-            />
-            <span className="text-xs font-medium tracking-wide text-gray-400 mt-1.5 leading-none">
-              Parceiro Financeiro
-            </span>
-          </div>
+          <AsaasPartnerSeal className="min-w-[160px] shrink-0" />
         </div>
       </div>
 
@@ -900,15 +891,6 @@ export const InstructorFinance: React.FC = () => {
               asaasStatus === 'none' ? 'bg-white border-gray-200' :
               'bg-yellow-50 border-yellow-100'
             }`}>
-            
-            {(asaasStatus === 'none' || asaasStatus === 'active') && (
-              <img 
-                src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%2026%20de%20jun.%20de%202026,%2009_42_05.png"
-                alt=""
-                referrerPolicy="no-referrer"
-                className="absolute inset-0 w-full h-full object-cover opacity-[0.09] pointer-events-none z-0"
-              />
-            )}
             
             <div className="relative z-10">
                 <h3 className={`font-bold text-sm mb-1
