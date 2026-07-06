@@ -1,9 +1,9 @@
 /**
  * Global Type Definitions for CNHJÁ Payment Provider Abstraction
- * Supports multiple payment gateways (Stripe, Asaas, etc.) and dual-compatibility.
+ * Configured exclusively for Asaas payment gateway.
  */
 
-export type PaymentProvider = 'stripe' | 'asaas';
+export type PaymentProvider = 'asaas';
 
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released';
 

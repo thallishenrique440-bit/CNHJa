@@ -3,7 +3,7 @@
  * Strict type safety without any 'any'.
  */
 
-export type ProviderName = 'stripe' | 'asaas';
+export type ProviderName = 'asaas';
 
 export interface BillingAddress {
   postalCode: string;

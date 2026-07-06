@@ -1,11 +1,7 @@
-import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-02-24.acacia' as any,
-});
+import { NotificationService } from '../lib/NotificationService';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -114,211 +110,166 @@ export default async function handler(req: any, res: any) {
     const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
     const paymentProvider = PaymentProviderFactory.getProvider(providerName);
 
-    // 3. Cancel Payment (via resolved provider)
+    // 3. Cancel or Refund Payment (via Asaas)
     try {
-      if (providerName === 'stripe') {
-        await (paymentProvider as any).stripe.paymentIntents.cancel(paymentId, {
-          cancellation_reason: 'abandoned',
-        });
-      } else if (providerName === 'asaas') {
-        const asaasApiKey = process.env.ASAAS_API_KEY || '';
-        const asaasApiUrl = process.env.ASAAS_API_URL || 'https://sandbox.asaas.com/api/v3';
+      const asaasApiKey = process.env.ASAAS_API_KEY || '';
+      const asaasApiUrl = process.env.ASAAS_API_URL || 'https://sandbox.asaas.com/api/v3';
 
-        if (!asaasApiKey) {
-          console.error('❌ ASAAS_API_KEY is not defined. Cannot reject/refund Asaas payment.');
-          throw new Error('CONFIG_ERROR: Missing ASAAS_API_KEY');
-        }
-
-        // Fetch payment status and check for installments directly from Asaas
-        console.log(`[Asaas] NodeJS: Fetching payment details for ${paymentId}`);
-        const paymentUrl = `${asaasApiUrl}/payments/${paymentId}`;
-        const paymentRes = await fetch(paymentUrl, {
-          method: 'GET',
-          headers: {
-            'access_token': asaasApiKey,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!paymentRes.ok) {
-          const errText = await paymentRes.text();
-          console.error(`❌ Failed to retrieve Asaas payment ${paymentId}: ${errText}`);
-          throw new Error(`Asaas verification failed: ${errText}`);
-        }
-
-        const paymentData = await paymentRes.json();
-        const installmentId = paymentData.installment;
-        const isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
-
-        console.log(`[Asaas] NodeJS: Retrieved payment details. Status: ${paymentData.status}, Installment: ${installmentId || 'none'}, isPaid: ${isPaid}`);
-
-        if (!installmentId) {
-          // Flow for simple/no-installment payments
-          if (isPaid) {
-            console.log(`[Asaas Refund] NodeJS: Refunding payment ${paymentId} for group ${appointment.group_id}`);
-            const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
-            const refundRes = await fetch(refundUrl, {
-              method: 'POST',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                description: 'instructor_rejected'
-              })
-            });
-
-            if (!refundRes.ok) {
-              const errText = await refundRes.text();
-              console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
-              throw new Error(`Asaas refund failed: ${errText}`);
-            }
-
-            console.log(`✅ Asaas payment ${paymentId} refunded successfully.`);
-          } else {
-            console.log(`[Asaas Cancel] NodeJS: Cancelling pending payment ${paymentId} for group ${appointment.group_id}`);
-            const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
-            const cancelRes = await fetch(cancelUrl, {
-              method: 'DELETE',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
-              }
-            });
-
-            if (!cancelRes.ok) {
-              const errText = await cancelRes.text();
-              console.warn(`⚠️ Asaas pending payment cancel failed: ${errText}`);
-            } else {
-              console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
-            }
-          }
-        } else {
-          // Flow for installment payments
-          if (isPaid) {
-            console.log(`[Asaas Installment Refund] NodeJS: Refunding installment ${installmentId} (linked to payment ${paymentId}) for group ${appointment.group_id}`);
-            const refundUrl = `${asaasApiUrl}/installments/${installmentId}/refund`;
-            const refundRes = await fetch(refundUrl, {
-              method: 'POST',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
-              }
-            });
-
-            if (!refundRes.ok) {
-              const errText = await refundRes.text();
-              console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${errText}`);
-              throw new Error(`Asaas installment refund failed: ${errText}`);
-            }
-
-            console.log(`✅ Asaas installment ${installmentId} refunded successfully.`);
-          } else {
-            console.log(`[Asaas Installment Cancel] NodeJS: Cancelling pending installment ${installmentId} (linked to payment ${paymentId}) for group ${appointment.group_id}`);
-            const cancelUrl = `${asaasApiUrl}/installments/${installmentId}`;
-            const cancelRes = await fetch(cancelUrl, {
-              method: 'DELETE',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
-              }
-            });
-
-            if (!cancelRes.ok) {
-              const errText = await cancelRes.text();
-              console.error(`❌ Asaas installment cancellation failed for installment ${installmentId}: ${errText}`);
-              throw new Error(`Asaas installment cancel failed: ${errText}`);
-            }
-
-            console.log(`✅ Asaas installment ${installmentId} cancelled successfully.`);
-          }
-        }
-
-        // Direct DB update for Asaas
-        const { error: updateError } = await supabaseAdmin
-          .from('appointments')
-          .update({
-            status: 'cancelled',
-            payment_status: isPaid ? 'refunded' : 'released',
-            cancelled_reason: 'instructor_rejected',
-            provider_name: providerName,
-            updated_by: user.id,
-            updated_at: new Date().toISOString()
-          })
-          .eq('group_id', appointment.group_id);
-
-        if (updateError) {
-          throw updateError;
-        }
-
-        // Create student notification
-        if (appointment.student_id) {
-          try {
-            await supabaseAdmin.from('notifications').upsert({
-              user_id: appointment.student_id,
-              title: 'Aula cancelada',
-              message: 'Seu agendamento foi cancelado pelo instrutor e o valor correspondente foi reembolsado automaticamente.',
-              type: 'booking_rejected',
-              metadata: { group_id: appointment.group_id, payment_intent_id: paymentId },
-              idempotency_key: `booking_rejected:asaas:${appointment.group_id}`
-            }, { onConflict: 'idempotency_key' });
-          } catch (notifErr) {
-            console.error(`⚠️ Error creating notification:`, notifErr);
-          }
-        }
-
-        return res.status(200).json({ message: 'Booking rejected and Asaas payment refunded/cancelled successfully.' });
-      } else {
-        // Safe placeholder for alternative providers
-        await paymentProvider.refundPayment({
-          providerPaymentId: paymentId,
-          reason: 'instructor_rejected',
-        });
+      if (!asaasApiKey) {
+        console.error('❌ ASAAS_API_KEY is not defined. Cannot reject/refund Asaas payment.');
+        throw new Error('CONFIG_ERROR: Missing ASAAS_API_KEY');
       }
-    } catch (stripeError: any) {
-      console.error('Payment Cancel Error:', stripeError);
 
-      // Handle already canceled for Stripe
-      if (stripeError.code === 'payment_intent_unexpected_state') {
-        const pi = providerName === 'stripe'
-          ? await (paymentProvider as any).stripe.paymentIntents.retrieve(paymentId)
-          : await paymentProvider.getPayment(paymentId).then((r: any) => ({ status: r.status }));
-        
-        if (pi.status === 'canceled') {
-          // Already canceled, proceed to update DB
-          console.log('Payment already canceled. Proceeding to DB update.');
-        } else if (pi.status === 'succeeded') {
-          // Cannot cancel captured payment
-          return res.status(409).json({ 
-            error: 'Payment already captured. Cannot reject.',
-            code: 'ALREADY_CAPTURED'
+      // Fetch payment status and check for installments directly from Asaas
+      console.log(`[Asaas] NodeJS: Fetching payment details for ${paymentId}`);
+      const paymentUrl = `${asaasApiUrl}/payments/${paymentId}`;
+      const paymentRes = await fetch(paymentUrl, {
+        method: 'GET',
+        headers: {
+          'access_token': asaasApiKey,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!paymentRes.ok) {
+        const errText = await paymentRes.text();
+        console.error(`❌ Failed to retrieve Asaas payment ${paymentId}: ${errText}`);
+        throw new Error(`Asaas verification failed: ${errText}`);
+      }
+
+      const paymentData = await paymentRes.json();
+      const installmentId = paymentData.installment;
+      const isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
+
+      console.log(`[Asaas] NodeJS: Retrieved payment details. Status: ${paymentData.status}, Installment: ${installmentId || 'none'}, isPaid: ${isPaid}`);
+
+      if (!installmentId) {
+        // Flow for simple/no-installment payments
+        if (isPaid) {
+          console.log(`[Asaas Refund] NodeJS: Refunding payment ${paymentId} for group ${appointment.group_id}`);
+          const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
+          const refundRes = await fetch(refundUrl, {
+            method: 'POST',
+            headers: {
+              'access_token': asaasApiKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              description: 'instructor_rejected'
+            })
           });
+
+          if (!refundRes.ok) {
+            const errText = await refundRes.text();
+            console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
+            throw new Error(`Asaas refund failed: ${errText}`);
+          }
+
+          console.log(`✅ Asaas payment ${paymentId} refunded successfully.`);
         } else {
-          throw stripeError;
+          console.log(`[Asaas Cancel] NodeJS: Cancelling pending payment ${paymentId} for group ${appointment.group_id}`);
+          const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
+          const cancelRes = await fetch(cancelUrl, {
+            method: 'DELETE',
+            headers: {
+              'access_token': asaasApiKey,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (!cancelRes.ok) {
+            const errText = await cancelRes.text();
+            console.warn(`⚠️ Asaas pending payment cancel failed: ${errText}`);
+          } else {
+            console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
+          }
         }
       } else {
-        throw stripeError;
+        // Flow for installment payments
+        if (isPaid) {
+          console.log(`[Asaas Installment Refund] NodeJS: Refunding installment ${installmentId} (linked to payment ${paymentId}) for group ${appointment.group_id}`);
+          const refundUrl = `${asaasApiUrl}/installments/${installmentId}/refund`;
+          const refundRes = await fetch(refundUrl, {
+            method: 'POST',
+            headers: {
+              'access_token': asaasApiKey,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (!refundRes.ok) {
+            const errText = await refundRes.text();
+            console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${errText}`);
+            throw new Error(`Asaas installment refund failed: ${errText}`);
+          }
+
+          console.log(`✅ Asaas installment ${installmentId} refunded successfully.`);
+        } else {
+          console.log(`[Asaas Installment Cancel] NodeJS: Cancelling pending installment ${installmentId} (linked to payment ${paymentId}) for group ${appointment.group_id}`);
+          const cancelUrl = `${asaasApiUrl}/installments/${installmentId}`;
+          const cancelRes = await fetch(cancelUrl, {
+            method: 'DELETE',
+            headers: {
+              'access_token': asaasApiKey,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (!cancelRes.ok) {
+            const errText = await cancelRes.text();
+            console.error(`❌ Asaas installment cancellation failed for installment ${installmentId}: ${errText}`);
+            throw new Error(`Asaas installment cancel failed: ${errText}`);
+          }
+
+          console.log(`✅ Asaas installment ${installmentId} cancelled successfully.`);
+        }
       }
+
+      // Direct DB update for Asaas
+      const { error: updateError } = await supabaseAdmin
+        .from('appointments')
+        .update({
+          status: 'cancelled',
+          payment_status: isPaid ? 'refunded' : 'released',
+          cancelled_reason: 'instructor_rejected',
+          provider_name: providerName,
+          updated_by: user.id,
+          updated_at: new Date().toISOString()
+        })
+        .eq('group_id', appointment.group_id);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      // Create student notification
+      if (appointment.student_id) {
+        try {
+          let comboCount = 1;
+          if (appointment.group_id) {
+            const { count } = await supabaseAdmin
+              .from('appointments')
+              .select('id', { count: 'exact', head: true })
+              .eq('group_id', appointment.group_id);
+            if (count) comboCount = count;
+          }
+
+          await NotificationService.sendBookingRejected({
+            studentId: appointment.student_id,
+            comboCount,
+            groupId: appointment.group_id || appointment.id
+          });
+        } catch (notifErr) {
+          console.error(`⚠️ Error creating notification:`, notifErr);
+        }
+      }
+
+      return res.status(200).json({ message: 'Booking rejected and Asaas payment processed successfully.' });
+
+    } catch (error: any) {
+      console.error('Payment Reject/Cancel Error:', error);
+      throw error;
     }
-
-    // 4. Update DB (Group) with Dual Writing (for other/stripe providers)
-    const { error: updateError } = await supabaseAdmin
-      .from('appointments')
-      .update({
-        status: 'cancelled',
-        payment_status: 'failed',
-        cancelled_reason: 'instructor_rejected',
-        provider_name: providerName,
-        updated_by: user.id,
-        updated_at: new Date().toISOString()
-      })
-      .eq('group_id', appointment.group_id);
-
-    if (updateError) {
-      throw updateError;
-    }
-
-    return res.status(200).json({ message: 'Booking rejected successfully' });
 
   } catch (error: any) {
     console.error('Error rejecting booking:', error);

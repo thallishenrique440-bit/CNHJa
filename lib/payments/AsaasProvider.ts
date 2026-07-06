@@ -221,7 +221,7 @@ export class AsaasProvider implements IPaymentProvider {
   /**
    * Retrieves the payment gateway's unique identifier.
    */
-  getProviderName(): 'stripe' | 'asaas' {
+  getProviderName(): 'asaas' {
     return 'asaas';
   }
 

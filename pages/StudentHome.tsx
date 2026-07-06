@@ -42,6 +42,92 @@ interface Instructor {
   instructor_categories: CategoryPrice[]; // New relation
 }
 
+/**
+ * Normalizes ALT codes by removing spaces, hyphens, and converting to uppercase.
+ * Example: "ALT-1234" -> "ALT1234", "alt1234" -> "ALT1234", "Alt-1234" -> "ALT1234"
+ */
+export function normalizeAltCode(value: string): string {
+  return value.trim().toUpperCase().replace(/[- ]/g, '');
+}
+
+/**
+ * Applies an intelligent mask to the ALT code search, formatting inputs starting with 'A'/'AL'/'ALT'
+ * automatically, forcing uppercase, inserting the hyphen, and limiting subsequent characters to digits.
+ * Supports deletion/backspace seamlessly.
+ */
+export function applyAltMask(newValue: string, previousValue: string): string {
+  if (!newValue) return '';
+
+  const upper = newValue.toUpperCase();
+
+  // Handle backspace/deletion of the hyphen or letters of ALT prefix gracefully
+  if (previousValue === 'ALT-' && upper === 'ALT') {
+    return 'ALT';
+  }
+  if (previousValue === 'ALT' && upper === 'AL') {
+    return 'AL';
+  }
+
+  const trimmed = newValue.trim();
+  const upperTrimmed = trimmed.toUpperCase();
+
+  // If the user is typing the initial prefix "a", "al", "alt"
+  if (upperTrimmed === 'A') {
+    return 'A';
+  }
+  if (upperTrimmed === 'AL') {
+    return 'AL';
+  }
+  if (upperTrimmed === 'ALT') {
+    return 'ALT-';
+  }
+
+  // If it starts with 'ALT' or some variation, it is an ALT search
+  if (upperTrimmed.startsWith('ALT')) {
+    let rest = trimmed.substring(3);
+    // Strip everything except numbers after 'ALT-'
+    rest = rest.replace(/[^0-9]/g, '');
+    return 'ALT-' + rest;
+  }
+
+  // If it's not an ALT prefix, return the original newValue
+  return newValue;
+}
+
+interface SearchIntent {
+  type: 'name' | 'alt_code';
+  query: string;
+  isAltPrefixOnly: boolean;
+}
+
+/**
+ * Interprets the search query to determine if the user is searching by name,
+ * or actively searching by an ALT code.
+ */
+export function parseSearchIntent(text: string): SearchIntent {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { type: 'name', query: '', isAltPrefixOnly: false };
+  }
+
+  const upper = trimmed.toUpperCase();
+
+  // Pattern: ALT (or ALT-) followed by at least one digit
+  const altWithDigitsRegex = /^ALT[- ]*\d+/;
+  if (altWithDigitsRegex.test(upper)) {
+    const normalized = normalizeAltCode(trimmed);
+    return { type: 'alt_code', query: normalized, isAltPrefixOnly: false };
+  }
+
+  // Pattern: typing "ALT" or "ALT-" prefix (without digits yet)
+  const altInProgressRegex = /^ALT[- ]*$/;
+  if (altInProgressRegex.test(upper)) {
+    return { type: 'name', query: trimmed.toLowerCase(), isAltPrefixOnly: true };
+  }
+
+  return { type: 'name', query: trimmed.toLowerCase(), isAltPrefixOnly: false };
+}
+
 export const StudentHome: React.FC = () => {
   const navigate = useNavigate();
   const { session } = useAuth();
@@ -226,18 +312,34 @@ export const StudentHome: React.FC = () => {
   };
 
   // --- FILTERING LOGIC ---
-  const textFilteredInstructors = instructors.filter((inst) => {
+  const textFilteredInstructors = (() => {
     const term = searchText.trim();
-    if (!term) return true;
-    
-    // Search by Public ID (EXACT MATCH required by validation rules)
-    if (term.toUpperCase().startsWith('ALT-')) {
-      return inst.public_id?.toUpperCase() === term.toUpperCase();
+    if (!term) return instructors;
+
+    const intent = parseSearchIntent(searchText);
+
+    if (intent.type === 'alt_code') {
+      return instructors.filter((inst) => {
+        if (!inst.public_id) return false;
+        const normalizedId = normalizeAltCode(inst.public_id);
+        return normalizedId.startsWith(intent.query);
+      });
     }
 
-    // Search by Name (Partial, Case-Insensitive)
-    return inst.profiles.full_name?.toLowerCase().includes(term.toLowerCase());
-  });
+    // Normal name search or ALT prefix in progress
+    const nameMatches = instructors.filter((inst) => {
+      if (!intent.query) return true;
+      return inst.profiles.full_name?.toLowerCase().includes(intent.query);
+    });
+
+    if (intent.isAltPrefixOnly) {
+      // If the user typed exactly "ALT" (or "ALT-", etc.) and there are names starting with/including "ALT" (e.g. Altair)
+      // return those matches. If there are no such names, keep the ENTIRE list visible.
+      return nameMatches.length > 0 ? nameMatches : instructors;
+    }
+
+    return nameMatches;
+  })();
 
   const cityFilteredInstructors = textFilteredInstructors.filter((inst) => {
     if (!selectedCity) return true;
@@ -322,7 +424,7 @@ export const StudentHome: React.FC = () => {
                     className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition duration-150 ease-in-out"
                     placeholder="Nome ou Código (ex: ALT-1234)"
                     value={searchText}
-                    onChange={(e) => setSearchText(e.target.value)}
+                    onChange={(e) => setSearchText(applyAltMask(e.target.value, searchText))}
                 />
             </div>
         </div>

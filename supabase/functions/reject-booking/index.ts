@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check"
+import { NotificationService } from '../_shared/NotificationService.ts'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2023-10-16',
@@ -327,14 +328,11 @@ Deno.serve(async (req) => {
           // Create notification for the student
           if (appointment.student_id) {
             try {
-              await adminClient.from('notifications').upsert({
-                user_id: appointment.student_id,
-                title: 'Aula cancelada',
-                message: 'Seu agendamento foi cancelado pelo instrutor e o valor correspondente foi reembolsado automaticamente.',
-                type: 'booking_rejected',
-                metadata: { group_id: appointment.group_id, payment_intent_id: paymentId },
-                idempotency_key: `booking_rejected:asaas:${appointment.group_id}`
-              }, { onConflict: 'idempotency_key' });
+              await NotificationService.sendBookingRejected({
+                studentId: appointment.student_id,
+                comboCount: appointmentsToReject.length || 1,
+                groupId: appointment.group_id || appointment.id
+              });
             } catch (notifErr) {
               console.error(`⚠️ Error creating notification for rejected booking:`, notifErr);
             }

@@ -1,11 +1,6 @@
-import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-02-24.acacia' as any,
-});
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -114,49 +109,12 @@ export default async function handler(req: any, res: any) {
     const providerName = PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
     const paymentProvider = PaymentProviderFactory.getProvider(providerName);
 
-    // 3. Capture Payment (via resolved provider)
+    // 3. Capture/Verify Payment (via resolved provider)
     try {
-      if (providerName === 'stripe') {
-        await (paymentProvider as any).stripe.paymentIntents.capture(paymentId, {
-          idempotencyKey: `capture_${appointment.group_id}`,
-        });
-      } else {
-        // Safe placeholder for modular integration of alternative providers
-        await paymentProvider.getPayment(paymentId);
-      }
-    } catch (stripeError: any) {
-      console.error('Payment Capture Error:', stripeError);
-
-      // Handle expired authorization
-      if (stripeError.code === 'payment_intent_unexpected_state') {
-        const pi = providerName === 'stripe'
-          ? await (paymentProvider as any).stripe.paymentIntents.retrieve(paymentId)
-          : await paymentProvider.getPayment(paymentId).then((r: any) => ({ status: r.status }));
-        
-        if (pi.status === 'canceled') {
-          // Auth expired -> Cancel appointments
-          await supabaseAdmin
-            .from('appointments')
-            .update({ 
-              status: 'cancelled', 
-              payment_status: 'failed', 
-              cancelled_reason: 'auth_expired' 
-            })
-            .eq('group_id', appointment.group_id);
-
-          return res.status(409).json({ 
-            error: 'Payment authorization expired. Booking cancelled.',
-            code: 'AUTH_EXPIRED'
-          });
-        } else if (pi.status === 'succeeded') {
-          // Already captured, proceed to update DB
-          console.log('Payment already succeeded. Proceeding to DB update.');
-        } else {
-          throw stripeError;
-        }
-      } else {
-        throw stripeError;
-      }
+      await paymentProvider.getPayment(paymentId);
+    } catch (captureError: any) {
+      console.error('Payment Verification Error:', captureError);
+      throw captureError;
     }
 
     // 4. Update DB (Group) with Dual Writing

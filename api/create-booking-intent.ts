@@ -74,7 +74,7 @@ export default async function handler(req: any, res: any) {
     // 1. Fetch instructor details (including generic provider details)
     const { data: instructor, error: instructorError } = await supabase
       .from('instructors')
-      .select('stripe_account_id, provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons')
+      .select('provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons')
       .eq('id', instructorId)
       .single();
 
@@ -141,18 +141,17 @@ providerInstance=${paymentProvider.getProviderName()}`);
     }
 
     // Validate gateway setup for selected provider
-    if (providerName === 'stripe' && !instructor?.stripe_account_id) {
-      return res.status(400).json({ error: 'Instructor not ready for Stripe payments' });
-    }
-
     if (providerName === 'asaas' && !instructor?.provider_account_id && !instructor?.provider_wallet_id) {
-      return res.status(400).json({ error: 'Instructor not ready for Asaas payments' });
+      return res.status(400).json({ 
+        error: 'Instructor not ready for Asaas payments',
+        code: 'INSTRUCTOR_ASAAS_NOT_READY'
+      });
     }
 
-    // 1.5 Fetch student profile & manage Stripe/Provider Customer ID
+    // 1.5 Fetch student profile & manage Asaas/Provider Customer ID
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('full_name, stripe_customer_id, provider_customer_id, provider_name, phone, cpf')
+      .select('full_name, provider_customer_id, provider_name, phone, cpf')
       .eq('id', secureStudentId)
       .single();
 
@@ -172,7 +171,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
     // Resolve student's customer ID for the active provider
     let customerProviderId = (profile.provider_name === providerName)
       ? profile.provider_customer_id
-      : (providerName === 'stripe' ? profile.stripe_customer_id : null);
+      : null;
 
     if (!customerProviderId) {
       try {
@@ -187,14 +186,11 @@ providerInstance=${paymentProvider.getProviderName()}`);
         customerProviderId = customerResponse.providerCustomerId;
         console.log(`[INFO] Customer created successfully on ${providerName} with ID: ${customerProviderId}`);
 
-        // Persist back to profile with Dual Writing
+        // Persist back to profile
         const updateData: any = {
           provider_customer_id: customerProviderId,
           provider_name: providerName
         };
-        if (providerName === 'stripe') {
-          updateData.stripe_customer_id = customerProviderId;
-        }
 
         const { error: updateProfileError } = await supabase
           .from('profiles')
@@ -222,9 +218,6 @@ providerInstance=${paymentProvider.getProviderName()}`);
           provider_customer_id: customerProviderId,
           provider_name: providerName
         };
-        if (providerName === 'stripe') {
-          updateData.stripe_customer_id = customerProviderId;
-        }
         await supabase
           .from('profiles')
           .update(updateData)
@@ -497,8 +490,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
         installmentCount: installmentCount, // e.g., 1 to 12
         splitRules: [
           {
-            accountId: providerName === 'stripe' ? (instructor.stripe_account_id || undefined) : undefined,
-            walletId: providerName === 'asaas' ? (instructor.provider_wallet_id || undefined) : undefined,
+            walletId: instructor.provider_wallet_id || undefined,
             fixedValue: finalPrice - applicationFeeAmount,
           }
         ],

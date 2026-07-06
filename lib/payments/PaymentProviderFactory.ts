@@ -1,5 +1,4 @@
 import { IPaymentProvider } from './IPaymentProvider.js';
-import { StripeProvider } from './StripeProvider.js';
 import { AsaasProvider } from './AsaasProvider.js';
 import { ProviderName } from './types.js';
 
@@ -14,19 +13,13 @@ export class PaymentProviderFactory {
   /**
    * Retrieves the requested payment provider instance.
    *
-   * @param providerName The identifier of the payment gateway ('stripe' or 'asaas')
+   * @param providerName The identifier of the payment gateway ('asaas')
    * @returns An implementation of the IPaymentProvider interface
    */
   static getProvider(providerName: ProviderName): IPaymentProvider {
-    switch (providerName) {
-      case 'stripe':
-        return new StripeProvider();
-      case 'asaas':
-        return new AsaasProvider();
-      default: {
-        const exhaustiveCheck: never = providerName;
-        throw new Error(`Unsupported payment provider: ${exhaustiveCheck}`);
-      }
+    if (providerName === 'asaas') {
+      return new AsaasProvider();
     }
+    throw new Error(`Unsupported payment provider: ${providerName}`);
   }
 }

@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check"
+import { NotificationService } from '../_shared/NotificationService.ts'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2023-10-16',
@@ -161,14 +162,33 @@ Deno.serve(async (req) => {
             // Notify instructor about booking request pending approval (Idempotent)
             if (instructor_id) {
               try {
-                await supabaseAdmin.from('notifications').upsert({
-                  user_id: instructor_id,
-                  title: 'Nova Solicitação de Aula (Recuperada)',
-                  message: 'Novo pagamento recebido via Asaas. Aula aguardando aprovação.',
-                  type: 'booking_request',
-                  metadata: { group_id: group_id || id, payment_intent_id },
-                  idempotency_key: `booking_request:${group_id || id}`
-                }, { onConflict: 'idempotency_key' });
+                let studentName = 'Um aluno';
+                if (student_id) {
+                  const { data: profile } = await supabaseAdmin
+                    .from('profiles')
+                    .select('full_name')
+                    .eq('id', student_id)
+                    .maybeSingle();
+                  if (profile?.full_name) {
+                    studentName = profile.full_name;
+                  }
+                }
+
+                let comboCount = 1;
+                if (group_id) {
+                  const { count } = await supabaseAdmin
+                    .from('appointments')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('group_id', group_id);
+                  if (count) comboCount = count;
+                }
+
+                await NotificationService.sendBookingRequest({
+                  instructorId: instructor_id,
+                  studentName,
+                  comboCount,
+                  groupId: group_id || id
+                });
               } catch (notifErr) {
                 console.error(`⚠️ Error sending notification to instructor:`, notifErr);
               }
@@ -198,6 +218,38 @@ Deno.serve(async (req) => {
                 .eq('id', id);
 
               if (updateAptError) throw updateAptError;
+
+              // Notify both student and instructor
+              try {
+                let comboCount = 1;
+                if (group_id) {
+                  const { count } = await supabaseAdmin
+                    .from('appointments')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('group_id', group_id);
+                  if (count) comboCount = count;
+                }
+
+                if (student_id) {
+                  await NotificationService.sendBookingExpired({
+                    userId: student_id,
+                    isInstructor: false,
+                    comboCount,
+                    groupId: group_id || id
+                  });
+                }
+                if (instructor_id) {
+                  await NotificationService.sendBookingExpired({
+                    userId: instructor_id,
+                    isInstructor: true,
+                    comboCount,
+                    groupId: group_id || id
+                  });
+                }
+              } catch (notifErr) {
+                console.error(`⚠️ Error sending expiry notifications for Asaas booking ${id}:`, notifErr);
+              }
+
               return { id, status: 'expired_success' };
             }
           }
@@ -259,6 +311,37 @@ Deno.serve(async (req) => {
         if (updateAptError) {
           console.error(`❌ Failed to update appointment ${id}:`, updateAptError)
           throw updateAptError
+        }
+
+        // Notify both student and instructor
+        try {
+          let comboCount = 1;
+          if (group_id) {
+            const { count } = await supabaseAdmin
+              .from('appointments')
+              .select('id', { count: 'exact', head: true })
+              .eq('group_id', group_id);
+            if (count) comboCount = count;
+          }
+
+          if (student_id) {
+            await NotificationService.sendBookingExpired({
+              userId: student_id,
+              isInstructor: false,
+              comboCount,
+              groupId: group_id || id
+            });
+          }
+          if (instructor_id) {
+            await NotificationService.sendBookingExpired({
+              userId: instructor_id,
+              isInstructor: true,
+              comboCount,
+              groupId: group_id || id
+            });
+          }
+        } catch (notifErr) {
+          console.error(`⚠️ Error sending expiry notifications for Stripe booking ${id}:`, notifErr);
         }
 
         // C. Update Transaction Status

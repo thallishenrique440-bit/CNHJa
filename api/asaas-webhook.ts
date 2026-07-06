@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { NotificationService } from '../lib/NotificationService';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -221,68 +222,13 @@ export default async function handler(req: Request, res: Response) {
               throw logError;
             }
 
-            const title = '🎉 Você recebeu uma caixinha!';
-            const message = `Seu aluno enviou uma caixinha de ${amountFormatted}. O valor já está disponível no seu histórico financeiro.`;
-
-            // 2. Insert In-App Notification
-            const { error: notifError } = await supabaseAdmin
-              .from('notifications')
-              .insert({
-                user_id: instructorId,
-                title,
-                message,
-                type: 'tip',
-                metadata: { 
-                  appointment_id: appointmentId, 
-                  transaction_id: transactionId,
-                  status: 'completed'
-                },
-                idempotency_key: `tip_notification:${transactionId}`
-              });
-
-            if (notifError) {
-              if (notifError.code === '23505') {
-                console.log(`ℹ️ [ASAAS WEBHOOK] Notificação de caixinha já existente na tabela de notificações para ${transactionId}.`);
-              } else {
-                throw notifError;
-              }
-            } else {
-              console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha salva para o instrutor ${instructorId}`);
-            }
-
-            // 3. Dispatch Push Notification via send-push-notification Edge Function
-            const edgeFunctionUrl = `${process.env.SUPABASE_URL}/functions/v1/send-push-notification`;
-            console.log(`[ASAAS WEBHOOK] Chamando Edge Function para envio de Push: ${edgeFunctionUrl}`);
-            
-            const response = await fetch(edgeFunctionUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-              },
-              body: JSON.stringify({
-                table: 'notifications',
-                type: 'INSERT',
-                record: {
-                  user_id: instructorId,
-                  title,
-                  message,
-                  type: 'tip',
-                  metadata: {
-                    appointment_id: appointmentId,
-                    transaction_id: transactionId,
-                    status: 'completed'
-                  }
-                }
-              })
+            // 2. Insert In-App Notification and auto-trigger Push via NotificationService
+            await NotificationService.sendTip({
+              instructorId,
+              amountFormatted,
+              appointmentId
             });
-
-            if (!response.ok) {
-              const errBody = await response.text();
-              console.error(`❌ [ASAAS WEBHOOK] Falha ao chamar Edge Function de push:`, response.status, errBody);
-            } else {
-              console.log(`✅ [ASAAS WEBHOOK] Edge Function de push concluída com sucesso!`);
-            }
+            console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha processada via NotificationService para o instrutor ${instructorId}`);
 
           } catch (notifErr) {
             console.error(`⚠️ [ASAAS WEBHOOK] Error processing tip notification & push:`, notifErr);
@@ -435,14 +381,28 @@ export default async function handler(req: Request, res: Response) {
         const instructorId = firstApt.instructor_id;
         if (instructorId) {
           try {
-            await supabaseAdmin.from('notifications').upsert({
-              user_id: instructorId,
-              title: 'Nova Solicitação de Aula',
-              message: 'Novo pagamento recebido. Aula aguardando aprovação.',
-              type: 'booking_request',
-              metadata: { group_id: groupId, payment_intent_id: currentPaymentId },
-              idempotency_key: `booking_request:${groupId}`
-            }, { onConflict: 'idempotency_key' });
+            // Find student name
+            let studentName = 'Um aluno';
+            if (firstApt.student_id) {
+              const { data: profile } = await supabaseAdmin
+                .from('profiles')
+                .select('full_name')
+                .eq('id', firstApt.student_id)
+                .maybeSingle();
+              if (profile?.full_name) {
+                studentName = profile.full_name;
+              }
+            }
+
+            // Find combo count
+            let comboCount = updatedApts ? updatedApts.length : 1;
+
+            await NotificationService.sendBookingRequest({
+              instructorId,
+              studentName,
+              comboCount,
+              groupId: groupId || firstApt.id
+            });
           } catch (notifErr) {
             console.error(`⚠️ [ASAAS WEBHOOK] Error sending notification:`, notifErr);
           }

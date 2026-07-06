@@ -25,7 +25,7 @@ export type LessonDisplayStatus =
   | 'expired'           // Expirada (não confirmada a tempo)
   | 'blocked'           // Bloqueada pelo instrutor
   | 'reserved'          // Reservada (pagamento em curso)
-  | 'awaiting_payment'  // Aguardando confirmação de pagamento (Stripe)
+  | 'awaiting_payment'  // Aguardando confirmação de pagamento (Asaas)
   | 'no_show'           // Aluno não compareceu
   | 'free'              // Livre (apenas instrutor)
   | 'lunch'             // Almoço (apenas instrutor)

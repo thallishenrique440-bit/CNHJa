@@ -9,7 +9,7 @@ interface AuthContextType {
   loading: boolean;
   userRole: 'student' | 'instructor' | null;
   isProfileComplete: boolean | null;
-  isStripeConnected: boolean;
+  isAsaasReady: boolean;
   isPaymentSetupComplete: boolean;
   serverTimeOffset: number;
   signOut: () => Promise<void>;
@@ -32,7 +32,7 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   userRole: null,
   isProfileComplete: null,
-  isStripeConnected: true, // Default to true so it doesn't block notifications for students
+  isAsaasReady: true, // Default to true so it doesn't block notifications for students
   isPaymentSetupComplete: true,
   serverTimeOffset: 0,
   signOut: async () => {},
@@ -46,7 +46,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userRole, setUserRole] = useState<'student' | 'instructor' | null>(null);
   const [isProfileComplete, setIsProfileComplete] = useState<boolean | null>(null);
   const [isPaymentSetupComplete, setIsPaymentSetupComplete] = useState(true);
-  const isStripeConnected = isPaymentSetupComplete;
+  const isAsaasReady = isPaymentSetupComplete;
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
   const loadingFinalized = useRef(false);
   const lastFetchId = useRef(0);
@@ -210,7 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const instructorResponse = await withTimeout<any>(
             supabase
               .from('instructors')
-              .select('payouts_enabled, stripe_onboarding_completed, provider_name, provider_onboarding_completed, provider_status')
+              .select('payouts_enabled, provider_name, provider_onboarding_completed, provider_status')
               .eq('id', userId)
               .single() as any,
             4000
@@ -221,19 +221,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const { data: instructorData, error: instError } = instructorResponse;
           
           if (!instError && instructorData) {
-            const providerName = instructorData.provider_name || 'stripe';
-            if (providerName === 'asaas') {
-              const statusUpper = (instructorData.provider_status || '').toUpperCase();
-              const isApproved = instructorData.provider_onboarding_completed === true || 
-                statusUpper === 'APPROVED' || 
-                statusUpper === 'ACTIVE' ||
-                statusUpper === 'APROVADO' ||
-                statusUpper === 'ATIVO';
-              setIsPaymentSetupComplete(isApproved);
-            } else {
-              // Legacy Stripe behavior
-              setIsPaymentSetupComplete(instructorData.payouts_enabled === true);
-            }
+            const statusUpper = (instructorData.provider_status || '').toUpperCase();
+            const isApproved = instructorData.provider_onboarding_completed === true || 
+              statusUpper === 'APPROVED' || 
+              statusUpper === 'ACTIVE' ||
+              statusUpper === 'APROVADO' ||
+              statusUpper === 'ATIVO';
+            setIsPaymentSetupComplete(isApproved);
           } else {
             setIsPaymentSetupComplete(false);
           }
@@ -394,7 +388,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, isStripeConnected, isPaymentSetupComplete, serverTimeOffset, signOut, refreshProfile, syncPushToken }}>
+    <AuthContext.Provider value={{ session, loading, userRole, isProfileComplete, isAsaasReady, isPaymentSetupComplete, serverTimeOffset, signOut, refreshProfile, syncPushToken }}>
       {children}
     </AuthContext.Provider>
   );

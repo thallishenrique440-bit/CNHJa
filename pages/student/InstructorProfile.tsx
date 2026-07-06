@@ -11,6 +11,7 @@ import { getGoogleMapsUrl } from '../../src/utils/maps';
 import { AGENDA_SLOTS } from '../../lib/slots';
 import { getLowestActiveCategoryPrice } from '../../lib/instructorPricing';
 import { calculateInstructorRating } from '../../lib/instructorRating';
+import { PAYMENT_ERRORS } from '../../src/constants/paymentErrors';
 
 // Define Interface for the State matches DB structure
 interface DiscountRule {
@@ -128,6 +129,7 @@ export const StudentInstructorProfile: React.FC = () => {
   // Payment Error State
   const [isPaymentErrorOpen, setIsPaymentErrorOpen] = useState(false);
   const [paymentErrorMessage, setPaymentErrorMessage] = useState('');
+  const [paymentErrorCode, setPaymentErrorCode] = useState('');
   
   // Too Close Error State
   const [isTooCloseModalOpen, setIsTooCloseModalOpen] = useState(false);
@@ -1043,6 +1045,7 @@ export const StudentInstructorProfile: React.FC = () => {
   const executeActualBooking = async (method: 'PIX' | 'CREDIT_CARD', installments: number) => {
     setIsProcessingPayment(true);
     setIsPaymentMethodModalOpen(false);
+    setPaymentErrorCode('');
 
     try {
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -1113,6 +1116,13 @@ export const StudentInstructorProfile: React.FC = () => {
         if (data.errorCode === 'TOO_CLOSE') {
           setIsTooCloseModalOpen(true);
           setIsProcessingPayment(false);
+          return;
+        }
+        if (data.code === 'INSTRUCTOR_ASAAS_NOT_READY') {
+          setPaymentErrorCode('INSTRUCTOR_ASAAS_NOT_READY');
+          setPaymentErrorMessage(data.error || 'Instructor not ready for Asaas payments');
+          setIsProcessingPayment(false);
+          setIsPaymentErrorOpen(true);
           return;
         }
         throw new Error(data.error || 'Falha ao criar reserva');
@@ -1907,7 +1917,7 @@ export const StudentInstructorProfile: React.FC = () => {
       <Modal
         isOpen={isPaymentErrorOpen}
         onClose={() => setIsPaymentErrorOpen(false)}
-        title="Não foi possível agendar"
+        title={paymentErrorCode === 'INSTRUCTOR_ASAAS_NOT_READY' ? PAYMENT_ERRORS.INSTRUCTOR_ASAAS_NOT_READY.title : "Não foi possível agendar"}
         footer={
            <div className="space-y-3 w-full">
               <Button fullWidth onClick={handleRetryPayment}>
@@ -1917,11 +1927,19 @@ export const StudentInstructorProfile: React.FC = () => {
         }
       >
         <div className="text-center">
-            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">
-              🚫
-            </div>
-            <p className="text-sm text-gray-500 mb-2 leading-relaxed">
-              {paymentErrorMessage}
+            {paymentErrorCode === 'INSTRUCTOR_ASAAS_NOT_READY' ? (
+              <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                ⏳
+              </div>
+            ) : (
+              <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                🚫
+              </div>
+            )}
+            <p className="text-sm text-gray-600 mb-2 leading-relaxed">
+              {paymentErrorCode === 'INSTRUCTOR_ASAAS_NOT_READY' 
+                ? PAYMENT_ERRORS.INSTRUCTOR_ASAAS_NOT_READY.message
+                : paymentErrorMessage}
             </p>
         </div>
       </Modal>

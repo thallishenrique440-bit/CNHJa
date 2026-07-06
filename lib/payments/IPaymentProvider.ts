@@ -14,13 +14,13 @@ import {
 
 /**
  * IPaymentProvider definitions for CNHJÁ Payment Layer abstraction.
- * Every integrated gateway (Stripe, Asaas, etc.) must implement this interface.
+ * Every integrated gateway (such as Asaas) must implement this interface.
  */
 export interface IPaymentProvider {
   /**
    * Retrieves the payment gateway's unique identifier.
    */
-  getProviderName(): 'stripe' | 'asaas';
+  getProviderName(): 'asaas';
 
   /**
    * Creates a customer profile on the provider gateway.

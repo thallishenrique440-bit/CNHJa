@@ -12,14 +12,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Middleware for parsing JSON (except for webhooks that need raw body)
-  app.use((req, res, next) => {
-    if (req.path.startsWith('/api/stripe-webhook')) {
-      next();
-    } else {
-      express.json()(req, res, next);
-    }
-  });
+  // Middleware for parsing JSON
+  app.use(express.json());
 
   // API Routes
   app.post('/api/:handler', async (req, res) => {

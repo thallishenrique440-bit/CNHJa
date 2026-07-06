@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check"
+import { NotificationService } from '../_shared/NotificationService.ts'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2023-10-16',
@@ -106,14 +107,35 @@ Deno.serve(async (req) => {
             // Notify Instructor instead of Student (Idempotent)
             const instructor_id = firstApt.instructor_id;
             if (instructor_id) {
-                await supabaseAdmin.from("notifications").upsert({
-                    user_id: instructor_id,
-                    title: "Nova Solicitação de Aula (Sincronizada)",
-                    message: "Novo pagamento recebido. Aula aguardando aprovação.",
-                    type: "booking_request",
-                    metadata: { group_id: groupId, payment_intent_id },
-                    idempotency_key: `booking_request:${groupId}`
-                }, { onConflict: 'idempotency_key' });
+                try {
+                    let studentName = 'Um aluno';
+                    if (firstApt.student_id) {
+                        const { data: profile } = await supabaseAdmin
+                            .from('profiles')
+                            .select('full_name')
+                            .eq('id', firstApt.student_id)
+                            .maybeSingle();
+                        if (profile?.full_name) {
+                            studentName = profile.full_name;
+                        }
+                    }
+
+                    let comboCount = 1;
+                    const { count } = await supabaseAdmin
+                        .from('appointments')
+                        .select('id', { count: 'exact', head: true })
+                        .eq('group_id', groupId);
+                    if (count) comboCount = count;
+
+                    await NotificationService.sendBookingRequest({
+                        instructorId: instructor_id,
+                        studentName,
+                        comboCount,
+                        groupId
+                    });
+                } catch (notifErr) {
+                    console.error('⚠️ [Sync job] Error notifying instructor:', notifErr);
+                }
             }
           } else {
             console.log(`ℹ️ Group ${groupId}: Asaas status is ${asaasStatus}. Not paid yet.`);
@@ -133,15 +155,38 @@ Deno.serve(async (req) => {
                 action = 'repaired_authorized';
 
                 // Notify Instructor (Idempotent)
-                if (pi.metadata.instructor_id) {
-                    await supabaseAdmin.from("notifications").upsert({
-                        user_id: pi.metadata.instructor_id,
-                        title: "Nova Solicitação de Aula (Sincronizada)",
-                        message: "Uma solicitação pendente foi sincronizada. Aceite em até 20 minutos.",
-                        type: "booking_request",
-                        metadata: { group_id: groupId },
-                        idempotency_key: `booking_request:${groupId}`
-                    }, { onConflict: 'idempotency_key' });
+                const instId = pi.metadata.instructor_id || firstApt.instructor_id;
+                if (instId) {
+                    try {
+                        let studentName = 'Um aluno';
+                        const studId = pi.metadata.student_id || firstApt.student_id;
+                        if (studId) {
+                            const { data: profile } = await supabaseAdmin
+                                .from('profiles')
+                                .select('full_name')
+                                .eq('id', studId)
+                                .maybeSingle();
+                            if (profile?.full_name) {
+                                studentName = profile.full_name;
+                            }
+                        }
+
+                        let comboCount = 1;
+                        const { count } = await supabaseAdmin
+                            .from('appointments')
+                            .select('id', { count: 'exact', head: true })
+                            .eq('group_id', groupId);
+                        if (count) comboCount = count;
+
+                        await NotificationService.sendBookingRequest({
+                            instructorId: instId,
+                            studentName,
+                            comboCount,
+                            groupId
+                        });
+                    } catch (notifErr) {
+                        console.error('⚠️ [Sync job] Error notifying instructor (Stripe):', notifErr);
+                    }
                 }
 
             } else if (pi.status === 'succeeded') {
@@ -153,15 +198,24 @@ Deno.serve(async (req) => {
                 action = 'repaired_succeeded';
 
                 // Notify Student (Idempotent)
-                if (pi.metadata.student_id) {
-                    await supabaseAdmin.from("notifications").upsert({
-                        user_id: pi.metadata.student_id,
-                        title: "Aula Confirmada! (Sincronizada)",
-                        message: "Seu pagamento foi confirmado e sua aula está agendada.",
-                        type: "booking_accepted",
-                        metadata: { group_id: groupId, payment_intent_id: pi.id },
-                        idempotency_key: `booking_accepted:${groupId}`
-                    }, { onConflict: 'idempotency_key' });
+                const studId = pi.metadata.student_id || firstApt.student_id;
+                if (studId) {
+                    try {
+                        let comboCount = 1;
+                        const { count } = await supabaseAdmin
+                            .from('appointments')
+                            .select('id', { count: 'exact', head: true })
+                            .eq('group_id', groupId);
+                        if (count) comboCount = count;
+
+                        await NotificationService.sendBookingAccepted({
+                            studentId: studId,
+                            comboCount,
+                            groupId
+                        });
+                    } catch (notifErr) {
+                        console.error('⚠️ [Sync job] Error notifying student:', notifErr);
+                    }
                 }
             } else if (pi.status === 'canceled') {
                 console.log(`🚫 Repairing Group ${groupId}: Stripe is canceled.`)
@@ -174,24 +228,33 @@ Deno.serve(async (req) => {
                 action = 'repaired_canceled';
 
                 // Notify Student (Idempotent)
-                if (pi.metadata.student_id) {
-                    const type = reason === 'instructor_rejected' ? 'booking_rejected' : 'booking_cancelled';
-                    let title = 'Pagamento Cancelado (Sincronizado)';
-                    let message = 'Sua tentativa de pagamento foi cancelada e os horários foram liberados.';
-                    
-                    if (reason === 'instructor_rejected') {
-                        title = 'Aula Recusada (Sincronizada)';
-                        message = 'O instrutor não pôde aceitar sua solicitação. O valor reservado no seu cartão foi liberado.';
-                    }
+                const studId = pi.metadata.student_id || firstApt.student_id;
+                if (studId) {
+                    try {
+                        let comboCount = 1;
+                        const { count } = await supabaseAdmin
+                            .from('appointments')
+                            .select('id', { count: 'exact', head: true })
+                            .eq('group_id', groupId);
+                        if (count) comboCount = count;
 
-                    await supabaseAdmin.from("notifications").upsert({
-                        user_id: pi.metadata.student_id,
-                        title,
-                        message,
-                        type,
-                        metadata: { group_id: groupId, payment_intent_id: pi.id, reason },
-                        idempotency_key: `${type}:${groupId}`
-                    }, { onConflict: 'idempotency_key' });
+                        if (reason === 'instructor_rejected') {
+                            await NotificationService.sendBookingRejected({
+                                studentId: studId,
+                                comboCount,
+                                groupId
+                            });
+                        } else {
+                            await NotificationService.sendBookingCancelled({
+                                userId: studId,
+                                isInstructor: false,
+                                comboCount,
+                                groupId
+                            });
+                        }
+                    } catch (notifErr) {
+                        console.error('⚠️ [Sync job] Error notifying student on cancellation:', notifErr);
+                    }
                 }
             } else {
                 return { groupId, status: 'skipped', stripe_status: pi.status };
