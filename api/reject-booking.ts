@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
-import { NotificationService } from '../lib/NotificationService';
+import { NotificationService } from '../lib/NotificationService.js';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { NotificationService } from '../lib/NotificationService';
+import { NotificationService } from '../lib/NotificationService.js';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
