@@ -34,6 +34,21 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
+let isConfigured = false;
+async function ensureConfig() {
+  if (isConfigured) return;
+  try {
+    const edgeUrl = `${supabaseUrl}/functions/v1`;
+    await supabaseAdmin.from('notification_config').upsert([
+      { key: 'edge_function_url', value: edgeUrl },
+      { key: 'service_role_key', value: supabaseServiceKey }
+    ]);
+    isConfigured = true;
+  } catch (err) {
+    console.error('[NotificationService] Failed to auto-configure notification_config:', err);
+  }
+}
+
 export class NotificationService {
   /**
    * Universal method to create a notification. Calls the PostgreSQL RPC function
@@ -50,6 +65,7 @@ export class NotificationService {
     groupId?: string | null;
     appointmentId?: string | null;
   }) {
+    await ensureConfig();
     const { data, error } = await supabaseAdmin.rpc('create_unified_notification', {
       p_user_id: params.userId,
       p_title: params.title,
