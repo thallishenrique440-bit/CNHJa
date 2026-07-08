@@ -22,29 +22,51 @@ DECLARE
   v_edge_function_url TEXT;
   v_service_role_key TEXT;
   v_payload JSONB;
+  v_url_found BOOLEAN;
+  v_key_found BOOLEAN;
+  v_state TEXT;
+  v_msg TEXT;
+  v_context TEXT;
 BEGIN
+  -- CHECKPOINT 1: Entry log with notification ID
+  RAISE WARNING '[DEBUG-FORENSE] 1. START - Notification ID: %', NEW.id;
+
   -- Retrieve configurations from the secure notification_config table
   SELECT value INTO v_edge_function_url FROM public.notification_config WHERE key = 'edge_function_url';
+  v_url_found := FOUND;
+
   SELECT value INTO v_service_role_key FROM public.notification_config WHERE key = 'service_role_key';
+  v_key_found := FOUND;
+
+  -- CHECKPOINT 2: Found indicators for both keys
+  RAISE WARNING '[DEBUG-FORENSE] 2. CONFIG READ - URL encontrada = %, KEY encontrada = %', v_url_found, v_key_found;
 
   -- O armazenamento da notificacao possui prioridade sobre o envio do Push.
   -- O Push eh apenas um mecanismo de entrega secundario e assincrono.
   -- A notificacao persistida eh a fonte oficial da verdade, portanto, falhas ou ausencias
   -- de configuracao de rede/Push jamais devem abortar ou impedir o INSERT/transacao principal.
   IF v_edge_function_url IS NULL OR v_edge_function_url = '' THEN
+    RAISE WARNING '[DEBUG-FORENSE] RETURN devido a edge_function_url NULL ou vazia';
     RAISE WARNING 'Configuracao obrigatoria ausente na tabela public.notification_config: edge_function_url. Envio de push ignorado.';
     RETURN NEW;
   END IF;
 
   IF v_service_role_key IS NULL OR v_service_role_key = '' THEN
+    RAISE WARNING '[DEBUG-FORENSE] RETURN devido a service_role_key NULL ou vazia';
     RAISE WARNING 'Configuracao obrigatoria ausente na tabela public.notification_config: service_role_key. Envio de push ignorado.';
     RETURN NEW;
   END IF;
+
+  -- CHECKPOINT 3: Validation successfully passed
+  RAISE WARNING '[DEBUG-FORENSE] 3. VALIDATION PASSED';
 
   -- Construct the payload containing just the notification_id
   v_payload := jsonb_build_object(
     'notification_id', NEW.id
   );
+
+  -- CHECKPOINT 4: Logging immediately before dispatching the request
+  RAISE WARNING '[DEBUG-FORENSE] 4. INVOKING net.http_post()';
 
   -- Network/dispatch block using pg_net
   BEGIN
@@ -56,11 +78,26 @@ BEGIN
       ),
       body := v_payload
     );
+
+    -- CHECKPOINT 5: Logged immediately after pg_net returns
+    RAISE WARNING '[DEBUG-FORENSE] 5. net.http_post() RETURNED WITHOUT EXCEPTION';
+
   EXCEPTION
     WHEN OTHERS THEN
+      -- Capture absolute diagnostics details
+      GET STACKED DIAGNOSTICS 
+        v_state = RETURNED_SQLSTATE,
+        v_msg = MESSAGE_TEXT,
+        v_context = PG_EXCEPTION_CONTEXT;
+
+      RAISE WARNING '[DEBUG-FORENSE] EXCEPTION DETECTED: SQLSTATE = %, SQLERRM = %, CONTEXT = %', v_state, v_msg, v_context;
+
       -- Log other errors (like transient network failures) but do not fail the transaction
       RAISE WARNING 'Falha ao despachar notificacao via pg_net: %', SQLERRM;
   END;
+
+  -- End checkpoint
+  RAISE WARNING '[DEBUG-FORENSE] notify_new_notification() END';
 
   RETURN NEW;
 END;
