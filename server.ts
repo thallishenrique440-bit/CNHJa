@@ -4,6 +4,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { startShadowWorker } from './lib/ShadowWorker.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,6 +57,11 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Start Shadow Worker (Bootstrap) side-by-side with the web server
+    startShadowWorker().catch((err) => {
+      console.error('[Server] Failed to launch Shadow Worker:', err);
+    });
   });
 }
 

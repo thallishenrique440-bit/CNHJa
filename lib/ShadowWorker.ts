@@ -1,0 +1,349 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import crypto from 'crypto';
+
+// Define the supported execution modes for the worker
+export type WorkerMode = 'disabled' | 'shadow' | 'active';
+
+// Define the structured worker log events
+export type LogEvent =
+  | 'WORKER_STARTED'
+  | 'DATABASE_CONNECTED'
+  | 'DATABASE_CONNECTION_FAILED'
+  | 'POLLING_STARTED'
+  | 'QUEUE_METRICS'
+  | 'JOBS_FOUND'
+  | 'NO_JOBS_FOUND'
+  | 'WORKER_SUSPENDED'
+  | 'WORKER_STOPPING'
+  | 'WORKER_STOPPED'
+  | 'POLLING_OVERLAP_PREVENTED'
+  | 'POLLING_FAILED'
+  | 'POLLING_ERROR'
+  | 'CLAIM_STARTED'
+  | 'CLAIM_FINISHED'
+  | 'CLAIMED_JOB'
+  | 'CLAIMED_COUNT'
+  | 'NO_PENDING_JOBS'
+  | 'CLAIM_FAILED'
+  | 'PROCESSING_STARTED'
+  | 'PROCESSING_FINISHED'
+  | 'BATCH_PROCESSING_FINISHED'
+  | 'JOB_PROCESSING_ERROR';
+
+// Define all known domain states of a notification job
+export enum JobStatus {
+  Pending = 'pending',
+  Processing = 'processing',
+  Retry = 'retry',
+  Failed = 'failed',
+  Dead = 'dead',
+  Sent = 'sent',
+  Cancelled = 'cancelled',
+  Expired = 'expired'
+}
+
+// Generate a immutable unique instance ID upon startup
+const workerInstanceId = `worker-${crypto.randomBytes(3).toString('hex')}`;
+
+let isRunning = false;
+let isCycleRunning = false;
+let pollTimeout: NodeJS.Timeout | null = null;
+let supabaseAdmin: SupabaseClient | null = null;
+let areListenersRegistered = false;
+let cycleIdCounter = 0;
+
+/**
+ * Standardized, structured logger for the Shadow Worker.
+ * Formats timestamps, instance IDs, cycle IDs, and payloads consistently.
+ */
+function logWorker(event: LogEvent, cycleId?: number, payload?: Record<string, unknown>) {
+  const timestamp = new Date().toISOString();
+  const logObj = {
+    timestamp,
+    workerInstanceId,
+    cycleId: cycleId || undefined,
+    event,
+    payload
+  };
+  console.log(`[ShadowWorker] ${JSON.stringify(logObj)}`);
+}
+
+/**
+ * Starts the read-only Shadow Worker for validating queue infrastructure and observability.
+ */
+export async function startShadowWorker() {
+  // Configured mode checking: 'disabled' | 'shadow' | 'active'
+  const rawMode = process.env.WORKER_MODE || (process.env.ENABLE_SHADOW_WORKER === 'true' ? 'shadow' : 'disabled');
+  const workerMode = rawMode.toLowerCase() as WorkerMode;
+
+  if (workerMode === 'disabled') {
+    logWorker('WORKER_SUSPENDED', undefined, { reason: 'WORKER_MODE is disabled' });
+    return;
+  }
+
+  logWorker('WORKER_STARTED', undefined, { mode: workerMode });
+
+  // Strictly enforce environment configuration with NO hardcoded fallback URLs
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    logWorker('DATABASE_CONNECTION_FAILED', undefined, {
+      error: 'Missing required database configuration. Both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be supplied.'
+    });
+    logWorker('WORKER_SUSPENDED', undefined, { reason: 'MISSING_ENV_CREDENTIALS' });
+    return;
+  }
+
+  // Initialize typed Supabase Client
+  try {
+    supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
+    });
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logWorker('DATABASE_CONNECTION_FAILED', undefined, { error: errMsg });
+    logWorker('WORKER_SUSPENDED', undefined, { reason: 'CLIENT_INITIALIZATION_ERROR' });
+    return;
+  }
+
+  // Verify database connection & permissions prior to polling
+  try {
+    const { error } = await supabaseAdmin
+      .from('notification_jobs')
+      .select('notification_id')
+      .limit(1);
+
+    if (error) {
+      logWorker('DATABASE_CONNECTION_FAILED', undefined, { error: error.message });
+      logWorker('WORKER_SUSPENDED', undefined, { reason: 'PING_QUERY_FAILED' });
+      return;
+    }
+
+    // Extract host securely without exposing full URL credentials or path variables
+    let hostname = 'unknown';
+    try {
+      hostname = new URL(supabaseUrl).hostname;
+    } catch {
+      hostname = 'invalid-url';
+    }
+
+    logWorker('DATABASE_CONNECTED', undefined, { host: hostname });
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logWorker('DATABASE_CONNECTION_FAILED', undefined, { error: errMsg });
+    logWorker('WORKER_SUSPENDED', undefined, { reason: 'PING_QUERY_CRASHED' });
+    return;
+  }
+
+  isRunning = true;
+
+  const pollIntervalMs = Number(process.env.SHADOW_WORKER_POLL_INTERVAL_MS) || 5000;
+  const batchSize = Number(process.env.SHADOW_WORKER_BATCH_SIZE) || 10;
+
+  /**
+   * Main read-only cycle. Consolidates queue metrics and fetches pending jobs.
+   */
+  async function pollCycle() {
+    if (!isRunning) return;
+
+    // Defend against concurrent cycle execution overlaps
+    if (isCycleRunning) {
+      logWorker('POLLING_OVERLAP_PREVENTED', undefined, { info: 'Prior polling cycle is still in progress.' });
+      if (isRunning) {
+        pollTimeout = setTimeout(pollCycle, pollIntervalMs);
+      }
+      return;
+    }
+
+    isCycleRunning = true;
+    cycleIdCounter += 1;
+    const currentCycleId = cycleIdCounter;
+
+    logWorker('POLLING_STARTED', currentCycleId, { pollIntervalMs, batchSize });
+
+    try {
+      if (!supabaseAdmin) throw new Error('Supabase client has been de-allocated.');
+
+      // 1. Gather Queue Metrics (Purely Observational, No Mutating Transactions)
+      // Note: Group-by/aggregated counts are not natively supported by Supabase JS client/PostgREST
+      // without adding a Postgres view or custom RPC function. To keep the database strictly intact,
+      // we query counts in parallel efficiently via Promise.all.
+      const statuses = Object.values(JobStatus);
+      const metricsPromises = statuses.map(async (status) => {
+        const { count, error } = await supabaseAdmin!
+          .from('notification_jobs')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', status);
+
+        return { status, count: error ? null : (count || 0) };
+      });
+
+      const metricsResults = await Promise.all(metricsPromises);
+      const metricsMap: Record<string, unknown> = {};
+      for (const res of metricsResults) {
+        metricsMap[res.status] = res.count;
+      }
+
+      logWorker('QUEUE_METRICS', currentCycleId, metricsMap);
+
+      if (workerMode === 'active') {
+        logWorker('CLAIM_STARTED', currentCycleId, { batchSize });
+
+        const startTime = Date.now();
+        const { data, error } = await supabaseAdmin.rpc('claim_notification_jobs', {
+          p_worker_id: workerInstanceId,
+          p_batch_size: batchSize
+        });
+        const durationMs = Date.now() - startTime;
+
+        if (error) {
+          logWorker('CLAIM_FAILED', currentCycleId, { error: error.message });
+        } else if (data && data.length > 0) {
+          const claimedJobs = data as Array<{
+            notification_id: string;
+            status: string;
+            priority: number;
+            created_at: string;
+          }>;
+
+          for (const job of claimedJobs) {
+            logWorker('CLAIMED_JOB', currentCycleId, {
+              notification_id: job.notification_id,
+              status: job.status,
+              priority: job.priority,
+              created_at: job.created_at
+            });
+          }
+
+          logWorker('CLAIMED_COUNT', currentCycleId, { count: claimedJobs.length });
+          logWorker('CLAIM_FINISHED', currentCycleId, { 
+            count: claimedJobs.length,
+            jobsClaimed: claimedJobs.length,
+            durationMs 
+          });
+
+          // Controlled Processing Pipeline (Microfase 1.3.3)
+          const batchStartTime = Date.now();
+          let processedJobs = 0;
+
+          for (const job of claimedJobs) {
+            const jobStartTime = Date.now();
+            try {
+              logWorker('PROCESSING_STARTED', currentCycleId, {
+                notification_id: job.notification_id,
+                priority: job.priority
+              });
+
+              // Simulated processing actions (Purely observational, no DB updates, no external calls)
+              const processingDurationMs = Date.now() - jobStartTime;
+
+              logWorker('PROCESSING_FINISHED', currentCycleId, {
+                notification_id: job.notification_id,
+                processingDurationMs
+              });
+
+              processedJobs++;
+            } catch (jobErr: unknown) {
+              const errMsg = jobErr instanceof Error ? jobErr.message : String(jobErr);
+              logWorker('JOB_PROCESSING_ERROR', currentCycleId, {
+                notification_id: job.notification_id,
+                error: errMsg
+              });
+            }
+          }
+
+          const batchProcessingDurationMs = Date.now() - batchStartTime;
+          logWorker('BATCH_PROCESSING_FINISHED', currentCycleId, {
+            processedJobs,
+            batchProcessingDurationMs
+          });
+        } else {
+          logWorker('NO_PENDING_JOBS', currentCycleId);
+          logWorker('CLAIM_FINISHED', currentCycleId, { 
+            count: 0,
+            jobsClaimed: 0,
+            durationMs 
+          });
+        }
+      } else {
+        // 2. Fetch Pending Jobs (Strictly Read-Only, No locks, No updates)
+        const { data, error } = await supabaseAdmin
+          .from('notification_jobs')
+          .select('notification_id, status, priority, created_at')
+          .eq('status', JobStatus.Pending)
+          .order('priority', { ascending: false })
+          .order('created_at', { ascending: true })
+          .limit(batchSize);
+
+        if (error) {
+          logWorker('POLLING_FAILED', currentCycleId, { error: error.message });
+        } else if (data && data.length > 0) {
+          // Map data to preserve strict typed format of record entries
+          const mappedJobs = data.map((job) => ({
+            notification_id: String(job.notification_id),
+            status: String(job.status),
+            priority: Number(job.priority),
+            created_at: String(job.created_at)
+          }));
+
+          logWorker('JOBS_FOUND', currentCycleId, {
+            count: mappedJobs.length,
+            jobs: mappedJobs
+          });
+        } else {
+          logWorker('NO_JOBS_FOUND', currentCycleId);
+        }
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logWorker('POLLING_ERROR', currentCycleId, { error: errMsg });
+    } finally {
+      isCycleRunning = false;
+    }
+
+    // Schedule next polling interval
+    if (isRunning) {
+      pollTimeout = setTimeout(pollCycle, pollIntervalMs);
+    }
+  }
+
+  // Kick off the loop
+  pollCycle();
+
+  // Handle OS process termination gracefully
+  const gracefulShutdown = () => {
+    if (!isRunning) return;
+
+    logWorker('WORKER_STOPPING', undefined, { reason: 'SIGINT_OR_SIGTERM_RECEIVED' });
+    isRunning = false;
+
+    if (pollTimeout) {
+      clearTimeout(pollTimeout);
+      pollTimeout = null;
+    }
+
+    logWorker('WORKER_STOPPED');
+  };
+
+  // Register listeners exactly once to prevent any leaks
+  if (!areListenersRegistered) {
+    process.once('SIGINT', gracefulShutdown);
+    process.once('SIGTERM', gracefulShutdown);
+    areListenersRegistered = true;
+  }
+}
+
+// Support executing directly as a standalone process (e.g., via tsx)
+const isMain = process.argv[1] && (
+  process.argv[1].endsWith('ShadowWorker.ts') ||
+  process.argv[1].endsWith('ShadowWorker.js')
+);
+if (isMain) {
+  startShadowWorker().catch((err) => {
+    console.error('[ShadowWorker] Critical Bootstrap Error:', err);
+  });
+}

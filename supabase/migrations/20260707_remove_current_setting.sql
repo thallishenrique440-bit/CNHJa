@@ -27,6 +27,7 @@ DECLARE
   v_state TEXT;
   v_msg TEXT;
   v_context TEXT;
+  v_request_id BIGINT;
 BEGIN
   -- CHECKPOINT 1: Entry log with notification ID
   RAISE WARNING '[DEBUG-FORENSE] 1. START - Notification ID: %', NEW.id;
@@ -70,7 +71,7 @@ BEGIN
 
   -- Network/dispatch block using pg_net
   BEGIN
-    PERFORM net.http_post(
+    v_request_id := net.http_post(
       url := rtrim(v_edge_function_url, '/') || '/send-push-notification',
       headers := jsonb_build_object(
         'Content-Type', 'application/json',
@@ -79,8 +80,8 @@ BEGIN
       body := v_payload
     );
 
-    -- CHECKPOINT 5: Logged immediately after pg_net returns
-    RAISE WARNING '[DEBUG-FORENSE] 5. net.http_post() RETURNED WITHOUT EXCEPTION';
+    -- CHECKPOINT 5: Logged immediately after pg_net returns with request_id
+    RAISE WARNING 'REQUEST_ID=%', v_request_id;
 
   EXCEPTION
     WHEN OTHERS THEN
