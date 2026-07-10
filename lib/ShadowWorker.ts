@@ -28,7 +28,11 @@ export type LogEvent =
   | 'PROCESSING_STARTED'
   | 'PROCESSING_FINISHED'
   | 'BATCH_PROCESSING_FINISHED'
-  | 'JOB_PROCESSING_ERROR';
+  | 'JOB_PROCESSING_ERROR'
+  | 'DISPATCH_STARTED'
+  | 'DISPATCH_FINISHED'
+  | 'DISPATCH_ERROR'
+  | 'JOB_COMPLETED';
 
 // Define all known domain states of a notification job
 export enum JobStatus {
@@ -226,7 +230,7 @@ export async function startShadowWorker() {
             durationMs 
           });
 
-          // Controlled Processing Pipeline (Microfase 1.3.3)
+          // Controlled Processing Pipeline (Microfase 1.3.4 - Dispatcher Mínimo de Transporte)
           const batchStartTime = Date.now();
           let processedJobs = 0;
 
@@ -238,8 +242,69 @@ export async function startShadowWorker() {
                 priority: job.priority
               });
 
-              // Simulated processing actions (Purely observational, no DB updates, no external calls)
+              // 1. Buscar a notificação correspondente em public.notifications utilizando notification_id
+              const { data: notification, error: fetchError } = await supabaseAdmin!
+                .from('notifications')
+                .select('id')
+                .eq('id', job.notification_id)
+                .single();
+
+              if (fetchError || !notification) {
+                throw new Error(fetchError ? fetchError.message : `Notification with ID ${job.notification_id} not found.`);
+              }
+
+              // 2. Executar exatamente UMA chamada para send-push-notification utilizando a infraestrutura oficial
+              logWorker('DISPATCH_STARTED', currentCycleId, {
+                notificationId: job.notification_id
+              });
+
+              const dispatchStartTime = Date.now();
+              const { data: invokeData, error: invokeError } = await supabaseAdmin!.functions.invoke('send-push-notification', {
+                body: { notification_id: job.notification_id }
+              });
+
+              if (
+                invokeError ||
+                !invokeData ||
+                invokeData.success !== true
+              ) {
+                throw new Error(
+                  invokeData?.error ??
+                  invokeError?.message ??
+                  "Unknown dispatch failure"
+                );
+              }
+
+              const dispatchDurationMs = Date.now() - dispatchStartTime;
+
+              logWorker('DISPATCH_FINISHED', currentCycleId, {
+                notificationId: job.notification_id,
+                durationMs: dispatchDurationMs
+              });
+
+              // 3. Finalização atômica do Job na Microfase 1.3.5
+              const { data: updated, error: updateError } = await supabaseAdmin!.rpc('mark_notification_job_sent', {
+                p_notification_id: job.notification_id
+              });
+
+              if (updateError) {
+                throw updateError;
+              }
+
+              if (updated !== true) {
+                throw new Error(
+                  "mark_notification_job_sent returned false"
+                );
+              }
+
               const processingDurationMs = Date.now() - jobStartTime;
+
+              logWorker('JOB_COMPLETED', currentCycleId, {
+                workerInstanceId,
+                cycleId: currentCycleId,
+                notificationId: job.notification_id,
+                durationMs: processingDurationMs
+              });
 
               logWorker('PROCESSING_FINISHED', currentCycleId, {
                 notification_id: job.notification_id,
@@ -249,6 +314,10 @@ export async function startShadowWorker() {
               processedJobs++;
             } catch (jobErr: unknown) {
               const errMsg = jobErr instanceof Error ? jobErr.message : String(jobErr);
+              logWorker('DISPATCH_ERROR', currentCycleId, {
+                notificationId: job.notification_id,
+                error: errMsg
+              });
               logWorker('JOB_PROCESSING_ERROR', currentCycleId, {
                 notification_id: job.notification_id,
                 error: errMsg
