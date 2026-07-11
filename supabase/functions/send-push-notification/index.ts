@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
     
     if (!notificationId) {
       console.warn('[PUSH DISPATCHER] Ignored: No notification_id provided in the payload', payload);
-      return new Response(JSON.stringify({ message: 'Ignored: No notification_id provided' }), {
+      return new Response(JSON.stringify({ success: false, error: 'No notification_id provided' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
@@ -132,7 +132,7 @@ Deno.serve(async (req) => {
 
     if (notifError || !notification) {
       console.error(`[PUSH DISPATCHER] Failed to fetch notification ${notificationId}:`, notifError);
-      return new Response(JSON.stringify({ error: 'Notification not found' }), {
+      return new Response(JSON.stringify({ success: false, error: 'Notification not found' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 404,
       })
@@ -154,7 +154,7 @@ Deno.serve(async (req) => {
     console.log(`[PUSH DISPATCHER] Found ${tokensData?.length || 0} active tokens for recipient user: ${user_id}`);
 
     if (!tokensData || tokensData.length === 0) {
-      return new Response(JSON.stringify({ message: 'Notification exists, but no active FCM tokens found for the user.' }), {
+      return new Response(JSON.stringify({ success: true, message: 'Notification exists, but no active FCM tokens found for the user.', results: [] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       })
@@ -240,14 +240,14 @@ Deno.serve(async (req) => {
 
     const results = await Promise.all(dispatchPromises)
 
-    return new Response(JSON.stringify({ message: 'Push notifications dispatched successfully', results }), {
+    return new Response(JSON.stringify({ success: true, message: 'Push notifications dispatched successfully', results }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200,
     })
 
   } catch (error: any) {
     console.error('[PUSH DISPATCHER FATAL] Error during push dispatching process:', error)
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 500,
     })
