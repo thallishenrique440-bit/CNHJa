@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
+import { CheckoutLauncher } from '../../lib/payments/CheckoutLauncher';
 
 export const PaymentPage = () => {
   const location = useLocation();
@@ -13,12 +14,12 @@ export const PaymentPage = () => {
     }
   }, [invoiceUrl, navigate]);
 
-  // Redirect to Asaas hosted checkout if invoiceUrl is provided
+  // Redirect to hosted checkout if invoiceUrl is provided using CheckoutLauncher
   useEffect(() => {
     if (invoiceUrl) {
       localStorage.removeItem('booking_selected_slots');
       const timer = setTimeout(() => {
-        window.location.href = invoiceUrl;
+        CheckoutLauncher.launch(invoiceUrl);
       }, 1500);
       return () => clearTimeout(timer);
     }
@@ -35,7 +36,7 @@ export const PaymentPage = () => {
         <div>
           <h1 className="text-xl font-black text-gray-900">Redirecionando para o Pagamento</h1>
           <p className="text-sm text-gray-500 mt-2 font-medium">
-            Você está sendo transferido de forma segura para o ambiente do Asaas para concluir seu agendamento.
+            Você está sendo transferido de forma segura para o ambiente de pagamento para concluir seu agendamento.
           </p>
         </div>
         <div className="flex justify-center items-center gap-1.5 py-4">
@@ -46,7 +47,11 @@ export const PaymentPage = () => {
         <div className="pt-2">
           <a 
             href={invoiceUrl}
-            className="text-xs text-blue-600 hover:underline font-semibold"
+            onClick={(e) => {
+              e.preventDefault();
+              CheckoutLauncher.launch(invoiceUrl, { forceNewTab: true });
+            }}
+            className="text-xs text-blue-600 hover:underline font-semibold cursor-pointer"
           >
             Clique aqui se não for redirecionado automaticamente
           </a>
