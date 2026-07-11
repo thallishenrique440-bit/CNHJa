@@ -1,4 +1,4 @@
-import { executeWorkerCycle } from '../lib/ShadowWorker';
+import { executeWorkerCycle } from '../lib/ShadowWorker.js';
 import crypto from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 
