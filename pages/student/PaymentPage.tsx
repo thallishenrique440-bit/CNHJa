@@ -4,12 +4,14 @@ import { ShieldCheck, ExternalLink } from 'lucide-react';
 import { CheckoutLauncher } from '../../lib/payments/CheckoutLauncher';
 
 export const PaymentPage = () => {
+  console.warn('[PaymentPage] COMPONENTE MONTADO');
   const location = useLocation();
   const navigate = useNavigate();
   const { invoiceUrl } = location.state || {};
   const [isStandalone, setIsStandalone] = useState(false);
 
   useEffect(() => {
+    console.trace('[PaymentPage] useEffect - redirect empty invoiceUrl');
     if (!invoiceUrl) {
       navigate('/student/home');
     }
@@ -17,11 +19,13 @@ export const PaymentPage = () => {
 
   // Check standalone context on mount
   useEffect(() => {
+    console.trace('[PaymentPage] useEffect - check standalone');
     setIsStandalone(CheckoutLauncher.isStandalone());
   }, []);
 
   // Redirect to hosted checkout if invoiceUrl is provided and NOT in standalone/PWA context
   useEffect(() => {
+    console.trace('[PaymentPage] useEffect - auto redirect timer');
     if (invoiceUrl && !isStandalone) {
       localStorage.removeItem('booking_selected_slots');
       const timer = setTimeout(() => {

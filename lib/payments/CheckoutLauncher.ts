@@ -63,10 +63,26 @@ export class CheckoutLauncher {
 
     const shouldOpenNewTab = options.forceNewTab || this.isStandalone();
 
+    console.group('[CheckoutLauncher] launch');
+    console.log({
+      timestamp: Date.now(),
+      url,
+      options,
+      isStandalone: this.isStandalone(),
+      shouldOpenNewTab,
+      currentUrl: typeof window !== 'undefined' ? window.location.href : ''
+    });
+    console.trace();
+    console.groupEnd();
+
     if (shouldOpenNewTab) {
       // In standalone PWAs or when forced, we open in a new tab/system browser
       try {
+        console.log('[CheckoutLauncher] executando window.open');
         const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
+        console.log({
+          newWindow
+        });
         if (newWindow) {
           newWindow.focus();
           options.onSuccess?.();
@@ -78,6 +94,7 @@ export class CheckoutLauncher {
 
       // Fallback: Programmatic anchor tag injection and click
       try {
+        console.warn('[CheckoutLauncher] executando fallback anchor');
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.target = '_blank';
@@ -96,6 +113,7 @@ export class CheckoutLauncher {
     } else {
       // Standard browser redirection (Desktop, mobile web standard tab)
       try {
+        console.log('[CheckoutLauncher] redirecionando via window.location.href');
         window.location.href = url;
         options.onSuccess?.();
         return true;

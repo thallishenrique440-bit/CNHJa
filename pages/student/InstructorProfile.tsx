@@ -1044,6 +1044,13 @@ export const StudentInstructorProfile: React.FC = () => {
   };
 
   const executeActualBooking = async (method: 'PIX' | 'CREDIT_CARD', installments: number) => {
+    console.group('[executeActualBooking]');
+    console.log({
+      timestamp: Date.now()
+    });
+    console.trace();
+    console.groupEnd();
+
     if (isProcessingPayment) return;
     setIsProcessingPayment(true);
     setIsPaymentMethodModalOpen(false);
@@ -1133,6 +1140,14 @@ export const StudentInstructorProfile: React.FC = () => {
       // 5. Sucesso
       if (data && data.groupId && (data.clientSecret || data.invoiceUrl)) {
          const isStandalone = CheckoutLauncher.isStandalone();
+         console.log({
+             invoiceUrl: data.invoiceUrl,
+             isStandalone,
+             fluxo:
+                 isStandalone
+                     ? 'PaymentPage'
+                     : 'CheckoutLauncher.launch'
+         });
          if (isStandalone) {
             navigate('/student/payment', { 
                state: { 
