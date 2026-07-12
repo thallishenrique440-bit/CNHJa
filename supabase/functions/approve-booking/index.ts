@@ -243,7 +243,17 @@ Deno.serve(async (req) => {
             comboCount: appointmentsToApprove.length || 1,
             groupId: appointment.group_id || appointment.id
           });
-        } catch (notifErr) {
+        } catch (notifErr: any) {
+          console.error('[FORENSIC] Notification Exception');
+          console.error(notifErr);
+          console.error(JSON.stringify(notifErr, null, 2));
+          if (notifErr instanceof Error || (notifErr && typeof notifErr === 'object' && ('message' in notifErr || 'name' in notifErr))) {
+            console.error({
+              name: notifErr.name,
+              message: notifErr.message,
+              stack: notifErr.stack
+            });
+          }
           console.error(`⚠️ Error creating confirmation notification:`, notifErr);
         }
       }

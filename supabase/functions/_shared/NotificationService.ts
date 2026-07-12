@@ -66,6 +66,18 @@ export class NotificationService {
     appointmentId?: string | null;
   }) {
     await ensureConfig();
+    console.log('[FORENSIC] createNotification START');
+    console.log('[FORENSIC] PARAMS', {
+      userId: params.userId,
+      title: params.title,
+      message: params.message,
+      type: params.type,
+      entityType: params.entityType,
+      targetScreen: params.targetScreen,
+      comboCount: params.comboCount,
+      groupId: params.groupId,
+      appointmentId: params.appointmentId
+    });
     const { data, error } = await supabaseAdmin.rpc('create_unified_notification', {
       p_user_id: params.userId,
       p_title: params.title,
@@ -78,7 +90,12 @@ export class NotificationService {
       p_appointment_id: params.appointmentId || null
     });
 
+    console.log('[FORENSIC] RPC DATA', data);
+    console.log('[FORENSIC] RPC ERROR', error);
+
     if (error) {
+      console.error('[FORENSIC] RPC ERROR JSON', JSON.stringify(error, null, 2));
+      console.error('[FORENSIC] RPC ERROR RAW', error);
       console.error('[NotificationService] Error creating notification:', error);
       throw error;
     }
