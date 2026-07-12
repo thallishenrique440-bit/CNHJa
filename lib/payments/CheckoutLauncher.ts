@@ -85,30 +85,32 @@ export class CheckoutLauncher {
         });
         if (newWindow) {
           newWindow.focus();
-          options.onSuccess?.();
-          return true;
         }
-      } catch (e) {
-        console.warn('[CheckoutLauncher] window.open failed or was blocked by a pop-up blocker. Attempting fallback anchor.', e);
-      }
-
-      // Fallback: Programmatic anchor tag injection and click
-      try {
-        console.warn('[CheckoutLauncher] executando fallback anchor');
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.target = '_blank';
-        anchor.rel = 'noopener noreferrer';
-        document.body.appendChild(anchor);
-        anchor.click();
-        document.body.removeChild(anchor);
+        // Se window.open foi executado sem lançar erro, consideramos a abertura bem-sucedida,
+        // independentemente do valor retornado ser null (muito comum em iframes e PWA standalone).
         options.onSuccess?.();
         return true;
       } catch (e) {
-        const error = e instanceof Error ? e : new Error(String(e));
-        console.error('[CheckoutLauncher] Programmatic anchor launch failed:', error);
-        options.onError?.(error);
-        return false;
+        console.warn('[CheckoutLauncher] window.open failed or threw an exception. Attempting fallback anchor.', e);
+        
+        // Fallback: Programmatic anchor tag injection and click
+        try {
+          console.warn('[CheckoutLauncher] executando fallback anchor');
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+          options.onSuccess?.();
+          return true;
+        } catch (fallbackError) {
+          const error = fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
+          console.error('[CheckoutLauncher] Programmatic anchor launch failed:', error);
+          options.onError?.(error);
+          return false;
+        }
       }
     } else {
       // Standard browser redirection (Desktop, mobile web standard tab)
