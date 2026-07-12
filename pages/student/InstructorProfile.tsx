@@ -12,6 +12,7 @@ import { AGENDA_SLOTS } from '../../lib/slots';
 import { getLowestActiveCategoryPrice } from '../../lib/instructorPricing';
 import { calculateInstructorRating } from '../../lib/instructorRating';
 import { PAYMENT_ERRORS } from '../../src/constants/paymentErrors';
+import { CheckoutLauncher } from '../../lib/payments/CheckoutLauncher';
 
 // Define Interface for the State matches DB structure
 interface DiscountRule {
@@ -1043,6 +1044,7 @@ export const StudentInstructorProfile: React.FC = () => {
   };
 
   const executeActualBooking = async (method: 'PIX' | 'CREDIT_CARD', installments: number) => {
+    if (isProcessingPayment) return;
     setIsProcessingPayment(true);
     setIsPaymentMethodModalOpen(false);
     setPaymentErrorCode('');
@@ -1130,13 +1132,19 @@ export const StudentInstructorProfile: React.FC = () => {
 
       // 5. Sucesso
       if (data && data.groupId && (data.clientSecret || data.invoiceUrl)) {
-         navigate('/student/payment', { 
-            state: { 
-               clientSecret: data.clientSecret, 
-               invoiceUrl: data.invoiceUrl,
-               purchaseId: data.groupId
-            } 
-         });
+         const isStandalone = CheckoutLauncher.isStandalone();
+         if (isStandalone) {
+            navigate('/student/payment', { 
+               state: { 
+                  clientSecret: data.clientSecret, 
+                  invoiceUrl: data.invoiceUrl,
+                  purchaseId: data.groupId
+               } 
+            });
+         } else {
+            localStorage.removeItem('booking_selected_slots');
+            CheckoutLauncher.launch(data.invoiceUrl);
+         }
       } else {
          throw new Error("Resposta inválida do servidor de pagamento.");
       }
@@ -2323,6 +2331,8 @@ export const StudentInstructorProfile: React.FC = () => {
             <Button
               fullWidth
               id="confirm-payment-btn"
+              loading={isProcessingPayment}
+              disabled={isProcessingPayment}
               onClick={() => executeActualBooking(selectedPaymentMethod, selectedInstallmentCount)}
             >
               Confirmar e Pagar
@@ -2330,8 +2340,9 @@ export const StudentInstructorProfile: React.FC = () => {
             <button
               type="button"
               id="cancel-payment-btn"
+              disabled={isProcessingPayment}
               onClick={() => setIsPaymentMethodModalOpen(false)}
-              className="w-full text-center text-sm font-medium text-gray-400 hover:text-gray-600 py-2 transition-colors cursor-pointer"
+              className="w-full text-center text-sm font-medium text-gray-400 hover:text-gray-600 py-2 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Voltar
             </button>

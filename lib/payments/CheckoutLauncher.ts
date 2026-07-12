@@ -29,6 +29,7 @@ interface NavigatorWithStandalone extends Navigator {
 }
 
 export class CheckoutLauncher {
+
   /**
    * Detects if the current application context is running inside a Standalone PWA
    * (either pinned to iOS Home Screen, Android TWA, or desktop standalone shortcut).
