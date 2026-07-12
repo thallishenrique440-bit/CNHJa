@@ -1143,23 +1143,11 @@ export const StudentInstructorProfile: React.FC = () => {
          console.log({
              invoiceUrl: data.invoiceUrl,
              isStandalone,
-             fluxo:
-                 isStandalone
-                     ? 'PaymentPage'
-                     : 'CheckoutLauncher.launch'
+             fluxo: 'CheckoutLauncher.launch (TESTE DE REVERSÃO - TODOS AMBIENTES)'
          });
-         if (isStandalone) {
-            navigate('/student/payment', { 
-               state: { 
-                  clientSecret: data.clientSecret, 
-                  invoiceUrl: data.invoiceUrl,
-                  purchaseId: data.groupId
-               } 
-            });
-         } else {
-            localStorage.removeItem('booking_selected_slots');
-            CheckoutLauncher.launch(data.invoiceUrl);
-         }
+         // DESATIVAR TEMPORARIAMENTE O USO DA PAYMENTPAGE - TODOS OS AMBIENTES USAM CHECKOUTLAUNCHER DIRETO
+         localStorage.removeItem('booking_selected_slots');
+         CheckoutLauncher.launch(data.invoiceUrl);
       } else {
          throw new Error("Resposta inválida do servidor de pagamento.");
       }
