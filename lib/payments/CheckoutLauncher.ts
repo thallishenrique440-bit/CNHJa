@@ -61,70 +61,26 @@ export class CheckoutLauncher {
       return false;
     }
 
-    const shouldOpenNewTab = options.forceNewTab || this.isStandalone();
-
     console.group('[CheckoutLauncher] launch');
     console.log({
       timestamp: Date.now(),
       url,
       options,
-      isStandalone: this.isStandalone(),
-      shouldOpenNewTab,
       currentUrl: typeof window !== 'undefined' ? window.location.href : ''
     });
     console.trace();
     console.groupEnd();
 
-    if (shouldOpenNewTab) {
-      // In standalone PWAs or when forced, we open in a new tab/system browser
-      try {
-        console.log('[CheckoutLauncher] executando window.open');
-        const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
-        console.log({
-          newWindow
-        });
-        if (newWindow) {
-          newWindow.focus();
-        }
-        // Se window.open foi executado sem lançar erro, consideramos a abertura bem-sucedida,
-        // independentemente do valor retornado ser null (muito comum em iframes e PWA standalone).
-        options.onSuccess?.();
-        return true;
-      } catch (e) {
-        console.warn('[CheckoutLauncher] window.open failed or threw an exception. Attempting fallback anchor.', e);
-        
-        // Fallback: Programmatic anchor tag injection and click
-        try {
-          console.warn('[CheckoutLauncher] executando fallback anchor');
-          const anchor = document.createElement('a');
-          anchor.href = url;
-          anchor.target = '_blank';
-          anchor.rel = 'noopener noreferrer';
-          document.body.appendChild(anchor);
-          anchor.click();
-          document.body.removeChild(anchor);
-          options.onSuccess?.();
-          return true;
-        } catch (fallbackError) {
-          const error = fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
-          console.error('[CheckoutLauncher] Programmatic anchor launch failed:', error);
-          options.onError?.(error);
-          return false;
-        }
-      }
-    } else {
-      // Standard browser redirection (Desktop, mobile web standard tab)
-      try {
-        console.log('[CheckoutLauncher] redirecionando via window.location.href');
-        window.location.href = url;
-        options.onSuccess?.();
-        return true;
-      } catch (e) {
-        const error = e instanceof Error ? e : new Error(String(e));
-        console.error('[CheckoutLauncher] Redirection failed:', error);
-        options.onError?.(error);
-        return false;
-      }
+    try {
+      console.log('[CheckoutLauncher] redirecionando na mesma janela via window.location.href');
+      window.location.href = url;
+      options.onSuccess?.();
+      return true;
+    } catch (e) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      console.error('[CheckoutLauncher] Redirection failed:', error);
+      options.onError?.(error);
+      return false;
     }
   }
 }
