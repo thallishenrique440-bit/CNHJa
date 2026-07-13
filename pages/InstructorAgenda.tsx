@@ -1035,11 +1035,20 @@ export const InstructorAgenda: React.FC = () => {
       if (selectedLesson.studentId) {
         try {
           const comboCount = groupLessons.length > 0 ? groupLessons.length : (selectedLesson.groupId ? 2 : 1);
+          /* 
+           * [WORKAROUND TEMPORÁRIO] 
+           * Enviamos p_type como 'system' para evitar colisão de idempotência no banco de dados.
+           * O banco possui uma restrição de unicidade baseada em (type, user_id, appointment_id).
+           * Como as notificações de agendamento inicial já usam 'booking_accepted'/'booking_rejected',
+           * tentar enviar outra resposta com o mesmo tipo causaria uma violação de unicidade,
+           * ignorando o insert e não gerando o push/notificação.
+           * Em futuras evoluções de infraestrutura, novos NotificationTypes específicos de remarcação devem ser criados.
+           */
           await supabase.rpc('create_unified_notification', {
             p_user_id: selectedLesson.studentId,
             p_title: '📅 Remarcação não aprovada',
             p_message: 'Seu instrutor não aprovou a solicitação de remarcação. Sua aula permanece no horário originalmente agendado.',
-            p_type: 'booking_rejected',
+            p_type: 'system',
             p_entity_type: comboCount > 1 ? 'package' : 'lesson',
             p_target_screen: 'student_lessons',
             p_combo_count: comboCount,
@@ -1134,11 +1143,20 @@ export const InstructorAgenda: React.FC = () => {
             message += ` Sua aula foi atualizada para: ${formattedDate} às ${formattedTime}.`;
           }
 
+          /* 
+           * [WORKAROUND TEMPORÁRIO] 
+           * Enviamos p_type como 'system' para evitar colisão de idempotência no banco de dados.
+           * O banco possui uma restrição de unicidade baseada em (type, user_id, appointment_id).
+           * Como as notificações de agendamento inicial já usam 'booking_accepted'/'booking_rejected',
+           * tentar enviar outra resposta com o mesmo tipo causaria uma violação de unicidade,
+           * ignorando o insert e não gerando o push/notificação.
+           * Em futuras evoluções de infraestrutura, novos NotificationTypes específicos de remarcação devem ser criados.
+           */
           await supabase.rpc('create_unified_notification', {
             p_user_id: selectedLesson.studentId,
             p_title: '📅 Remarcação aprovada',
             p_message: message,
-            p_type: 'booking_accepted',
+            p_type: 'system',
             p_entity_type: comboCount > 1 ? 'package' : 'lesson',
             p_target_screen: 'student_lessons',
             p_combo_count: comboCount,
