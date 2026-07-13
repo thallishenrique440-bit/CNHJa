@@ -10,7 +10,11 @@ export enum NotificationType {
   PAYMENT_RELEASED = 'payment_released',
   REMINDER = 'reminder',
   SYSTEM = 'system',
-  TIP = 'tip'
+  TIP = 'tip',
+  // booking_request foi mantido por compatibilidade com a CHECK constraint existente no PostgreSQL;
+  // a diferenciação entre uma nova solicitação e uma solicitação de remarcação acontece através do título e da mensagem da notificação;
+  // esta decisão foi tomada para evitar qualquer alteração estrutural no banco.
+  BOOKING_RESCHEDULED = 'booking_request'
 }
 
 export enum EntityType {
@@ -231,6 +235,100 @@ export class NotificationService {
       targetScreen: NotificationTargetScreen.INSTRUCTOR_FINANCE,
       comboCount: 1,
       appointmentId: params.appointmentId
+    });
+  }
+
+  static async sendBookingRescheduled(params: {
+    instructorId: string;
+    studentName: string;
+    comboCount: number;
+    groupId: string;
+    appointmentId?: string | null;
+    lessonDate?: string;
+    lessonTime?: string;
+  }) {
+    const title = '📅 Solicitação de remarcação';
+    let message = '';
+
+    if (params.comboCount > 1) {
+      message = `O aluno ${params.studentName} solicitou o reagendamento de um pacote de ${params.comboCount} aulas`;
+      if (params.lessonDate && params.lessonTime) {
+        message += ` (início em ${params.lessonDate} às ${params.lessonTime}).`;
+      } else {
+        message += `.`;
+      }
+    } else {
+      message = `O aluno ${params.studentName} solicitou a remarcação `;
+      if (params.lessonDate && params.lessonTime) {
+        message += `da aula de ${params.lessonDate} às ${params.lessonTime}.`;
+      } else {
+        message += `desta aula.`;
+      }
+    }
+
+    return this.createNotification({
+      userId: params.instructorId,
+      title,
+      message,
+      type: NotificationType.BOOKING_RESCHEDULED,
+      entityType: params.comboCount > 1 ? EntityType.PACKAGE : EntityType.LESSON,
+      targetScreen: NotificationTargetScreen.INSTRUCTOR_AGENDA,
+      comboCount: params.comboCount,
+      groupId: params.groupId || null,
+      appointmentId: params.appointmentId || null
+    });
+  }
+
+  static async sendPaymentReleased(params: {
+    userId: string;
+    amountFormatted: string;
+    appointmentId?: string | null;
+  }) {
+    return this.createNotification({
+      userId: params.userId,
+      title: '💸 Pagamento liberado!',
+      message: `O pagamento no valor de ${params.amountFormatted} foi liberado com sucesso.`,
+      type: NotificationType.PAYMENT_RELEASED,
+      entityType: EntityType.FINANCE,
+      targetScreen: NotificationTargetScreen.INSTRUCTOR_FINANCE,
+      comboCount: 1,
+      appointmentId: params.appointmentId
+    });
+  }
+
+  static async sendReminder(params: {
+    userId: string;
+    title: string;
+    message: string;
+    targetScreen?: NotificationTargetScreen;
+    appointmentId?: string | null;
+  }) {
+    return this.createNotification({
+      userId: params.userId,
+      title: params.title,
+      message: params.message,
+      type: NotificationType.REMINDER,
+      entityType: EntityType.LESSON,
+      targetScreen: params.targetScreen || NotificationTargetScreen.STUDENT_LESSONS,
+      comboCount: 1,
+      appointmentId: params.appointmentId
+    });
+  }
+
+  static async sendSystemNotification(params: {
+    userId: string;
+    title: string;
+    message: string;
+    targetScreen?: NotificationTargetScreen;
+  }) {
+    return this.createNotification({
+      userId: params.userId,
+      title: params.title,
+      message: params.message,
+      type: NotificationType.SYSTEM,
+      entityType: EntityType.PROMOTION,
+      targetScreen: params.targetScreen || NotificationTargetScreen.STUDENT_LESSONS,
+      comboCount: 1
     });
   }
 }

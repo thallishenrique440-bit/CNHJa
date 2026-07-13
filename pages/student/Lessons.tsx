@@ -741,6 +741,37 @@ export const StudentLessons: React.FC = () => {
 
       if (error) throw error;
 
+      // Fetch student's full name to personalize the notification message
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', session.user.id)
+        .single();
+      const studentName = profileData?.full_name || 'Aluno';
+
+      // Create unified notification for the instructor
+      const title = '📅 Solicitação de remarcação';
+      const dateStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(group.date);
+      const timeStr = group.time;
+
+      const message = group.count > 1
+        ? `O aluno ${studentName} solicitou o reagendamento de um pacote de ${group.count} aulas (início em ${dateStr} às ${timeStr}).`
+        : `O aluno ${studentName} solicitou a remarcação da aula de ${dateStr} às ${timeStr}.`;
+
+      const { error: notificationError } = await supabase.rpc('create_unified_notification', {
+        p_user_id: group.instructorId,
+        p_title: title,
+        p_message: message,
+        p_type: 'booking_request', // Corresponds to NotificationType.BOOKING_RESCHEDULED (mapped to 'booking_request' for DB check constraint safety)
+        p_entity_type: group.count > 1 ? 'package' : 'lesson',
+        p_target_screen: 'instructor_agenda',
+        p_combo_count: group.count,
+        p_group_id: null,
+        p_appointment_id: group.ids[0] || null
+      });
+
+      if (notificationError) throw notificationError;
+
       addToast("Solicitação enviada! O instrutor foi notificado.", "success");
       setLessonForAction(null);
       
