@@ -262,6 +262,55 @@ export class NotificationService {
     });
   }
 
+  static async sendRescheduleAccepted(params: {
+    studentId: string;
+    comboCount: number;
+    groupId: string;
+    appointmentId?: string | null;
+    lessonDate?: string;
+    lessonTime?: string;
+  }) {
+    const title = '📅 Remarcação aprovada';
+    let message = 'Seu instrutor aprovou sua solicitação de remarcação.';
+    if (params.lessonDate && params.lessonTime) {
+      message += ` Sua aula foi atualizada para: ${params.lessonDate} às ${params.lessonTime}.`;
+    }
+
+    return this.createNotification({
+      userId: params.studentId,
+      title,
+      message,
+      type: NotificationType.BOOKING_ACCEPTED,
+      entityType: params.comboCount > 1 ? EntityType.PACKAGE : EntityType.LESSON,
+      targetScreen: NotificationTargetScreen.STUDENT_LESSONS,
+      comboCount: params.comboCount,
+      groupId: params.groupId || null,
+      appointmentId: params.appointmentId || null
+    });
+  }
+
+  static async sendRescheduleRejected(params: {
+    studentId: string;
+    comboCount: number;
+    groupId: string;
+    appointmentId?: string | null;
+  }) {
+    const title = '📅 Remarcação não aprovada';
+    const message = 'Seu instrutor não aprovou a solicitação de remarcação. Sua aula permanece no horário originalmente agendado.';
+
+    return this.createNotification({
+      userId: params.studentId,
+      title,
+      message,
+      type: NotificationType.BOOKING_REJECTED,
+      entityType: params.comboCount > 1 ? EntityType.PACKAGE : EntityType.LESSON,
+      targetScreen: NotificationTargetScreen.STUDENT_LESSONS,
+      comboCount: params.comboCount,
+      groupId: params.groupId || null,
+      appointmentId: params.appointmentId || null
+    });
+  }
+
   static async sendPaymentReleased(params: {
     userId: string;
     amountFormatted: string;

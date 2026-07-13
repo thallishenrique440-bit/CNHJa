@@ -19,6 +19,7 @@ interface Lesson {
   id: string;
   status: LessonStatus;
   dbStatus?: string;
+  studentId?: string;
   studentName?: string;
   studentPhoto?: string | null;
   studentPhone?: string | null; // NEW FIELD
@@ -366,6 +367,7 @@ export const InstructorAgenda: React.FC = () => {
             .from('appointments')
             .select(`
                 id,
+                student_id,
                 date,
                 start_time,
                 status,
@@ -446,6 +448,7 @@ export const InstructorAgenda: React.FC = () => {
                         id: apt.id,
                         status: uiStatus,
                         dbStatus: apt.status,
+                        studentId: apt.student_id,
                         studentName: apt.profiles?.full_name || 'Aluno',
                         studentPhoto: apt.profiles?.avatar_url,
                         studentPhone: apt.profiles?.phone, // Map phone
@@ -1028,6 +1031,26 @@ export const InstructorAgenda: React.FC = () => {
 
       if (error) throw error;
       
+      // Send student notification
+      if (selectedLesson.studentId) {
+        try {
+          const comboCount = groupLessons.length > 0 ? groupLessons.length : (selectedLesson.groupId ? 2 : 1);
+          await supabase.rpc('create_unified_notification', {
+            p_user_id: selectedLesson.studentId,
+            p_title: '📅 Remarcação não aprovada',
+            p_message: 'Seu instrutor não aprovou a solicitação de remarcação. Sua aula permanece no horário originalmente agendado.',
+            p_type: 'booking_rejected',
+            p_entity_type: comboCount > 1 ? 'package' : 'lesson',
+            p_target_screen: 'student_lessons',
+            p_combo_count: comboCount,
+            p_group_id: selectedLesson.groupId || null,
+            p_appointment_id: selectedLesson.id
+          });
+        } catch (notifErr) {
+          console.error('[Notification] Failed to send reschedule rejection notification:', notifErr);
+        }
+      }
+      
       addToast('Pedido de reagendamento recusado.', 'info');
       closeLessonModal();
       fetchAppointments();
@@ -1094,6 +1117,37 @@ export const InstructorAgenda: React.FC = () => {
           throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
         }
         throw error;
+      }
+      
+      // Send student notification
+      if (selectedLesson.studentId) {
+        try {
+          const comboCount = groupLessons.length > 0 ? groupLessons.length : (selectedLesson.groupId ? 2 : 1);
+          let formattedDate = '';
+          if (dateStr) {
+            const [y, m, d] = dateStr.split('-');
+            formattedDate = `${d}/${m}`;
+          }
+          const formattedTime = rescheduleTime ? rescheduleTime.substring(0, 5) : '';
+          let message = 'Seu instrutor aprovou sua solicitação de remarcação.';
+          if (formattedDate && formattedTime) {
+            message += ` Sua aula foi atualizada para: ${formattedDate} às ${formattedTime}.`;
+          }
+
+          await supabase.rpc('create_unified_notification', {
+            p_user_id: selectedLesson.studentId,
+            p_title: '📅 Remarcação aprovada',
+            p_message: message,
+            p_type: 'booking_accepted',
+            p_entity_type: comboCount > 1 ? 'package' : 'lesson',
+            p_target_screen: 'student_lessons',
+            p_combo_count: comboCount,
+            p_group_id: selectedLesson.groupId || null,
+            p_appointment_id: selectedLesson.id
+          });
+        } catch (notifErr) {
+          console.error('[Notification] Failed to send reschedule approval notification:', notifErr);
+        }
       }
       
       addToast('Aula reagendada com sucesso!', 'success');
