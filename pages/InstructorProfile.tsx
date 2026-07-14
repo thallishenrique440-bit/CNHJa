@@ -223,10 +223,10 @@ export const InstructorProfile: React.FC = () => {
           const bike = vehicles.find(v => v.type === 'bike');
           
           if (car && isCarAllowed) {
-            setHasCar(true);
+            setHasCar(car.model !== 'Veículo do Aluno');
             setCarId(car.id);
-            setCarModel(car.model || '');
-            setCarYear(String(car.year || ''));
+            setCarModel(car.model === 'Veículo do Aluno' ? '' : (car.model || ''));
+            setCarYear(car.model === 'Veículo do Aluno' ? '' : (String(car.year || '')));
             setCarTransmission(car.transmission || 'manual');
           } else {
             setHasCar(false);
@@ -234,10 +234,10 @@ export const InstructorProfile: React.FC = () => {
           }
 
           if (bike && isBikeAllowed) {
-            setHasBike(true);
+            setHasBike(bike.model !== 'Veículo do Aluno');
             setBikeId(bike.id);
-            setBikeModel(bike.model || '');
-            setBikeYear(String(bike.year || ''));
+            setBikeModel(bike.model === 'Veículo do Aluno' ? '' : (bike.model || ''));
+            setBikeYear(bike.model === 'Veículo do Aluno' ? '' : (String(bike.year || '')));
             setBikeTransmission(bike.transmission || 'manual');
           } else {
             setHasBike(false);
@@ -406,16 +406,16 @@ export const InstructorProfile: React.FC = () => {
       const isCarAllowed = category === 'B' || category === 'AB';
       const isBikeAllowed = category === 'A' || category === 'AB';
 
-      if (isCarAllowed && hasCar) {
+      if (isCarAllowed) {
         const { data: upsertedCar, error: carUpsertError } = await supabase
           .from('instructor_vehicles')
           .upsert({
             id: carId || undefined,
             instructor_id: userId,
             type: 'car',
-            model: carModel,
-            year: parseInt(carYear) || 0,
-            transmission: carTransmission
+            model: hasCar ? carModel : 'Veículo do Aluno',
+            year: hasCar ? (parseInt(carYear) || 0) : 0,
+            transmission: hasCar ? carTransmission : 'manual'
           })
           .select('id')
           .maybeSingle();
@@ -436,16 +436,16 @@ export const InstructorProfile: React.FC = () => {
         setCarId(null);
       }
 
-      if (isBikeAllowed && hasBike) {
+      if (isBikeAllowed) {
         const { data: upsertedBike, error: bikeUpsertError } = await supabase
           .from('instructor_vehicles')
           .upsert({
             id: bikeId || undefined,
             instructor_id: userId,
             type: 'bike',
-            model: bikeModel,
-            year: parseInt(bikeYear) || 0,
-            transmission: bikeTransmission
+            model: hasBike ? bikeModel : 'Veículo do Aluno',
+            year: hasBike ? (parseInt(bikeYear) || 0) : 0,
+            transmission: hasBike ? bikeTransmission : 'manual'
           })
           .select('id')
           .maybeSingle();
@@ -787,7 +787,7 @@ export const InstructorProfile: React.FC = () => {
                   </label>
                 </div>
 
-                {hasCar && (
+                {hasCar ? (
                   <div className="space-y-4 animate-fade-in">
                     <Input 
                       label="Modelo" 
@@ -818,6 +818,11 @@ export const InstructorProfile: React.FC = () => {
                       </div>
                     </div>
                   </div>
+                ) : (
+                  <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-100 text-xs text-blue-800 flex items-start space-x-2.5 animate-fade-in">
+                    <span className="text-base leading-none">ℹ️</span>
+                    <span className="leading-relaxed">Você ministrará aulas utilizando o **veículo do próprio aluno** (Categoria B).</span>
+                  </div>
                 )}
               </div>
             )}
@@ -842,7 +847,7 @@ export const InstructorProfile: React.FC = () => {
                   </label>
                 </div>
 
-                {hasBike && (
+                {hasBike ? (
                   <div className="space-y-4 animate-fade-in">
                     <Input 
                       label="Modelo" 
@@ -872,6 +877,11 @@ export const InstructorProfile: React.FC = () => {
                         </select>
                       </div>
                     </div>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-100 text-xs text-blue-800 flex items-start space-x-2.5 animate-fade-in">
+                    <span className="text-base leading-none">ℹ️</span>
+                    <span className="leading-relaxed">Você ministrará aulas utilizando o **veículo do próprio aluno** (Categoria A).</span>
                   </div>
                 )}
               </div>

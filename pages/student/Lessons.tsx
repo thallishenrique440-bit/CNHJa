@@ -965,18 +965,18 @@ export const StudentLessons: React.FC = () => {
     setIsCancelling(true);
 
     try {
-      const { error } = await supabase
-        .from('appointments')
-        .update({ 
-          status: 'cancelled',
-          cancelled_by: 'student',
-          cancelled_reason: 'user_cancelled'
-        })
-        .in('id', lessonToCancel.ids);
+      // Call cancel-booking secure Edge Function for each appointment ID to be cancelled
+      for (const id of lessonToCancel.ids) {
+        const { error } = await invokeSecureFunction('cancel-booking', {
+          body: { appointment_id: id }
+        });
 
-      if (error) throw error;
+        if (error) {
+          throw error;
+        }
+      }
 
-      // Optimistic Update
+      // Optimistic Update: Filter out the cancelled lessons
       setRawLessons(prev => prev.filter(l => !lessonToCancel.ids.includes(l.id)));
       
       addToast("Aula cancelada e horário liberado.", "success");

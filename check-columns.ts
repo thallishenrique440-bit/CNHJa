@@ -11,18 +11,18 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function inspectSchema() {
-  console.log('--- INSPECIONANDO COLUNAS DE PROFILES ---');
-  const { data: profileData, error: profileError } = await supabase
-    .from('profiles')
+  console.log('--- INSPECIONANDO COLUNAS DE INSTRUCTORS ---');
+  const { data: instData, error: instError } = await supabase
+    .from('instructors')
     .select('*')
     .limit(1);
 
-  if (profileError) {
-    console.error('Erro ao ler profiles:', profileError.message);
-  } else if (profileData && profileData.length > 0) {
-    console.log('Colunas de profiles:', Object.keys(profileData[0]));
+  if (instError) {
+    console.error('Erro ao ler instructors:', instError.message);
+  } else if (instData && instData.length > 0) {
+    console.log('Colunas de instructors:', Object.keys(instData[0]));
   } else {
-    console.log('Tabela profiles vazia.');
+    console.log('Tabela instructors vazia.');
   }
 
   console.log('\n--- INSPECIONANDO COLUNAS DE PLATFORM_FINANCIAL_SETTINGS ---');
