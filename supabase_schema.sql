@@ -481,7 +481,7 @@ $$;
 
 -- 5. RPC to auto-complete lessons that have passed
 -- Threshold: end_time + 3 hours < now
--- Since we don't have end_time, we use (date + start_time) + 50 mins + 3 hours = 230 minutes
+-- Since we don't have end_time, we use (date + start_time) + 60 mins + 3 hours = 240 minutes
 CREATE OR REPLACE FUNCTION public.auto_complete_lessons()
 RETURNS integer
 LANGUAGE plpgsql
@@ -498,7 +498,7 @@ BEGIN
     updated_at = now()
   WHERE 
     status = 'confirmed' 
-    AND (date + start_time) < (now() - interval '230 minutes');
+    AND (date + start_time) < (now() - interval '240 minutes');
     
   GET DIAGNOSTICS updated_count = ROW_COUNT;
 

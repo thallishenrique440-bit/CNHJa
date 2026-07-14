@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { getDerivedStatus as getSharedDerivedStatus, LessonDisplayStatus } from '../lib/lessonStatus';
 
-import { AGENDA_SLOTS } from '../lib/slots';
+import { AGENDA_SLOTS, LESSON_DURATION } from '../lib/slots';
 
 // --- Types ---
 type LessonStatus = 'free' | 'confirmed' | 'blocked' | 'lunch' | 'pending' | 'pending_approval' | 'reserved' | 'cancelled' | 'completed' | 'expired' | 'rejected' | 'no_show';
@@ -250,7 +250,7 @@ export const InstructorAgenda: React.FC = () => {
 
     // Saturday Rule
     if (dayOfWeek === 6) {
-      const limitTime = workSaturdayAfternoon ? '17:00' : '11:10';
+      const limitTime = workSaturdayAfternoon ? '17:00' : '11:00';
       const limitIndex = filteredSlots.indexOf(limitTime);
       if (limitIndex !== -1) {
         filteredSlots = filteredSlots.slice(0, limitIndex + 1);
@@ -279,7 +279,7 @@ export const InstructorAgenda: React.FC = () => {
 
     const getEndTime = (time: string) => {
       const [h, m] = time.split(':').map(Number);
-      const endMins = h * 60 + m + 50;
+      const endMins = h * 60 + m + LESSON_DURATION;
       return `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
     };
 
@@ -754,7 +754,7 @@ export const InstructorAgenda: React.FC = () => {
      try {
        if (action === 'block') {
           const [h, m] = time.split(':').map(Number);
-          const endMins = h * 60 + m + 50;
+          const endMins = h * 60 + m + LESSON_DURATION;
           const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 
           const { data, error } = await supabase
@@ -1077,7 +1077,7 @@ export const InstructorAgenda: React.FC = () => {
     try {
       const dateStr = rescheduleDate.toISOString().split('T')[0];
       const [h, m] = rescheduleTime.split(':').map(Number);
-      const endMins = h * 60 + m + 50;
+      const endMins = h * 60 + m + LESSON_DURATION;
       const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 
       // 1. Double check past time
@@ -1666,8 +1666,8 @@ export const InstructorAgenda: React.FC = () => {
                     const [h, min] = selectedLesson.timeStr!.split(':').map(Number);
                     const lessonStart = new Date(y, m - 1, d, h, min);
                     
-                    // Lesson duration is 50 minutes
-                    const lessonEnd = new Date(lessonStart.getTime() + 50 * 60000);
+                    // Lesson duration is LESSON_DURATION minutes
+                    const lessonEnd = new Date(lessonStart.getTime() + LESSON_DURATION * 60000);
                     
                     // Visibility Rules
                     const showNoShow = now >= lessonStart && now <= new Date(lessonStart.getTime() + 10 * 60000);

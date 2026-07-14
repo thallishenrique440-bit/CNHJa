@@ -10,6 +10,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getDerivedStatus, LessonDisplayStatus } from '../../lib/lessonStatus';
 import { getGoogleMapsUrl } from '../../src/utils/maps';
+import { AGENDA_SLOTS, LESSON_DURATION } from '../../lib/slots';
 
 // --- Types ---
 type LessonStatus = LessonDisplayStatus;
@@ -177,7 +178,7 @@ export const StudentLessons: React.FC = () => {
         
         const endTimeStr = apt.end_time 
           ? apt.end_time.substring(0, 5) 
-          : addMinutesToTime(timeStr, 50);
+          : addMinutesToTime(timeStr, LESSON_DURATION);
 
         const lessonDate = new Date(year, month - 1, day);
         
@@ -185,7 +186,7 @@ export const StudentLessons: React.FC = () => {
           apt.status,
           apt.date,
           apt.start_time,
-          apt.end_time || addMinutesToTime(apt.start_time, 50),
+          apt.end_time || addMinutesToTime(apt.start_time, LESSON_DURATION),
           now
         );
         
@@ -1538,13 +1539,14 @@ export const StudentLessons: React.FC = () => {
           ) : (
             <div className="grid grid-cols-4 gap-2">
               {(instructorConfig ? (() => {
-                const slots = [
-                  '07:00', '07:50', '08:40', '09:30', '10:20', '11:10',
-                  '13:40', '14:30', '15:20', '16:10', '17:00'
-                ];
-                if (instructorConfig.hasNight) {
-                  slots.push('18:00', '18:50', '19:40', '20:30', '21:20', '22:10');
+                let slots = [...AGENDA_SLOTS];
+                if (!instructorConfig.hasNight) {
+                  const limitIndex = slots.indexOf('17:00');
+                  if (limitIndex !== -1) {
+                    slots = slots.slice(0, limitIndex + 1);
+                  }
                 }
+                slots = slots.filter(s => s !== '12:00' && s !== '13:00');
                 return slots;
               })() : []).map((time) => {
                 const isBusy = rescheduleBusySlots.includes(time);
@@ -1558,7 +1560,7 @@ export const StudentLessons: React.FC = () => {
                 if (rescheduleDate.getDay() === 6) {
                   const [h, m] = time.split(':').map(Number);
                   const minutes = h * 60 + m;
-                  const limit = instructorConfig?.workSat ? (17 * 60) : (11 * 60 + 10);
+                  const limit = instructorConfig?.workSat ? (17 * 60) : (11 * 60);
                   if (minutes > limit) isSatOff = true;
                 }
 

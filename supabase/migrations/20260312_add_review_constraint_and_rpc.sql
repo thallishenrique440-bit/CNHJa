@@ -32,12 +32,12 @@ BEGIN
   FROM public.appointments a
   JOIN public.profiles p ON a.instructor_id = p.id
   WHERE a.student_id = p_student_id
-    -- Status: Completed or past due (50 min margin)
+    -- Status: Completed or past due (60 min margin)
     AND (
       a.status = 'completed' 
       OR (
         a.status IN ('confirmed', 'scheduled') 
-        AND (a.date + a.start_time) < (now() - interval '50 minutes')
+        AND (a.date + a.start_time) < (now() - interval '60 minutes')
       )
     )
     -- This specific appointment hasn't been reviewed

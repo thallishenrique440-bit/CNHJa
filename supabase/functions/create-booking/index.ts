@@ -353,7 +353,7 @@ Deno.serve(async (req: any) => {
        const [year, month, day] = slot.date.split('-').map(Number);
        const [hour, minute] = slot.time.split(':').map(Number);
        const d = new Date(year, month - 1, day, hour, minute);
-       d.setMinutes(d.getMinutes() + 50);
+       d.setMinutes(d.getMinutes() + 60);
        const end_time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
        return {

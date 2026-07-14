@@ -8,7 +8,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getGoogleMapsUrl } from '../../src/utils/maps';
-import { AGENDA_SLOTS } from '../../lib/slots';
+import { AGENDA_SLOTS, LESSON_DURATION } from '../../lib/slots';
 import { getLowestActiveCategoryPrice } from '../../lib/instructorPricing';
 import { calculateInstructorRating } from '../../lib/instructorRating';
 import { PAYMENT_ERRORS } from '../../src/constants/paymentErrors';
@@ -760,7 +760,7 @@ export const StudentInstructorProfile: React.FC = () => {
 
     // Saturday Rule
     if (selectedDate.getDay() === 6) {
-      const limitTime = instructor.workSaturdayAfternoon ? '17:00' : '11:10';
+      const limitTime = instructor.workSaturdayAfternoon ? '17:00' : '11:00';
       const limitIndex = filteredSlots.indexOf(limitTime);
       if (limitIndex !== -1) {
         filteredSlots = filteredSlots.slice(0, limitIndex + 1);
@@ -791,7 +791,7 @@ export const StudentInstructorProfile: React.FC = () => {
         if (!lunchInserted) {
           const lastLunchSlot = lunchSlots[lunchSlots.length - 1];
           const [h, m] = lastLunchSlot.split(':').map(Number);
-          const endMins = h * 60 + m + 50;
+          const endMins = h * 60 + m + LESSON_DURATION;
           const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
           
           items.push({ 
@@ -832,9 +832,9 @@ export const StudentInstructorProfile: React.FC = () => {
           const [h, m] = time.split(':').map(Number);
           const minutes = h * 60 + m;
           
-          // If instructor works saturday afternoon, allow until 17:00 (end 17:50)
-          // Else allow until 11:10 (end 12:00)
-          const limit = instructor?.workSaturdayAfternoon ? (17 * 60) : (11 * 60 + 10);
+          // If instructor works saturday afternoon, allow until 17:00 (end 18:00)
+          // Else allow until 11:00 (end 12:00)
+          const limit = instructor?.workSaturdayAfternoon ? (17 * 60) : (11 * 60);
           
           if (minutes > limit) return false;
       }
@@ -876,7 +876,6 @@ export const StudentInstructorProfile: React.FC = () => {
       .map(s => timeToMinutes(s.split('|')[1]))
       .sort((a, b) => a - b);
     
-    const LESSON_DURATION = 50;
     let hasTriplet = false;
 
     for (let i = 0; i < sortedMinutes.length - 2; i++) {
@@ -1088,7 +1087,7 @@ export const StudentInstructorProfile: React.FC = () => {
          // Calculate end time (50 mins later)
          const [h, m] = timeStr.split(':').map(Number);
          const endDate = new Date();
-         endDate.setHours(h, m + 50, 0, 0);
+         endDate.setHours(h, m + LESSON_DURATION, 0, 0);
          const endTimeStr = `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`;
 
          return {
