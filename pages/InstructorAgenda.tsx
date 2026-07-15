@@ -1185,16 +1185,14 @@ export const InstructorAgenda: React.FC = () => {
     
     setIsActionLoading(true);
     try {
-        const { error } = await supabase
-            .from('appointments')
-            .update({ 
-                status: 'cancelled',
-                cancelled_by: 'instructor',
-                cancelled_reason: cancelReason,
-                reschedule_requested_at: null,
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', selectedLesson.id);
+        const { error } = await invokeSecureFunction('cancel-booking', {
+            body: {
+                appointment_id: selectedLesson.id,
+                actor: 'instructor',
+                cancel_reason: cancelReason,
+                initiated_from: 'instructor_agenda'
+            }
+        });
 
         if (error) throw error;
 

@@ -49,7 +49,8 @@ Deno.serve(async (req) => {
       throw new Error('Unauthorized: Invalid user session')
     }
 
-    const { appointment_id } = await req.json()
+    const body = await req.json().catch(() => ({}))
+    const { appointment_id, actor = 'student', cancel_reason, initiated_from } = body
     if (!appointment_id) {
       throw new Error('Missing appointment_id')
     }
@@ -65,12 +66,23 @@ Deno.serve(async (req) => {
       throw new Error('Appointment not found')
     }
 
-    // Validate permission: must be the student who booked
-    if (appointment.student_id !== user.id) {
-      return new Response(
-        JSON.stringify({ error: 'Forbidden: You are not the student who booked this appointment' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    // Validate permission: must be student or instructor depending on actor
+    if (actor === 'student') {
+      if (appointment.student_id !== user.id) {
+        return new Response(
+          JSON.stringify({ error: 'Forbidden: You are not the student who booked this appointment' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+    } else if (actor === 'instructor') {
+      if (appointment.instructor_id !== user.id) {
+        return new Response(
+          JSON.stringify({ error: 'Forbidden: You are not the instructor for this appointment' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+    } else {
+      throw new Error('Invalid actor')
     }
 
     // Validation 1: Already cancelled?
@@ -96,17 +108,19 @@ Deno.serve(async (req) => {
       )
     }
 
-    // Validation 4: 24h rule validation
-    const timeStr = appointment.start_time.includes(':') 
-      ? appointment.start_time.split(':').slice(0, 2).join(':') 
-      : appointment.start_time;
-    const lessonStart = new Date(`${appointment.date}T${timeStr}:00-03:00`);
-    const now = new Date();
-    const diffMs = lessonStart.getTime() - now.getTime();
-    const diffHours = diffMs / (1000 * 60 * 60);
+    // Validation 4: 24h rule validation (only for student)
+    if (actor === 'student') {
+      const timeStr = appointment.start_time.includes(':') 
+        ? appointment.start_time.split(':').slice(0, 2).join(':') 
+        : appointment.start_time;
+      const lessonStart = new Date(`${appointment.date}T${timeStr}:00-03:00`);
+      const now = new Date();
+      const diffMs = lessonStart.getTime() - now.getTime();
+      const diffHours = diffMs / (1000 * 60 * 60);
 
-    if (diffHours < 24) {
-      throw new Error('Faltam menos de 24h para o início da aula. Cancelamento não permitido.');
+      if (diffHours < 24) {
+        throw new Error('Faltam menos de 24h para o início da aula. Cancelamento não permitido.');
+      }
     }
 
     const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
@@ -164,7 +178,7 @@ Deno.serve(async (req) => {
               },
               body: JSON.stringify({
                 value: refundValue,
-                description: 'Cancelamento parcial de aula pelo aluno'
+                description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
               })
             });
 
@@ -233,7 +247,10 @@ Deno.serve(async (req) => {
           await stripe.refunds.create({
             payment_intent: paymentId,
             amount: appointment.price,
-            metadata: { cancellation_reason: 'student_cancelled_partial', appointment_id: appointment.id }
+            metadata: { 
+              cancellation_reason: actor === 'instructor' ? 'instructor_cancelled_partial' : 'student_cancelled_partial', 
+              appointment_id: appointment.id 
+            }
           });
           console.log(`✅ Stripe payment ${paymentId} partially refunded successfully.`);
         } else {
@@ -252,8 +269,8 @@ Deno.serve(async (req) => {
       .update({
         status: 'cancelled',
         payment_status: isPaid ? 'refunded' : 'released',
-        cancelled_by: 'student',
-        cancelled_reason: 'user_cancelled',
+        cancelled_by: actor,
+        cancelled_reason: cancel_reason || (actor === 'instructor' ? 'instructor_cancelled' : 'user_cancelled'),
         updated_at: new Date().toISOString()
       })
       .eq('id', appointment_id);
@@ -286,7 +303,7 @@ Deno.serve(async (req) => {
             provider_payment_id: paymentId || null,
             event_date: new Date().toISOString(),
             description: 'Estorno de Aula via ' + (providerName === 'asaas' ? 'Asaas' : 'Stripe'),
-            metadata: { provider: providerName, note: 'student_cancelled' }
+            metadata: { provider: providerName, note: actor === 'instructor' ? 'instructor_cancelled' : 'student_cancelled' }
           }, { onConflict: 'appointment_id,type' });
 
         if (refundTxErr) {
@@ -300,7 +317,18 @@ Deno.serve(async (req) => {
     }
 
     // 7. Send Notification
-    if (appointment.instructor_id) {
+    if (actor === 'instructor' && appointment.student_id) {
+      try {
+        await NotificationService.sendBookingCancelled({
+          userId: appointment.student_id,
+          isInstructor: false,
+          comboCount: 1,
+          groupId: appointment.group_id || appointment.id
+        });
+      } catch (notifErr) {
+        console.error(`⚠️ Error creating notification for cancelled booking:`, notifErr);
+      }
+    } else if (actor === 'student' && appointment.instructor_id) {
       try {
         await NotificationService.sendBookingCancelled({
           userId: appointment.instructor_id,
