@@ -170,11 +170,30 @@ Deno.serve(async (req) => {
           if (isPaid) {
             const refundValue = appointment.price / 100;
             
-            // Extract and validate splits for Asaas payments
-            console.log("[ASAAS PAYMENT RAW]", JSON.stringify(paymentData, null, 2));
-            console.log("[ASAAS SPLITS RAW]", JSON.stringify(paymentData.splits, null, 2));
+            // Fetch splits from official endpoint GET /v3/payments/splits/paid?paymentId={paymentId}
+            console.log(`[Asaas] Fetching splits for payment ${paymentId}`);
+            const splitsRes = await fetch(`${asaasApiUrl}/payments/splits/paid?paymentId=${paymentId}`, {
+              method: 'GET',
+              headers: {
+                'access_token': asaasApiKey,
+                'Content-Type': 'application/json'
+              }
+            });
 
-            const splits = paymentData.splits || [];
+            console.log(`[ASAAS SPLITS HTTP STATUS] ${splitsRes.status}`);
+
+            let splits: any[] = [];
+            if (splitsRes.ok) {
+              const splitsData = await splitsRes.json();
+              splits = splitsData.data || [];
+            } else {
+              const errText = await splitsRes.text();
+              console.error(`❌ Failed to retrieve paid splits for payment ${paymentId}: ${errText}`);
+            }
+
+            console.log(`[ASAAS SPLITS QUANTITY] ${splits.length}`);
+            console.log(`[ASAAS SPLITS FOUND IDS] ${JSON.stringify(splits.map(s => s?.id))}`);
+
             const hasSplits = Array.isArray(splits) && splits.length > 0;
             const splitRefunds: Array<{ id: string; value: number }> = [];
 
@@ -240,15 +259,6 @@ Deno.serve(async (req) => {
               }
             }
 
-            // Print temporary logs for audit requirements (avoiding sensitive keys/secrets)
-            console.log(`[ASAAS REFUND AUDIT]
-- Payment ID: ${paymentId}
-- Has Splits: ${hasSplits}
-- Total Splits Found: ${Array.isArray(splits) ? splits.length : 0}
-- Active Splits Processed: ${splitRefunds.length}
-- Found Split IDs: ${JSON.stringify(splitRefunds.map(sr => sr.id))}
-- GET Payment HTTP Status: ${paymentRes.status}`);
-
             // Construct the refund payload
             const refundPayload: Record<string, any> = {
               value: refundValue,
@@ -259,7 +269,9 @@ Deno.serve(async (req) => {
               refundPayload.splitRefunds = splitRefunds;
             }
 
-            console.log(`[Asaas Refund] Issuing refund of ${refundValue} for payment ${paymentId}. Payload: ${JSON.stringify(refundPayload)}`);
+            console.log(`[ASAAS REFUND PAYLOAD] ${JSON.stringify(refundPayload)}`);
+
+            console.log(`[Asaas Refund] Issuing refund of ${refundValue} for payment ${paymentId}.`);
             const refundRes = await fetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
               method: 'POST',
               headers: {
@@ -269,7 +281,7 @@ Deno.serve(async (req) => {
               body: JSON.stringify(refundPayload)
             });
 
-            console.log(`[ASAAS REFUND AUDIT] POST Refund HTTP Status: ${refundRes.status}`);
+            console.log(`[ASAAS POST REFUND HTTP STATUS] ${refundRes.status}`);
 
             if (!refundRes.ok) {
               const errText = await refundRes.text();
