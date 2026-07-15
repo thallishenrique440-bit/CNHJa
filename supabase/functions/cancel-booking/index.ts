@@ -169,22 +169,76 @@ Deno.serve(async (req) => {
         if (!installmentId) {
           if (isPaid) {
             const refundValue = appointment.price / 100;
-            console.log(`[Asaas Refund] Issuing partial refund of ${refundValue} for payment ${paymentId}`);
+            
+            // Extract and validate splits for Asaas payments
+            const splits = paymentData.splits || [];
+            const hasSplits = Array.isArray(splits) && splits.length > 0;
+            const splitRefunds: Array<{ id: string; value: number }> = [];
+
+            if (hasSplits) {
+              for (const s of splits) {
+                if (s && s.id && s.walletId) {
+                  // Check if status is active (e.g. not canceled, not refunded)
+                  const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
+                  if (isActive) {
+                    let splitRefundValue = 0;
+                    if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                      const ratio = paymentData.value ? (refundValue / paymentData.value) : 1;
+                      splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
+                    } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
+                      splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
+                    }
+
+                    // Limit split refund to the split's actual fixed value if available
+                    if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                      splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
+                    }
+
+                    if (splitRefundValue > 0) {
+                      splitRefunds.push({
+                        id: s.id,
+                        value: splitRefundValue
+                      });
+                    }
+                  }
+                }
+              }
+            }
+
+            // Print temporary logs for audit requirements (avoiding sensitive keys/secrets)
+            console.log(`[ASAAS REFUND AUDIT]
+- Payment ID: ${paymentId}
+- Has Splits: ${hasSplits}
+- Total Splits Found: ${Array.isArray(splits) ? splits.length : 0}
+- Active Splits Processed: ${splitRefunds.length}
+- Found Split IDs: ${JSON.stringify(splitRefunds.map(sr => sr.id))}
+- GET Payment HTTP Status: ${paymentRes.status}`);
+
+            // Construct the refund payload
+            const refundPayload: Record<string, any> = {
+              value: refundValue,
+              description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
+            };
+
+            if (splitRefunds.length > 0) {
+              refundPayload.splitRefunds = splitRefunds;
+            }
+
+            console.log(`[Asaas Refund] Issuing refund of ${refundValue} for payment ${paymentId}. Payload: ${JSON.stringify(refundPayload)}`);
             const refundRes = await fetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
               method: 'POST',
               headers: {
                 'access_token': asaasApiKey,
                 'Content-Type': 'application/json'
               },
-              body: JSON.stringify({
-                value: refundValue,
-                description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
-              })
+              body: JSON.stringify(refundPayload)
             });
+
+            console.log(`[ASAAS REFUND AUDIT] POST Refund HTTP Status: ${refundRes.status}`);
 
             if (!refundRes.ok) {
               const errText = await refundRes.text();
-              console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
+              console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${errText}`);
               throw new Error(`Asaas refund failed: ${errText}`);
             }
             console.log(`✅ Asaas payment ${paymentId} partially refunded successfully.`);
