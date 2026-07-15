@@ -171,36 +171,71 @@ Deno.serve(async (req) => {
             const refundValue = appointment.price / 100;
             
             // Extract and validate splits for Asaas payments
+            console.log("[ASAAS PAYMENT RAW]", JSON.stringify(paymentData, null, 2));
+            console.log("[ASAAS SPLITS RAW]", JSON.stringify(paymentData.splits, null, 2));
+
             const splits = paymentData.splits || [];
             const hasSplits = Array.isArray(splits) && splits.length > 0;
             const splitRefunds: Array<{ id: string; value: number }> = [];
 
             if (hasSplits) {
               for (const s of splits) {
-                if (s && s.id && s.walletId) {
-                  // Check if status is active (e.g. not canceled, not refunded)
-                  const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
-                  if (isActive) {
-                    let splitRefundValue = 0;
-                    if (s.fixedValue !== undefined && s.fixedValue !== null) {
-                      const ratio = paymentData.value ? (refundValue / paymentData.value) : 1;
-                      splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
-                    } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
-                      splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
-                    }
+                if (!s) {
+                  console.log(`[ASAAS SPLIT LOG] s is null/undefined`);
+                  continue;
+                }
+                const hasIdAndWallet = !!(s.id && s.walletId);
+                const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
+                
+                console.log(`[ASAAS SPLIT ITEM]`, {
+                  id: s.id,
+                  walletId: s.walletId,
+                  fixedValue: s.fixedValue,
+                  percentualValue: s.percentualValue,
+                  status: s.status,
+                  isActive: isActive,
+                  hasIdAndWallet: hasIdAndWallet
+                });
 
-                    // Limit split refund to the split's actual fixed value if available
-                    if (s.fixedValue !== undefined && s.fixedValue !== null) {
-                      splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
-                    }
+                if (!hasIdAndWallet) {
+                  console.log(`[ASAAS SPLIT DISCARDED] Split missing s.id or s.walletId. s.id: ${s.id}, s.walletId: ${s.walletId}`);
+                  continue;
+                }
 
-                    if (splitRefundValue > 0) {
-                      splitRefunds.push({
-                        id: s.id,
-                        value: splitRefundValue
-                      });
-                    }
+                if (!isActive) {
+                  console.log(`[ASAAS SPLIT DISCARDED] Split s.id: ${s.id} is not active. Status: ${s.status}`);
+                  continue;
+                }
+
+                let splitRefundValue = 0;
+                if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                  const ratio = paymentData.value ? (refundValue / paymentData.value) : 1;
+                  splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
+                  console.log(`[ASAAS SPLIT CALCULATION] Calculated splitRefundValue by fixedValue: ${splitRefundValue} (s.fixedValue: ${s.fixedValue}, ratio: ${ratio})`);
+                } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
+                  splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
+                  console.log(`[ASAAS SPLIT CALCULATION] Calculated splitRefundValue by percentualValue: ${splitRefundValue} (s.percentualValue: ${s.percentualValue}%, refundValue: ${refundValue})`);
+                } else {
+                  console.log(`[ASAAS SPLIT DISCARDED] Split s.id: ${s.id} has no fixedValue or percentualValue`);
+                }
+
+                // Limit split refund to the split's actual fixed value if available
+                if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                  const limitedValue = Math.min(splitRefundValue, s.fixedValue);
+                  if (limitedValue !== splitRefundValue) {
+                    console.log(`[ASAAS SPLIT CALCULATION] Limited splitRefundValue from ${splitRefundValue} to ${limitedValue} (s.fixedValue: ${s.fixedValue})`);
                   }
+                  splitRefundValue = limitedValue;
+                }
+
+                if (splitRefundValue <= 0) {
+                  console.log(`[ASAAS SPLIT DISCARDED] Split s.id: ${s.id} splitRefundValue <= 0 (${splitRefundValue})`);
+                } else {
+                  console.log(`[ASAAS SPLIT ACCEPTED] s.id: ${s.id}, value: ${splitRefundValue}`);
+                  splitRefunds.push({
+                    id: s.id,
+                    value: splitRefundValue
+                  });
                 }
               }
             }
