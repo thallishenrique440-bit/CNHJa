@@ -164,43 +164,36 @@ Deno.serve(async (req) => {
 
         const paymentData = await paymentRes.json();
 
-        // ======================================================
-        // START TEMPORARY FORENSIC AUDIT
+        // =================================================
+        // START PAYMENT SPLIT INSPECTION
         // REMOVE AFTER INVESTIGATION
-        // NO BUSINESS LOGIC CHANGED
-        // ======================================================
-        console.log("================== FORENSIC AUDIT START ==================");
-        console.log(`1. Payment ID: ${paymentId}`);
-        console.log(`2. HTTP Status: ${paymentRes.status}`);
-        console.log(`3. Object Keys: ${JSON.stringify(Object.keys(paymentData || {}))}`);
-        console.log(`4. typeof paymentData: ${typeof paymentData}`);
-        console.log(`5. paymentData.object: ${paymentData?.object}`);
-        console.log(`6. paymentData.status: ${paymentData?.status}`);
-        console.log(`7. paymentData.billingType: ${paymentData?.billingType}`);
-        console.log(`8. paymentData.value: ${paymentData?.value}`);
-        console.log(`9. paymentData.netValue: ${paymentData?.netValue}`);
-        
-        const hasSplit = paymentData && "split" in paymentData;
-        const hasSplits = paymentData && "splits" in paymentData;
-        console.log(`10. Has 'split' property: ${hasSplit}`);
-        console.log(`11. Has 'splits' property: ${hasSplits}`);
-        
-        if (hasSplit) {
-          console.log(`12. paymentData.split: ${JSON.stringify(paymentData.split, null, 2)}`);
+        // =================================================
+
+        console.log("[PAYMENT SPLIT EXISTS]", "split" in paymentData);
+
+        console.log("[PAYMENT SPLIT TYPE]", typeof paymentData.split);
+
+        console.log("[PAYMENT SPLIT RAW]");
+        console.log(JSON.stringify(paymentData.split, null, 2));
+
+        if (Array.isArray(paymentData.split)) {
+          console.log("[PAYMENT SPLIT LENGTH]", paymentData.split.length);
+
+          paymentData.split.forEach((item, index) => {
+            console.log(`===== SPLIT ${index} =====`);
+            console.log(JSON.stringify(item, null, 2));
+
+            console.log("KEYS:", Object.keys(item));
+
+            Object.entries(item).forEach(([k,v])=>{
+              console.log(`${k}: ${JSON.stringify(v)}`);
+            });
+          });
         }
-        if (hasSplits) {
-          console.log(`13. paymentData.splits: ${JSON.stringify(paymentData.splits, null, 2)}`);
-        }
-        if (!hasSplit && !hasSplits) {
-          console.log("split field not found");
-        }
-        
-        console.log("14. Full JSON Payload from Asaas API:");
-        console.log(JSON.stringify(paymentData, null, 2));
-        console.log("=================== FORENSIC AUDIT END ===================");
-        // ======================================================
-        // END TEMPORARY FORENSIC AUDIT
-        // ======================================================
+
+        // =================================================
+        // END PAYMENT SPLIT INSPECTION
+        // =================================================
 
         const installmentId = paymentData.installment;
         isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
@@ -211,27 +204,31 @@ Deno.serve(async (req) => {
             
             // Fetch splits from official endpoint GET /v3/payments/splits/paid?paymentId={paymentId}
             console.log(`[Asaas] Fetching splits for payment ${paymentId}`);
-            const splitsRes = await fetch(`${asaasApiUrl}/payments/splits/paid?paymentId=${paymentId}`, {
-              method: 'GET',
-              headers: {
-                'access_token': asaasApiKey,
-                'Content-Type': 'application/json'
-              }
+            
+            // =================================================
+            // START TEMPORARY FORENSIC TEST
+            // =================================================
+            console.log("========================");
+            console.log("FORENSIC TEST");
+            console.log("PAYMENTDATA.SPLIT");
+            console.log("========================");
+
+            const splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+            console.log("Quantidade de itens:", splits.length);
+
+            splits.forEach((item: any, index: number) => {
+              console.log(`===== ITEM ${index} =====`);
+              console.log("id:", item?.id);
+              console.log("walletId:", item?.walletId);
+              console.log("fixedValue:", item?.fixedValue);
+              console.log("percentualValue:", item?.percentualValue);
+              console.log("totalValue:", item?.totalValue);
+              console.log("status:", item?.status);
+              console.log("description:", item?.description);
             });
-
-            console.log(`[ASAAS SPLITS HTTP STATUS] ${splitsRes.status}`);
-
-            let splits: any[] = [];
-            if (splitsRes.ok) {
-              const splitsData = await splitsRes.json();
-              splits = splitsData.data || [];
-            } else {
-              const errText = await splitsRes.text();
-              console.error(`❌ Failed to retrieve paid splits for payment ${paymentId}: ${errText}`);
-            }
-
-            console.log(`[ASAAS SPLITS QUANTITY] ${splits.length}`);
-            console.log(`[ASAAS SPLITS FOUND IDS] ${JSON.stringify(splits.map(s => s?.id))}`);
+            // =================================================
+            // END TEMPORARY FORENSIC TEST
+            // =================================================
 
             const hasSplits = Array.isArray(splits) && splits.length > 0;
             const splitRefunds: Array<{ id: string; value: number }> = [];
@@ -308,7 +305,16 @@ Deno.serve(async (req) => {
               refundPayload.splitRefunds = splitRefunds;
             }
 
-            console.log(`[ASAAS REFUND PAYLOAD] ${JSON.stringify(refundPayload)}`);
+            // =================================================
+            // START TEMPORARY FORENSIC TEST
+            // =================================================
+            console.log("SplitRefunds gerado:");
+            console.log(JSON.stringify(splitRefunds, null, 2));
+            console.log("Payload enviado ao endpoint de refund:");
+            console.log(JSON.stringify(refundPayload, null, 2));
+            // =================================================
+            // END TEMPORARY FORENSIC TEST
+            // =================================================
 
             console.log(`[Asaas Refund] Issuing refund of ${refundValue} for payment ${paymentId}.`);
             const refundRes = await fetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
