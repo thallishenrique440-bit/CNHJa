@@ -163,6 +163,45 @@ Deno.serve(async (req) => {
         }
 
         const paymentData = await paymentRes.json();
+
+        // ======================================================
+        // START TEMPORARY FORENSIC AUDIT
+        // REMOVE AFTER INVESTIGATION
+        // NO BUSINESS LOGIC CHANGED
+        // ======================================================
+        console.log("================== FORENSIC AUDIT START ==================");
+        console.log(`1. Payment ID: ${paymentId}`);
+        console.log(`2. HTTP Status: ${paymentRes.status}`);
+        console.log(`3. Object Keys: ${JSON.stringify(Object.keys(paymentData || {}))}`);
+        console.log(`4. typeof paymentData: ${typeof paymentData}`);
+        console.log(`5. paymentData.object: ${paymentData?.object}`);
+        console.log(`6. paymentData.status: ${paymentData?.status}`);
+        console.log(`7. paymentData.billingType: ${paymentData?.billingType}`);
+        console.log(`8. paymentData.value: ${paymentData?.value}`);
+        console.log(`9. paymentData.netValue: ${paymentData?.netValue}`);
+        
+        const hasSplit = paymentData && "split" in paymentData;
+        const hasSplits = paymentData && "splits" in paymentData;
+        console.log(`10. Has 'split' property: ${hasSplit}`);
+        console.log(`11. Has 'splits' property: ${hasSplits}`);
+        
+        if (hasSplit) {
+          console.log(`12. paymentData.split: ${JSON.stringify(paymentData.split, null, 2)}`);
+        }
+        if (hasSplits) {
+          console.log(`13. paymentData.splits: ${JSON.stringify(paymentData.splits, null, 2)}`);
+        }
+        if (!hasSplit && !hasSplits) {
+          console.log("split field not found");
+        }
+        
+        console.log("14. Full JSON Payload from Asaas API:");
+        console.log(JSON.stringify(paymentData, null, 2));
+        console.log("=================== FORENSIC AUDIT END ===================");
+        // ======================================================
+        // END TEMPORARY FORENSIC AUDIT
+        // ======================================================
+
         const installmentId = paymentData.installment;
         isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
 
