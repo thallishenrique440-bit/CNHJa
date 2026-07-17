@@ -44,8 +44,7 @@ async function ensureConfig() {
   try {
     const edgeUrl = `${supabaseUrl}/functions/v1`;
     await supabaseAdmin.from('notification_config').upsert([
-      { key: 'edge_function_url', value: edgeUrl },
-      { key: 'service_role_key', value: supabaseServiceKey }
+      { key: 'edge_function_url', value: edgeUrl }
     ]);
     isConfigured = true;
   } catch (err) {
