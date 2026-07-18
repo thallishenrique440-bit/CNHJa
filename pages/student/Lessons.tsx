@@ -675,7 +675,7 @@ export const StudentLessons: React.FC = () => {
 
     } catch (err: any) {
        console.error("Error finalizing lesson:", err);
-       addToast("Erro ao finalizar a aula: " + err.message, 'error');
+       addToast("Erro ao avaliar a aula: " + err.message, 'error');
     } finally {
         setIsSubmittingTip(false);
         setIsFinalizing(false);
@@ -1175,7 +1175,7 @@ export const StudentLessons: React.FC = () => {
       case 'in_progress': 
         return <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 animate-pulse">Em andamento</span>;
       case 'awaiting_completion':
-        return <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">Aguardando finalização</span>;
+        return <span className="text-xs font-medium text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100">Aula concluída</span>;
       case 'completed': 
         return <span className="text-xs font-medium text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100">Aula concluída</span>;
       case 'expired':
@@ -1365,7 +1365,7 @@ export const StudentLessons: React.FC = () => {
                             onClick={() => startFinalization(group)}
                             className="text-xs px-4 py-2 h-8 min-h-0 shadow-sm"
                             >
-                            {group.status === 'completed' ? 'Avaliar aula' : 'Finalizar aula'}
+                            Avaliar aula
                             </Button>
                         )}
 
@@ -1665,7 +1665,7 @@ export const StudentLessons: React.FC = () => {
         title={
             flowStep === 'rating' ? "Como foi a aula?" :
             flowStep === 'tip' ? "Quer reconhecer o trabalho do seu instrutor?" :
-            "Aula finalizada!"
+            "Aula concluída!"
         }
         footer={null}
       >

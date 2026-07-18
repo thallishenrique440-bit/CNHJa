@@ -778,29 +778,32 @@ export const InstructorFinance: React.FC = () => {
             <span className="text-4xl font-bold block mb-1">
                 {loading ? '...' : formatCurrency(monthlyRevenue)}
             </span>
-            <p className="text-[10px] text-indigo-200 font-medium mb-4">Valor líquido após taxas</p>
+            <p className="text-[10px] text-indigo-200 font-medium mb-4">Valor líquido recebido após taxas</p>
             
             {/* Seção de detalhamento do mês */}
-            <div className="pt-4 border-t border-indigo-500/50 space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-indigo-200">Recebido em aulas</span>
-                <span className="font-semibold">{loading ? '...' : formatCurrency(lessonMonthRevenue)}</span>
-              </div>
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-indigo-200">Recebido em caixinhas</span>
-                <span className="font-semibold">{loading ? '...' : formatCurrency(tipMonthRevenue)}</span>
+            <div className="pt-4 border-t border-indigo-500/50">
+              <div className="grid grid-cols-2 text-center">
+                <div className="flex flex-col items-center justify-center border-r border-indigo-500/30">
+                  <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider mb-0.5">Aulas</span>
+                  <span className="text-sm font-semibold">{loading ? '...' : formatCurrency(lessonMonthRevenue)}</span>
+                </div>
+                <div className="flex flex-col items-center justify-center">
+                  <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider mb-0.5">Caixinhas</span>
+                  <span className="text-sm font-semibold">{loading ? '...' : formatCurrency(tipMonthRevenue)}</span>
+                </div>
               </div>
             </div>
 
-            {/* Parte inferior do card (Ganhos Totais e Total em Caixinhas) */}
+            {/* Parte inferior do card (Ganhos Totais na Plataforma) */}
             <div className="pt-4 mt-4 border-t border-indigo-500/50 space-y-2">
-              <div className="flex justify-between items-center">
-                <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider">Ganhos totais</span>
-                <span className="text-sm font-bold">{loading ? '...' : formatCurrency(totalRevenue)}</span>
+              <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider block mb-1">Ganhos Totais na Plataforma</span>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-indigo-200">Ganhos em aulas</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(lessonTotalRevenue)}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider">Total em caixinhas</span>
-                <span className="text-sm font-bold">{loading ? '...' : formatCurrency(tipTotalRevenue)}</span>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-indigo-200">Ganhos em caixinhas</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(tipTotalRevenue)}</span>
               </div>
             </div>
           </div>

@@ -480,8 +480,8 @@ END;
 $$;
 
 -- 5. RPC to auto-complete lessons that have passed
--- Threshold: end_time + 3 hours < now
--- Since we don't have end_time, we use (date + start_time) + 60 mins + 3 hours = 240 minutes
+-- Threshold: current time >= lesson end time in Brazil timezone
+-- Excludes pending reschedules
 CREATE OR REPLACE FUNCTION public.auto_complete_lessons()
 RETURNS integer
 LANGUAGE plpgsql
@@ -489,7 +489,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  updated_count integer;
+  updated_count integer := 0;
 BEGIN
   -- 1. Update Appointments
   UPDATE public.appointments
@@ -497,8 +497,9 @@ BEGIN
     status = 'completed',
     updated_at = now()
   WHERE 
-    status = 'confirmed' 
-    AND (date + start_time) < (now() - interval '240 minutes');
+    status IN ('confirmed', 'scheduled')
+    AND reschedule_requested_at IS NULL
+    AND now() >= ((date + end_time) AT TIME ZONE 'America/Sao_Paulo');
     
   GET DIAGNOSTICS updated_count = ROW_COUNT;
 

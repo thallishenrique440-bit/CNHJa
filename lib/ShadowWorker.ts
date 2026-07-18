@@ -405,6 +405,9 @@ export async function startShadowWorker() {
   // Kick off the loop
   pollCycle();
 
+  // Start the background Auto Complete Lessons worker side-by-side
+  startAutoCompleteLessonsWorker();
+
   // Handle OS process termination gracefully
   const gracefulShutdown = () => {
     if (!isRunning) return;
@@ -426,6 +429,53 @@ export async function startShadowWorker() {
     process.once('SIGTERM', gracefulShutdown);
     areListenersRegistered = true;
   }
+}
+
+let isAutoCompleteRunning = false;
+
+export async function runAutoCompleteLessons() {
+  if (isAutoCompleteRunning) return;
+  isAutoCompleteRunning = true;
+
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return;
+    }
+
+    if (!supabaseAdmin) {
+      supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false
+        }
+      });
+    }
+
+    const { data: updatedCount, error } = await supabaseAdmin.rpc('auto_complete_lessons');
+
+    if (error) {
+      console.error('[AutoCompleteWorker] Error executing auto_complete_lessons RPC:', error);
+    } else if (updatedCount && updatedCount > 0) {
+      console.log(`[AutoCompleteWorker] Automatically completed ${updatedCount} lessons.`);
+    }
+  } catch (err) {
+    console.error('[AutoCompleteWorker] Unhandled error in auto-complete worker:', err);
+  } finally {
+    isAutoCompleteRunning = false;
+  }
+}
+
+export function startAutoCompleteLessonsWorker() {
+  const intervalMs = 60000; // Check every 60 seconds
+  
+  // Run once immediately
+  runAutoCompleteLessons();
+
+  const intervalId = setInterval(runAutoCompleteLessons, intervalMs);
+  return intervalId;
 }
 
 // Support executing directly as a standalone process (e.g., via tsx)

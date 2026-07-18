@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -104,12 +105,15 @@ const getProcessLabel = (val?: string) => {
 };
 
 export const InstructorAgenda: React.FC = () => {
+  const navigate = useNavigate();
   const { session, signOut, serverTimeOffset } = useAuth();
   const { addToast } = useToast();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [nightLessonsEnabled, setNightLessonsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [showIncompleteProfileModal, setShowIncompleteProfileModal] = useState(false);
+  const [isProfileComplete, setIsProfileComplete] = useState<boolean | null>(null);
   
   // Agenda Config State
   const [lunchConfig, setLunchConfig] = useState<LunchConfig>({
@@ -201,6 +205,29 @@ export const InstructorAgenda: React.FC = () => {
     };
     fetchSettings();
   }, [session]);
+
+  // FETCH PROFILE COMPLETENESS FROM DB
+  useEffect(() => {
+    const fetchProfileStatus = async () => {
+      if (!session?.user?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('is_profile_complete')
+          .eq('id', session.user.id)
+          .single();
+        if (!error && data) {
+          setIsProfileComplete(!!data.is_profile_complete);
+        } else {
+          setIsProfileComplete(false);
+        }
+      } catch (err) {
+        console.error("Error fetching profile completeness:", err);
+        setIsProfileComplete(false);
+      }
+    };
+    fetchProfileStatus();
+  }, [session?.user?.id]);
 
   const generateKey = (date: Date, time: string) => {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${time}`;
@@ -748,10 +775,33 @@ export const InstructorAgenda: React.FC = () => {
 
   const toggleBlock = async (time: string, action: 'block' | 'unblock', lessonId?: string) => {
      setLoading(true);
-     const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
-     const key = generateKey(selectedDate, time);
 
      try {
+       // Validate profile completion using state or fallback
+       let complete = isProfileComplete;
+       if (complete === null) {
+         const { data: profile, error: profileErr } = await supabase
+           .from('profiles')
+           .select('is_profile_complete')
+           .eq('id', session?.user?.id)
+           .single();
+         if (!profileErr && profile) {
+           complete = !!profile.is_profile_complete;
+           setIsProfileComplete(complete);
+         } else {
+           complete = false;
+         }
+       }
+
+       if (!complete) {
+         setLoading(false);
+         setShowIncompleteProfileModal(true);
+         return;
+       }
+
+       const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+       const key = generateKey(selectedDate, time);
+
        if (action === 'block') {
           const [h, m] = time.split(':').map(Number);
           const endMins = h * 60 + m + LESSON_DURATION;
@@ -1358,11 +1408,11 @@ export const InstructorAgenda: React.FC = () => {
               showDot: true 
             },
             past_pending: { 
-              label: "Pendente de Finalização", 
-              borderColor: "border-l-amber-500", 
-              bgColor: "bg-amber-50/50", 
-              textColor: "text-amber-800",
-              showDot: true 
+              label: "Concluída", 
+              borderColor: "border-l-emerald-500", 
+              bgColor: "bg-emerald-50/30", 
+              textColor: "text-emerald-700",
+              showDot: false 
             },
             confirmed: { 
               label: "Confirmada", 
@@ -1669,30 +1719,18 @@ export const InstructorAgenda: React.FC = () => {
                     
                     // Visibility Rules
                     const showNoShow = now >= lessonStart && now <= new Date(lessonStart.getTime() + 10 * 60000);
-                    const showCompleted = now >= lessonEnd && now <= new Date(lessonEnd.getTime() + 120 * 60000);
 
-                    if (showNoShow || showCompleted) {
+                    if (showNoShow) {
                         return (
                             <div className="w-full space-y-3">
-                                {showNoShow && (
-                                    <Button 
-                                        fullWidth 
-                                        variant="outline" 
-                                        onClick={handleNoShow}
-                                        className="border-red-200 text-red-600 hover:bg-red-50"
-                                    >
-                                        Marcar Falta
-                                    </Button>
-                                )}
-                                {showCompleted && (
-                                    <Button 
-                                        fullWidth 
-                                        onClick={handleFinalizeLesson}
-                                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                    >
-                                        Aula Realizada
-                                    </Button>
-                                )}
+                                <Button 
+                                    fullWidth 
+                                    variant="outline" 
+                                    onClick={handleNoShow}
+                                    className="border-red-200 text-red-600 hover:bg-red-50"
+                                >
+                                    Marcar Falta
+                                </Button>
                             </div>
                         );
                     }
@@ -2010,6 +2048,34 @@ export const InstructorAgenda: React.FC = () => {
                  <strong>Domingos:</strong> Por padrão, domingos são dias de folga e não permitem agendamentos.
               </p>
            </div>
+        </div>
+      </Modal>
+      <Modal
+        isOpen={showIncompleteProfileModal}
+        onClose={() => setShowIncompleteProfileModal(false)}
+        title="Perfil Incompleto"
+        footer={
+          <div className="w-full">
+            <Button 
+              fullWidth 
+              onClick={() => {
+                setShowIncompleteProfileModal(false);
+                navigate('/instructor/profile');
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white shadow-blue-100"
+            >
+              Completar Perfil
+            </Button>
+          </div>
+        }
+      >
+        <div className="text-center py-4">
+          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+            👤
+          </div>
+          <p className="text-sm text-gray-600 leading-relaxed">
+            Complete seu perfil para ativar sua agenda. Enquanto seu perfil profissional não estiver concluído, você não poderá bloquear horários nem receber agendamentos.
+          </p>
         </div>
       </Modal>
       <InstructorBottomNav />

@@ -2237,18 +2237,23 @@ export const StudentInstructorProfile: React.FC = () => {
               <button
                 type="button"
                 id="payment-method-pix"
+                aria-label="Pagamento via Pix"
                 onClick={() => {
                   setSelectedPaymentMethod('PIX');
                   setSelectedInstallmentCount(1);
                 }}
                 className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all cursor-pointer ${
                   selectedPaymentMethod === 'PIX'
-                    ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold'
+                    ? 'border-blue-600 bg-blue-50/50 text-blue-900'
                     : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
                 }`}
               >
-                <span className="text-2xl mb-1">📱</span>
-                <span className="text-sm font-medium">PIX</span>
+                <img 
+                  src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%2018%20de%20jul.%20de%202026,%2016_03_47.png" 
+                  alt="Pix Logo" 
+                  className="h-10 w-auto object-contain"
+                  referrerPolicy="no-referrer"
+                />
               </button>
 
               <button
