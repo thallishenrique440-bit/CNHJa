@@ -519,12 +519,11 @@ export const StudentInstructorProfile: React.FC = () => {
           }
         }
 
-        // 5. Fetch total completed lessons
-        const { count: lessonsTaughtCount, error: countError } = await supabase
-          .from('appointments')
-          .select('*', { count: 'exact', head: true })
-          .eq('instructor_id', id)
-          .eq('status', 'completed');
+        // 5. Fetch total completed lessons via secure RPC (Hardening Fase 1.5)
+        const { data: lessonsTaughtCount, error: countError } = await supabase
+          .rpc('get_instructor_lessons_count', {
+            p_instructor_id: id
+          });
 
         if (countError) console.error("Error fetching lessons count:", countError);
 
@@ -621,15 +620,15 @@ export const StudentInstructorProfile: React.FC = () => {
          const dateKey = getDateKey(selectedDate);
          
          try {
-             // 1. Query all appointments for this instructor on this date
-             const { data: instructorData, error: instructorError } = await supabase
-                .from('appointments')
-                .select('start_time, status, student_id')
-                .eq('instructor_id', instructor.id)
-                .eq('date', dateKey)
-                .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
+             // 1. Query all appointments availability via secure RPC
+             const { data: availabilityData, error: availabilityError } = await supabase
+                .rpc('get_instructor_availability', {
+                    p_instructor_id: instructor.id,
+                    p_start_date: dateKey,
+                    p_end_date: dateKey
+                });
 
-             if (instructorError) throw instructorError;
+             if (availabilityError) throw availabilityError;
 
              // 2. Query all appointments for the student on this date (to prevent double booking)
              const { data: studentData, error: studentError } = await supabase
@@ -644,13 +643,13 @@ export const StudentInstructorProfile: React.FC = () => {
              const busySlotsSet = new Set<string>();
              let existingCount = 0;
 
-             if (instructorData) {
-                 instructorData.forEach(apt => {
+             if (availabilityData) {
+                 availabilityData.forEach((slot: any) => {
                      // Allow the student to retry booking their own abandoned checkouts
-                     if ((apt.status === 'awaiting_payment' || apt.status === 'reserved') && apt.student_id === session.user.id) {
+                     if (slot.status === 'my_reservation') {
                          return; // Do not mark as busy
                      }
-                     busySlotsSet.add(apt.start_time.substring(0, 5));
+                     busySlotsSet.add(slot.start_time.substring(0, 5));
                  });
              }
              
@@ -1084,7 +1083,7 @@ export const StudentInstructorProfile: React.FC = () => {
              price = (isNight && instructor!.hasNightLessons) ? instructor!.priceNight : instructor!.priceDay;
          }
 
-         // Calculate end time (50 mins later)
+         // Calculate end time using the official LESSON_DURATION
          const [h, m] = timeStr.split(':').map(Number);
          const endDate = new Date();
          endDate.setHours(h, m + LESSON_DURATION, 0, 0);
@@ -1166,12 +1165,12 @@ export const StudentInstructorProfile: React.FC = () => {
       // Refresh slots
       const dateKey = getDateKey(selectedDate);
       
-      const { data: refreshedInstructorData } = await supabase
-         .from('appointments')
-         .select('start_time, status, student_id')
-         .eq('instructor_id', instructor!.id)
-         .eq('date', dateKey)
-         .not('status', 'in', '("cancelled","failed","rejected","expired")');
+      const { data: refreshedAvailabilityData } = await supabase
+         .rpc('get_instructor_availability', {
+             p_instructor_id: instructor!.id,
+             p_start_date: dateKey,
+             p_end_date: dateKey
+         });
          
       const { data: refreshedStudentData } = await supabase
          .from('appointments')
@@ -1181,12 +1180,12 @@ export const StudentInstructorProfile: React.FC = () => {
          .not('status', 'in', '("cancelled","failed","rejected","expired")');
 
       const busySlotsSet = new Set<string>();
-      if (refreshedInstructorData) {
-          refreshedInstructorData.forEach(apt => {
-              if ((apt.status === 'awaiting_payment' || apt.status === 'reserved') && apt.student_id === session?.user?.id) {
+      if (refreshedAvailabilityData) {
+          refreshedAvailabilityData.forEach((slot: any) => {
+              if (slot.status === 'my_reservation') {
                   return;
               }
-              busySlotsSet.add(apt.start_time.substring(0, 5));
+              busySlotsSet.add(slot.start_time.substring(0, 5));
           });
       }
       if (refreshedStudentData) {

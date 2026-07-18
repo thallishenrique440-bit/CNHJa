@@ -838,12 +838,14 @@ export const StudentLessons: React.FC = () => {
         }
 
         // Fetch busy slots
-        const { data: instructorData } = await supabase
-          .from('appointments')
-          .select('id, start_time, status, student_id')
-          .eq('instructor_id', lessonToReschedule.instructorId)
-          .eq('date', dateKey)
-          .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
+        const { data: availabilityData, error: availabilityError } = await supabase
+          .rpc('get_instructor_availability', {
+            p_instructor_id: lessonToReschedule.instructorId,
+            p_start_date: dateKey,
+            p_end_date: dateKey
+          });
+
+        if (availabilityError) throw availabilityError;
 
         const { data: studentData } = await supabase
           .from('appointments')
@@ -852,12 +854,28 @@ export const StudentLessons: React.FC = () => {
           .eq('date', dateKey)
           .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
 
+        const originalDateStr = lessonToReschedule.date instanceof Date 
+          ? lessonToReschedule.date.toISOString().split('T')[0]
+          : new Date(lessonToReschedule.date).toISOString().split('T')[0];
+
+        const originalSlots = new Set<string>();
+        if (dateKey === originalDateStr) {
+          const [h, m] = lessonToReschedule.time.split(':').map(Number);
+          for (let i = 0; i < lessonToReschedule.count; i++) {
+            const slotTime = new Date();
+            slotTime.setHours(h, m + (i * LESSON_DURATION), 0, 0);
+            const slotTimeStr = `${String(slotTime.getHours()).padStart(2, '0')}:${String(slotTime.getMinutes()).padStart(2, '0')}`;
+            originalSlots.add(slotTimeStr);
+          }
+        }
+
         const busySlotsSet = new Set<string>();
-        if (instructorData) {
-          instructorData.forEach(apt => {
-            // Don't mark as busy if it's one of the appointments we are rescheduling
-            if (lessonToReschedule.ids.includes(apt.id)) return;
-            busySlotsSet.add(apt.start_time.substring(0, 5));
+        if (availabilityData) {
+          availabilityData.forEach((slot: any) => {
+            const timeKey = slot.start_time.substring(0, 5);
+            // Don't mark as busy if it's one of the slots we are rescheduling on the same day
+            if (dateKey === originalDateStr && originalSlots.has(timeKey)) return;
+            busySlotsSet.add(timeKey);
           });
         }
         if (studentData) {
@@ -893,31 +911,31 @@ export const StudentLessons: React.FC = () => {
         throw new Error("Não é possível reagendar para um horário no passado.");
       }
 
-      // 2. Double check availability
-      const { data: conflict } = await supabase
-        .from('appointments')
-        .select('id')
-        .eq('instructor_id', lessonToReschedule.instructorId)
-        .eq('date', dateKey)
-        .eq('start_time', rescheduleTime)
-        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment'])
-        .not('id', 'in', `(${lessonToReschedule.ids.join(',')})`)
-        .maybeSingle();
+      // 2. Double check availability using secure RPC (Hardening Fase 2)
+      const { data: hasConflict, error: conflictError } = await supabase
+        .rpc('check_appointment_conflict', {
+          p_instructor_id: lessonToReschedule.instructorId,
+          p_date: dateKey,
+          p_start_time: rescheduleTime,
+          p_exclude_appointment_ids: lessonToReschedule.ids
+        });
 
-      if (conflict) {
+      if (conflictError) throw conflictError;
+
+      if (hasConflict) {
         throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
       }
       
       // If it's a group, we need to update all appointments in sequence
-      // For simplicity, we'll assume they are back-to-back 50min slots
+      // For simplicity, we'll assume they are back-to-back slots
       const updates = lessonToReschedule.ids.map((id, index) => {
         const [h, m] = rescheduleTime.split(':').map(Number);
         const startTime = new Date(rescheduleDate);
-        startTime.setHours(h, m + (index * 50), 0, 0);
+        startTime.setHours(h, m + (index * LESSON_DURATION), 0, 0);
         const startTimeStr = `${String(startTime.getHours()).padStart(2, '0')}:${String(startTime.getMinutes()).padStart(2, '0')}:00`;
         
         const endTime = new Date(rescheduleDate);
-        endTime.setHours(h, m + ((index + 1) * 50), 0, 0);
+        endTime.setHours(h, m + ((index + 1) * LESSON_DURATION), 0, 0);
         const endTimeStr = `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}:00`;
 
         return supabase

@@ -148,14 +148,14 @@ export const InstructorAgenda: React.FC = () => {
     try {
       const dateStr = date.toISOString().split('T')[0];
       const { data, error } = await supabase
-        .from('appointments')
-        .select('start_time')
-        .eq('instructor_id', session.user.id)
-        .eq('date', dateStr)
-        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment']);
+        .rpc('get_instructor_availability', {
+          p_instructor_id: session.user.id,
+          p_start_date: dateStr,
+          p_end_date: dateStr
+        });
 
       if (error) throw error;
-      setBusySlotsForReschedule(data.map(d => d.start_time.substring(0, 5)));
+      setBusySlotsForReschedule((data || []).map((d: any) => d.start_time.substring(0, 5)));
     } catch (error: any) {
       addToast(error.message, 'error');
     } finally {
