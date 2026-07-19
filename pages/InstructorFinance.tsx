@@ -271,7 +271,7 @@ export const InstructorFinance: React.FC = () => {
 
     if (/android/i.test(userAgent)) {
       // Android: Native intent with built-in browser fallback to Play Store
-      const intentUri = `intent://#Intent;scheme=asaas;package=asaas.asaas;S.browser_fallback_url=${encodeURIComponent(playStoreUrl)};end`;
+      const intentUri = `intent://#Intent;package=asaas.asaas;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;S.browser_fallback_url=${encodeURIComponent(playStoreUrl)};end`;
       window.location.href = intentUri;
     } else if (/iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream) {
       // iOS: Try to open with custom scheme, fallback to App Store after a delay
