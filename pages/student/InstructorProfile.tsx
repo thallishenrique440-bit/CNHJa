@@ -865,45 +865,13 @@ export const StudentInstructorProfile: React.FC = () => {
       return; 
     }
 
-    const dailySlots = newSlots.filter(s => s.startsWith(dateKey));
-    if (dailySlots.length + existingLessonsCount > 3) {
-      addToast("Você pode agendar no máximo 3 aulas por dia com este instrutor.", 'warning');
-      return; 
-    }
-
-    const sortedMinutes = dailySlots
-      .map(s => timeToMinutes(s.split('|')[1]))
-      .sort((a, b) => a - b);
-    
-    let hasTriplet = false;
-
-    for (let i = 0; i < sortedMinutes.length - 2; i++) {
-       if (
-         sortedMinutes[i] + LESSON_DURATION === sortedMinutes[i+1] && 
-         sortedMinutes[i+1] + LESSON_DURATION === sortedMinutes[i+2]
-       ) {
-         hasTriplet = true;
-         break;
-       }
-    }
-
-    if (hasTriplet) {
-      addToast("Não é permitido agendar 3 aulas consecutivas sem intervalo.", 'warning');
-      return; 
-    }
-
     setSelectedSlots(newSlots);
   };
 
   const limits = useMemo(() => {
-    const dateKey = getDateKey(selectedDate);
-    const dailySlots = selectedSlots.filter(s => s.startsWith(dateKey));
-    
     const isGlobalLimitReached = selectedSlots.length >= 20;
-    const isDailyLimitReached = dailySlots.length + existingLessonsCount >= 3;
-
-    return { isGlobalLimitReached, isDailyLimitReached };
-  }, [selectedSlots, selectedDate, existingLessonsCount]);
+    return { isGlobalLimitReached };
+  }, [selectedSlots]);
 
   const startingPrice = useMemo(() => {
     if (!instructor) return 0;
@@ -1782,7 +1750,7 @@ export const StudentInstructorProfile: React.FC = () => {
                       }
                   }
 
-                  const isDisabled = !isAvailable || isPastTime || (limits.isDailyLimitReached && !isSelected);
+                  const isDisabled = !isAvailable || isPastTime;
 
                   return (
                     <button
@@ -2244,16 +2212,17 @@ export const StudentInstructorProfile: React.FC = () => {
                 }}
                 className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all cursor-pointer ${
                   selectedPaymentMethod === 'PIX'
-                    ? 'border-blue-600 bg-blue-50/50 text-blue-900'
+                    ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold'
                     : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
                 }`}
               >
                 <img 
-                  src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/ChatGPT%20Image%2018%20de%20jul.%20de%202026,%2016_03_47.png" 
+                  src="https://ohftsqsxymtrclnpadam.supabase.co/storage/v1/object/public/assets/bdcee2f4-04a4-4475-af95-6ac93d64bbde/PIX.png" 
                   alt="Pix Logo" 
-                  className="h-10 w-auto object-contain"
+                  className="h-10 w-auto object-contain mb-1"
                   referrerPolicy="no-referrer"
                 />
+                <span className="text-sm font-medium">PIX</span>
               </button>
 
               <button
