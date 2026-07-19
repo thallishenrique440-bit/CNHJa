@@ -228,6 +228,7 @@ export const InstructorFinance: React.FC = () => {
   const [submittingAsaas, setSubmittingAsaas] = useState(false);
   const [cepLoading, setCepLoading] = useState(false);
   const [syncingAsaas, setSyncingAsaas] = useState(false);
+  const [showOnboardingSuccessModal, setShowOnboardingSuccessModal] = useState(false);
 
   // Form Fields
   const [cpfCnpj, setCpfCnpj] = useState('');
@@ -262,30 +263,46 @@ export const InstructorFinance: React.FC = () => {
   };
 
   const handleOpenAsaasApp = () => {
-    const now = Date.now();
     const playStoreUrl = "https://play.google.com/store/apps/details?id=com.asaas.android";
     const appStoreUrl = "https://apps.apple.com/br/app/asaas-conta-digital-pj/id1040854613";
-    const officialDownloadUrl = "https://www.asaas.com/aplicativo-asaas";
+    const officialSiteUrl = "https://www.asaas.com";
 
     const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
-    let fallbackUrl = officialDownloadUrl;
-    let deepLink = "asaas://";
 
     if (/android/i.test(userAgent)) {
-      fallbackUrl = playStoreUrl;
-      deepLink = "intent://#Intent;scheme=asaas;package=com.asaas.android;end";
+      // Android: Native intent with built-in browser fallback to Play Store
+      const intentUri = `intent://#Intent;scheme=asaas;package=com.asaas.android;S.browser_fallback_url=${encodeURIComponent(playStoreUrl)};end`;
+      window.location.href = intentUri;
     } else if (/iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream) {
-      fallbackUrl = appStoreUrl;
-      deepLink = "asaas://";
+      // iOS: Try to open with custom scheme, fallback to App Store after a delay
+      let fallbackTimer: any;
+
+      // Intelligent cancellation of the fallback if the app successfully opens (losing browser focus)
+      const clearFallback = () => {
+        if (fallbackTimer) {
+          clearTimeout(fallbackTimer);
+        }
+      };
+
+      // 1. Register event listeners first to eliminate any potential race condition
+      window.addEventListener('visibilitychange', clearFallback, { once: true });
+      window.addEventListener('pagehide', clearFallback, { once: true });
+      window.addEventListener('blur', clearFallback, { once: true });
+
+      // 2. Trigger the app opening via deep link
+      window.location.href = "asaas://";
+
+      // 3. Start the fallback timer
+      fallbackTimer = setTimeout(() => {
+        // If the browser hasn't lost focus or hidden, redirect to the App Store
+        if (!document.hidden) {
+          window.location.href = appStoreUrl;
+        }
+      }, 1500);
+    } else {
+      // Desktop: Open the official Asaas website in a new tab
+      window.open(officialSiteUrl, '_blank');
     }
-
-    window.location.href = deepLink;
-
-    setTimeout(() => {
-      if (Date.now() - now < 2000) {
-        window.open(fallbackUrl, '_blank');
-      }
-    }, 1500);
   };
 
   const loadData = async () => {
@@ -703,6 +720,7 @@ export const InstructorFinance: React.FC = () => {
 
       addToast('Conta Asaas configurada com sucesso!', 'success');
       setIsAsaasModalOpen(false);
+      setShowOnboardingSuccessModal(true);
       
       // Auto reload data
       await loadData();
@@ -1357,6 +1375,65 @@ export const InstructorFinance: React.FC = () => {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={showOnboardingSuccessModal}
+        onClose={() => setShowOnboardingSuccessModal(false)}
+        title="🎉 Sua conta Asaas foi criada com sucesso!"
+      >
+        <div className="space-y-4 text-sm text-gray-600 leading-relaxed text-left">
+          <p className="font-medium text-gray-900">
+            Agora falta apenas finalizar a configuração da sua conta para começar a receber automaticamente pelas aulas agendadas no CNHJá.
+          </p>
+
+          <div className="space-y-2.5">
+            <h4 className="font-semibold text-gray-800">Próximos passos</h4>
+            <ul className="space-y-2">
+              <li className="flex items-start gap-2">
+                <span className="shrink-0">✅</span>
+                <span>Confirme sua conta pelo e-mail enviado pelo Asaas.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="shrink-0">✅</span>
+                <span>Cadastre uma chave PIX para receber seus repasses automaticamente.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="shrink-0">✅</span>
+                <span>Solicite gratuitamente seu cartão Asaas e aproveite todos os benefícios da conta digital.</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="font-semibold text-gray-800">Importante</h4>
+            <p>
+              Após aceitar uma aula ou um combo, o processo de repasse acontece automaticamente para a sua conta Asaas, conforme as regras da plataforma.
+            </p>
+            <p>
+              Quanto antes concluir a configuração da sua conta, mais rápido você poderá receber seus pagamentos.
+            </p>
+          </div>
+
+          <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl flex gap-2">
+            <span className="text-base shrink-0">💡</span>
+            <div>
+              <span className="font-semibold text-blue-900">Dica: </span>
+              <span className="text-blue-800">Caso não encontre o e-mail do Asaas, verifique também sua caixa de spam ou lixo eletrônico.</span>
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => setShowOnboardingSuccessModal(false)}
+              className="w-full py-3.5 text-xs font-semibold"
+            >
+              Entendi
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       <InstructorBottomNav />
