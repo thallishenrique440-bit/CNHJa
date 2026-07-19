@@ -223,39 +223,7 @@ Deno.serve(async (req: any) => {
       )
     }
 
-    // 7.8 Verificar limite de aulas por dia (Máximo 3 por instrutor)
-    const requestedSlotsByDate: Record<string, number> = {};
-    for (const slot of slots) {
-      requestedSlotsByDate[slot.date] = (requestedSlotsByDate[slot.date] || 0) + 1;
-    }
 
-    const { data: existingAppointments, error: existingAppointmentsError } = await supabaseAdmin
-      .from('appointments')
-      .select('date')
-      .eq('student_id', user.id)
-      .eq('instructor_id', instructor_id)
-      .in('date', Object.keys(requestedSlotsByDate))
-      .not('status', 'in', '("cancelled","failed","rejected","expired")');
-
-    if (existingAppointmentsError) throw existingAppointmentsError;
-
-    const existingSlotsByDate: Record<string, number> = {};
-    if (existingAppointments) {
-      for (const apt of existingAppointments) {
-        existingSlotsByDate[apt.date] = (existingSlotsByDate[apt.date] || 0) + 1;
-      }
-    }
-
-    for (const date of Object.keys(requestedSlotsByDate)) {
-      const existing = existingSlotsByDate[date] || 0;
-      const requested = requestedSlotsByDate[date];
-      if (existing + requested > 3) {
-        return new Response(
-          JSON.stringify({ error: 'Você pode agendar no máximo 3 aulas por dia com este instrutor.' }),
-          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-      }
-    }
 
     // 8. Buscar dados do instrutor e CONTA STRIPE
     // REMOVIDO: base_price, night_price (agora buscamos em instructor_categories)
@@ -305,25 +273,7 @@ Deno.serve(async (req: any) => {
     let totalPrice = 0;
     const groupId = crypto.randomUUID();
     
-    // Find earliest slot
-    let earliestSlotDateTime = new Date(`${slots[0].date}T${slots[0].time}:00-03:00`);
-    for (const slot of slots) {
-      const slotDateTime = new Date(`${slot.date}T${slot.time}:00-03:00`);
-      if (slotDateTime.getTime() < earliestSlotDateTime.getTime()) {
-        earliestSlotDateTime = slotDateTime;
-      }
-    }
-
-    const firstSlotTime = earliestSlotDateTime.getTime();
-    const nowTime = Date.now();
-    const diffMinutes = (firstSlotTime - nowTime) / (1000 * 60);
-
-    let reservationExpiresAt: string;
-    if (diffMinutes > 20) {
-      reservationExpiresAt = new Date(firstSlotTime - 20 * 60 * 1000).toISOString();
-    } else {
-      reservationExpiresAt = new Date(nowTime + 2 * 60 * 1000).toISOString();
-    } 
+    const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); 
 
     // Preparar inserts com PREÇO CALCULADO NO BACKEND
     const appointmentsToInsert = slots.map((slot: any) => {

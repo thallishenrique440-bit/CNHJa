@@ -60,16 +60,6 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Limite máximo de 20 aulas por agendamento excedido.' });
   }
 
-  // Validation for daily limits
-  const lessonsByDate: Record<string, number> = {};
-  for (const lesson of lessons) {
-    const date = lesson.date;
-    lessonsByDate[date] = (lessonsByDate[date] || 0) + 1;
-    if (lessonsByDate[date] > 3) {
-      return res.status(400).json({ error: `Limite diário de 3 aulas excedido para a data ${date}.` });
-    }
-  }
-
   try {
     // 1. Fetch instructor details (including generic provider details)
     const { data: instructor, error: instructorError } = await supabase
@@ -351,25 +341,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
     // Create group_id
     const groupId = uuidv4();
     
-    // Find the chronologically first lesson in the combo or single booking
-    let earliestLessonDateTime = new Date(`${lessons[0].date}T${lessons[0].startTime}:00-03:00`);
-    for (const lesson of lessons) {
-      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
-      if (lessonDateTime.getTime() < earliestLessonDateTime.getTime()) {
-        earliestLessonDateTime = lessonDateTime;
-      }
-    }
-
-    const firstLessonTime = earliestLessonDateTime.getTime();
-    const nowTime = now.getTime();
-    const firstLessonDiffMinutes = (firstLessonTime - nowTime) / (1000 * 60);
-
-    let expiresAt: string;
-    if (firstLessonDiffMinutes > 20) {
-      expiresAt = new Date(firstLessonTime - 20 * 60 * 1000).toISOString();
-    } else {
-      expiresAt = new Date(nowTime + 2 * 60 * 1000).toISOString();
-    }
+    const expiresAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
 
     // 3.5 Double check availability for ALL lessons in the batch
     for (const lesson of lessons) {
