@@ -20,7 +20,7 @@ async function checkProfiles() {
   for (const id of studentIds) {
     const { data: profile, error } = await supabase
       .from('profiles')
-      .select('id, full_name, email, phone, cpf, stripe_customer_id, provider_customer_id, provider_name')
+      .select('id, full_name, email, phone, cpf, provider_customer_id, provider_name')
       .eq('id', id)
       .maybeSingle();
 
@@ -34,7 +34,6 @@ async function checkProfiles() {
       console.log(`  E-mail: "${profile.email}"`);
       console.log(`  Telefone: "${profile.phone}"`);
       console.log(`  CPF: "${profile.cpf}"`);
-      console.log(`  Stripe Customer ID: "${profile.stripe_customer_id}"`);
       console.log(`  Provider Customer ID (Asaas): "${profile.provider_customer_id}"`);
       console.log(`  Provider Name configurado: "${profile.provider_name}"`);
       console.log('-------------------------');
@@ -44,7 +43,7 @@ async function checkProfiles() {
   // Buscar primeiro instrutor
   const { data: instructors, error: instError } = await supabase
     .from('instructors')
-    .select('id, user_id, name, stripe_account_id, provider_account_id, provider_wallet_id, provider_name')
+    .select('id, user_id, name, provider_account_id, provider_wallet_id, provider_name')
     .limit(3);
 
   if (instError) {
@@ -54,7 +53,6 @@ async function checkProfiles() {
     instructors.forEach(inst => {
       console.log(`Instrutor (${inst.id}):`);
       console.log(`  Nome: "${inst.name}"`);
-      console.log(`  Stripe Account ID: "${inst.stripe_account_id}"`);
       console.log(`  Provider Account ID (Asaas): "${inst.provider_account_id}"`);
       console.log(`  Provider Wallet ID (Asaas): "${inst.provider_wallet_id}"`);
       console.log(`  Provider Name: "${inst.provider_name}"`);

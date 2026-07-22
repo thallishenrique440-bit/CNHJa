@@ -3,14 +3,8 @@ project_id = "ohftsqsxymtrclnpadam"
 [functions.create-booking]
 verify_jwt = false
 
-[functions.create-stripe-account]
-verify_jwt = false
-
 [functions.create-asaas-account]
 verify_jwt = false
 
 [functions.send-push-notification]
-verify_jwt = false
-
-[functions.stripe-webhook-platform]
 verify_jwt = false

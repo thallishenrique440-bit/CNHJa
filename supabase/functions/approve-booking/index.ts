@@ -1,20 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check"
 import { NotificationService } from '../_shared/NotificationService.ts'
-
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
-  apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
-  telemetry: false,
-})
-
-// Abstração local do orchestrator compatível com as restrições de Deno Edge Functions
-class PaymentProviderResolver {
-  static resolveProviderForAppointment(appointmentId: string): string {
-    const defaultProvider = Deno.env.get("DEFAULT_PAYMENT_PROVIDER");
-    return defaultProvider === "asaas" || defaultProvider === "stripe" ? defaultProvider : "stripe";
-  }
-}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -96,10 +81,10 @@ Deno.serve(async (req) => {
         throw new Error('Este combo não pode mais ser aceito pois um ou mais horários foram alterados ou já processados.');
       }
 
-      // VALIDATION: All must share the same PaymentIntent
+      // VALIDATION: All must share the same Payment ID
       const piIds = new Set(groupAppointments.map(a => a.provider_payment_id || a.payment_intent_id));
       if (piIds.size > 1) {
-        console.error('CRITICAL: Group has multiple PaymentIntents:', Array.from(piIds));
+        console.error('CRITICAL: Group has multiple Payment IDs:', Array.from(piIds));
         throw new Error('Erro de integridade: O combo possui múltiplos IDs de pagamento.');
       }
 
@@ -144,28 +129,6 @@ Deno.serve(async (req) => {
           appointment_id: apt.id,
           reason: "start_time_passed"
         }));
-        
-        // Resolve provider dynamically
-        const providerName = appointment.provider_name || PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
-
-        // 1. Cancel PaymentIntent with metadata for reason
-        try {
-          if (providerName === 'stripe') {
-            await stripe.paymentIntents.update(paymentId, {
-              metadata: { cancellation_reason: 'auto_expired_start_time' }
-            });
-
-            await stripe.paymentIntents.cancel(paymentId, {
-              idempotencyKey: `auto_expire_group_${appointment.group_id || appointment.id}`
-            });
-          } else {
-             console.log(`Auto expire for non-Stripe provider ${providerName}`);
-          }
-        } catch (stripeError: any) {
-          if (stripeError.code !== 'payment_intent_unexpected_state') {
-            console.error('Failed to cancel payment during auto-expiration:', stripeError)
-          }
-        }
 
         return new Response(
           JSON.stringify({ error: 'Uma ou mais aulas deste combo já expiraram e não podem mais ser aceitas.', code: 'AUTH_EXPIRED' }),
@@ -174,179 +137,98 @@ Deno.serve(async (req) => {
       }
     }
 
-    const providerName = appointment.provider_name || PaymentProviderResolver.resolveProviderForAppointment(appointment.id);
+    console.log(`[Asaas Approve] Direct DB update for group: ${appointment.group_id || appointment.id}`);
+    
+    const groupId = appointment.group_id;
 
-    if (providerName === 'asaas') {
-      console.log(`[Asaas Approve] Direct DB update for group: ${appointment.group_id || appointment.id}`);
-      
-      const groupId = appointment.group_id;
+    let updateResult;
+    if (groupId) {
+      updateResult = await adminClient
+        .from('appointments')
+        .update({
+          status: 'confirmed',
+          payment_status: 'paid',
+          updated_at: new Date().toISOString()
+        })
+        .eq('group_id', groupId)
+        .in('status', ['pending_approval', 'pending', 'awaiting_payment'])
+        .select('id, student_id');
+    } else {
+      updateResult = await adminClient
+        .from('appointments')
+        .update({
+          status: 'confirmed',
+          payment_status: 'paid',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', appointment.id)
+        .in('status', ['pending_approval', 'pending', 'awaiting_payment'])
+        .select('id, student_id');
+    }
 
-      let updateResult;
-      if (groupId) {
-        updateResult = await adminClient
-          .from('appointments')
-          .update({
-            status: 'confirmed',
-            payment_status: 'paid',
-            updated_at: new Date().toISOString()
-          })
-          .eq('group_id', groupId)
-          .in('status', ['pending_approval', 'pending', 'awaiting_payment'])
-          .select('id, student_id');
-      } else {
-        updateResult = await adminClient
-          .from('appointments')
-          .update({
-            status: 'confirmed',
-            payment_status: 'paid',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', appointment.id)
-          .in('status', ['pending_approval', 'pending', 'awaiting_payment'])
-          .select('id, student_id');
-      }
+    if (updateResult.error) {
+      console.error(`❌ Error confirming Asaas appointments:`, updateResult.error.message);
+      throw updateResult.error;
+    }
 
-      if (updateResult.error) {
-        console.error(`❌ Error confirming Asaas appointments:`, updateResult.error.message);
-        throw updateResult.error;
-      }
+    const approvedIds = updateResult.data ? updateResult.data.map((apt: any) => apt.id) : [];
 
-      const approvedIds = updateResult.data ? updateResult.data.map((apt: any) => apt.id) : [];
-
-      // Update the transaction status from pending to completed
-      try {
-        if (approvedIds.length > 0) {
-          const { error: updateTxErr } = await adminClient
-            .from('transactions')
-            .update({ status: 'completed' })
-            .in('appointment_id', approvedIds)
-            .eq('type', 'lesson_payment')
-            .eq('provider_name', 'asaas');
-
-          if (updateTxErr) {
-            console.error(`❌ Error completing Asaas transactions for approvedIds ${approvedIds.join(', ')}:`, updateTxErr.message);
-          } else {
-            console.log(`✅ [Asaas Approve] Successfully completed pending transactions for approvedIds: ${approvedIds.join(', ')}`);
-          }
-        } else {
-          console.warn(`⚠️ [Asaas Approve] No appointments were actually updated/confirmed, skipping transactions update.`);
-        }
-      } catch (txErr) {
-        console.error(`⚠️ [Asaas Approve] Unexpected error updating transactions:`, txErr);
-      }
-
-      // Create notification for the student
-      if (appointment.student_id) {
-        try {
-          await NotificationService.sendBookingAccepted({
-            studentId: appointment.student_id,
-            comboCount: appointmentsToApprove.length || 1,
-            groupId: appointment.group_id || appointment.id
-          });
-        } catch (notifErr: any) {
-          console.error('[FORENSIC] Notification Exception');
-          console.error(notifErr);
-          console.error(JSON.stringify(notifErr, null, 2));
-          if (notifErr instanceof Error || (notifErr && typeof notifErr === 'object' && ('message' in notifErr || 'name' in notifErr))) {
-            console.error({
-              name: notifErr.name,
-              message: notifErr.message,
-              stack: notifErr.stack
-            });
-          }
-          console.error(`⚠️ Error creating confirmation notification:`, notifErr);
-        }
-      }
-
+    if (approvedIds.length === 0) {
+      console.warn(`⚠️ [Asaas Approve] Race condition detected or status changed. 0 appointments updated for appointment ${appointment.id} / group ${groupId}`);
       return new Response(
         JSON.stringify({ 
-          message: 'Aula confirmada com sucesso.', 
-          status: 'confirmed',
-          count: appointmentsToApprove.length,
-          appointment: { ...appointment, status: 'confirmed', payment_status: 'paid' }
+          error: 'O estado do agendamento foi alterado por outra operação durante o processamento. Nenhuma alteração foi realizada.', 
+          code: 'STATE_CONFLICT' 
         }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    console.log(JSON.stringify({
-      event: "approve_group_start",
-      provider_name: providerName,
-      group_id: appointment.group_id,
-      status: appointment.status,
-      group_size: appointmentsToApprove.length,
-      payment_id: paymentId
-    }));
-
-    // 4. Act: Capture Funds
-    let capturedIntent
+    // Update the transaction status from pending to completed
     try {
-      if (providerName === 'stripe') {
-        capturedIntent = await stripe.paymentIntents.capture(
-          paymentId,
-          {
-            idempotencyKey: `capture_group_${appointment.group_id || appointment.id}`,
-          }
-        )
-      } else {
-        // Safe placeholder for modular integration of alternative providers
-        capturedIntent = { status: 'succeeded' };
-      }
-    } catch (stripeError: any) {
-      console.error('Payment Capture Error:', stripeError)
+      const { error: updateTxErr } = await adminClient
+        .from('transactions')
+        .update({ status: 'completed' })
+        .in('appointment_id', approvedIds)
+        .eq('type', 'lesson_payment');
 
-      // Robust Error Handling: Retrieve status explicitly
-      if (stripeError.code === 'payment_intent_unexpected_state') {
-        const retrievedIntent = await stripe.paymentIntents.retrieve(paymentId)
-        
-        if (retrievedIntent.status === 'succeeded') {
-          // Already captured (race condition or previous retry). Proceed.
-          capturedIntent = retrievedIntent
-          console.log('Payment was already succeeded. Proceeding.')
-        } else if (retrievedIntent.status === 'canceled') {
-           // Auth expired. 
-           // We NO LONGER update the database here. The Webhook will handle it.
-           // But we can ensure the metadata is correct if it wasn't already.
-           try {
-             await stripe.paymentIntents.update(paymentId, {
-               metadata: { cancellation_reason: 'auth_expired' }
-             });
-           } catch (e) {
-             console.warn('Could not update metadata for expired PI:', e);
-           }
-           
-           return new Response(
-            JSON.stringify({ 
-              error: 'Payment authorization expired. Appointments will be cancelled.',
-              code: 'AUTH_EXPIRED'
-            }),
-            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          )
-        } else {
-          // Other states (e.g. requires_payment_method)
-          throw stripeError
-        }
+      if (updateTxErr) {
+        console.error(`❌ Error completing Asaas transactions for approvedIds ${approvedIds.join(', ')}:`, updateTxErr.message);
       } else {
-        throw stripeError
+        console.log(`✅ [Asaas Approve] Successfully completed pending transactions for approvedIds: ${approvedIds.join(', ')}`);
       }
+    } catch (txErr) {
+      console.error(`⚠️ [Asaas Approve] Unexpected error updating transactions:`, txErr);
     }
 
-    // 5. Return Success (Capture Initiated)
-    // We NO LONGER update the database here to avoid race conditions with the Webhook.
-    // The Webhook (payment_intent.succeeded) is now the single source of truth for confirmation.
-    console.log(JSON.stringify({
-      event: "approve_group_capture_initiated",
-      provider_name: providerName,
-      group_id: appointment.group_id,
-      payment_id: paymentId,
-      count: appointmentsToApprove.length
-    }));
+    // Create notification for the student
+    if (appointment.student_id) {
+      try {
+        await NotificationService.sendBookingAccepted({
+          studentId: appointment.student_id,
+          comboCount: appointmentsToApprove.length || 1,
+          groupId: appointment.group_id || appointment.id
+        });
+      } catch (notifErr: any) {
+        console.error('[FORENSIC] Notification Exception');
+        console.error(notifErr);
+        if (notifErr instanceof Error || (notifErr && typeof notifErr === 'object' && ('message' in notifErr || 'name' in notifErr))) {
+          console.error({
+            name: notifErr.name,
+            message: notifErr.message,
+            stack: notifErr.stack
+          });
+        }
+        console.error(`⚠️ Error creating confirmation notification:`, notifErr);
+      }
+    }
 
     return new Response(
       JSON.stringify({ 
-        message: 'Captura de pagamento iniciada. A confirmação será processada em instantes.', 
-        status: 'processing',
-        count: appointmentsToApprove.length
+        message: 'Aula confirmada com sucesso.', 
+        status: 'confirmed',
+        count: appointmentsToApprove.length,
+        appointment: { ...appointment, status: 'confirmed', payment_status: 'paid' }
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

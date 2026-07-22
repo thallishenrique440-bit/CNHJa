@@ -23,7 +23,7 @@ interface Transaction {
   net_amount: number;
   status: 'pending' | 'completed' | 'failed';
   appointment_id?: string;
-  stripe_payout_id?: string;
+  provider_payout_id?: string;
   provider_payment_id?: string;
   profiles: {
     full_name: string;
@@ -63,7 +63,7 @@ interface HistoryItem {
   netAmount?: number;
   status: string;
   studentName: string;
-  stripePayoutId?: string;
+  providerPayoutId?: string;
   appointmentStatus?: string;
   appointmentDate?: string;
   appointmentTime?: string;
@@ -350,7 +350,7 @@ export const InstructorFinance: React.FC = () => {
                 net_amount,
                 status,
                 appointment_id,
-                stripe_payout_id,
+                provider_payout_id,
                 provider_payment_id,
                 profiles ( full_name ),
                 appointments (
@@ -453,7 +453,7 @@ export const InstructorFinance: React.FC = () => {
                         netAmount: t.net_amount,
                         status: t.status,
                         studentName: t.profiles?.full_name || 'Aluno',
-                        stripePayoutId: t.stripe_payout_id
+                        providerPayoutId: t.provider_payout_id
                     });
                 }
             } else {
@@ -469,7 +469,7 @@ export const InstructorFinance: React.FC = () => {
                     netAmount: t.net_amount,
                     status: t.status,
                     studentName: t.profiles?.full_name || 'Aluno',
-                    stripePayoutId: t.stripe_payout_id
+                    providerPayoutId: t.provider_payout_id
                 });
             }
         });
@@ -503,7 +503,7 @@ export const InstructorFinance: React.FC = () => {
                     netAmount: t.net_amount,
                     status: t.status,
                     studentName: t.profiles?.full_name || 'Aluno',
-                    stripePayoutId: t.stripe_payout_id
+                    providerPayoutId: t.provider_payout_id
                 });
             } else {
                 const sortedGroup = [...transactionsInGroup].sort(
@@ -543,7 +543,7 @@ export const InstructorFinance: React.FC = () => {
                     netAmount: totalNet,
                     status: latestTrans.status,
                     studentName: latestTrans.profiles?.full_name || 'Aluno',
-                    stripePayoutId: latestTrans.stripe_payout_id,
+                    providerPayoutId: latestTrans.provider_payout_id,
                     isCombo: true,
                     lessonCount: sortedGroup.length,
                     lessons: subLessons,
@@ -1030,7 +1030,7 @@ export const InstructorFinance: React.FC = () => {
                                           <span className="text-[10px] text-gray-400">
                                               {item.status === 'pending' && 'Pendente'}
                                               {item.status === 'completed' && (
-                                                  item.stripePayoutId 
+                                                  item.providerPayoutId 
                                                       ? 'Transferido' 
                                                       : <span className="text-green-600 font-bold">Concluído</span>
                                               )}
@@ -1131,7 +1131,7 @@ export const InstructorFinance: React.FC = () => {
                                       <span className="text-[10px] text-gray-400">
                                           {item.status === 'pending' && 'Pendente'}
                                           {item.status === 'completed' && (
-                                              item.stripePayoutId 
+                                              item.providerPayoutId 
                                                   ? 'Transferido' 
                                                   : <span className="text-green-600 font-bold">Concluído</span>
                                           )}

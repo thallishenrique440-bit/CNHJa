@@ -450,7 +450,7 @@ export const InstructorAgenda: React.FC = () => {
                     const isTechnical = 
                       apt.cancelled_reason === 'user_retry_new_attempt' ||
                       apt.cancelled_reason === 'system_cleanup_expired' ||
-                      apt.cancelled_reason === 'stripe_creation_failed';
+                      apt.cancelled_reason === 'payment_creation_failed';
                     
                     if (isTechnical) {
                         uiStatus = null;

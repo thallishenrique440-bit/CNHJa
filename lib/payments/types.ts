@@ -76,7 +76,7 @@ export interface AccountStatusResponseDTO {
 
 export interface PaymentSplitRule {
   walletId?: string;       // Wallet ID da subconta Asaas do instrutor
-  accountId?: string;      // Conta Connect id da Stripe do instrutor
+  accountId?: string;      // ID da conta do instrutor
   fixedValue?: number;     // Valor fixo em centavos
   percentualValue?: number;// Valor percentual (ex: 90 para 90% do repasse do instrutor)
 }
@@ -133,7 +133,7 @@ export interface PaymentResponseDTO {
   providerName: ProviderName;
   amount: number; // Em centavos 
   status: 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released';
-  clientSecret?: string | null; // For Stripe hybrid element, or Asaas equivalent
+  clientSecret?: string | null; // For checkout element or payment equivalent
   invoiceUrl?: string | null;   // For Asaas invoice display if needed
   rawResponse: Record<string, unknown>;
 }

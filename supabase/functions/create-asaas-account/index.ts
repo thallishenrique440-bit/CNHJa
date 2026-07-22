@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { asaasFetch } from '../_shared/asaasClient.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -167,12 +168,8 @@ Deno.serve(async (req: Request) => {
     }
 
     console.log(`Sending subaccount request to Asaas API for instructor ${user.id}`);
-    const asaasResponse = await fetch(`${asaasApiUrl}/accounts`, {
+    const asaasResponse = await asaasFetch(`${asaasApiUrl}/accounts`, {
       method: 'POST',
-      headers: {
-        'access_token': asaasApiKey,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify(asaasPayload),
     });
 

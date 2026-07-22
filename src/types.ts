@@ -40,9 +40,6 @@ export interface Profile {
   phone?: string;
   role: 'student' | 'instructor';
   
-  // Legacy Stripe fields
-  stripe_customer_id?: string | null;
-  
   // Generic Payment Provider abstraction fields
   provider_name?: PaymentProvider;
   provider_customer_id?: string | null;
@@ -56,10 +53,6 @@ export interface Instructor {
   is_verified: boolean;
   payouts_enabled: boolean;
   work_saturday_afternoon: boolean;
-  
-  // Legacy Stripe fields
-  stripe_account_id?: string | null;
-  stripe_onboarding_completed?: boolean;
   
   // Generic Payment Provider abstraction fields
   provider_name?: PaymentProvider;
@@ -85,8 +78,6 @@ export interface Appointment {
   purchase_id?: string | null;
   payment_id?: string | null;
   payment_status?: PaymentStatus;
-  
-  // Legacy Stripe fields
   payment_intent_id?: string | null;
   
   // Generic Payment Provider abstraction fields
@@ -109,11 +100,6 @@ export interface FinancialTransaction {
   event_date: string;
   description?: string | null;
   metadata?: Record<string, any> | null;
-  
-  // Legacy Stripe fields
-  stripe_payment_intent_id?: string | null;
-  stripe_transfer_id?: string | null;
-  stripe_payout_id?: string | null;
   
   // Generic Payment Provider abstraction fields
   provider_name?: PaymentProvider;

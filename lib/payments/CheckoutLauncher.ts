@@ -3,7 +3,7 @@
  * 
  * Layer responsible for opening external checkouts safely and compatibly 
  * across Web, Mobile, and Standalone PWA environments.
- * Extensible for any payment gateway (Asaas, Mercado Pago, Stripe, etc.).
+ * Extensible for any payment gateway (Asaas, etc.).
  */
 
 export interface LaunchOptions {
