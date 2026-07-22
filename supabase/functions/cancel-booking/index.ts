@@ -147,52 +147,52 @@ Deno.serve(async (req) => {
       const installmentId = paymentData.installment;
       isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
 
-      if (!installmentId) {
-        if (isPaid) {
-          const refundValue = appointment.price / 100;
-          const splits = Array.isArray(paymentData.split) ? paymentData.split : [];
-          const hasSplits = Array.isArray(splits) && splits.length > 0;
-          const splitRefunds: Array<{ id: string; value: number }> = [];
+      if (isPaid) {
+        const refundValue = appointment.price / 100;
+        const splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+        const hasSplits = Array.isArray(splits) && splits.length > 0;
+        const splitRefunds: Array<{ id: string; value: number }> = [];
 
-          if (hasSplits) {
-            for (const s of splits) {
-              if (!s) continue;
-              const hasIdAndWallet = !!(s.id && s.walletId);
-              const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
+        if (hasSplits) {
+          for (const s of splits) {
+            if (!s) continue;
+            const hasIdAndWallet = !!(s.id && s.walletId);
+            const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
 
-              if (!hasIdAndWallet || !isActive) continue;
+            if (!hasIdAndWallet || !isActive) continue;
 
-              let splitRefundValue = 0;
-              if (s.fixedValue !== undefined && s.fixedValue !== null) {
-                const ratio = paymentData.value ? (refundValue / paymentData.value) : 1;
-                splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
-              } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
-                splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
-              }
+            let splitRefundValue = 0;
+            if (s.fixedValue !== undefined && s.fixedValue !== null) {
+              const ratio = (paymentData.value && paymentData.value > 0) ? (refundValue / paymentData.value) : 1;
+              splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
+            } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
+              splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
+            }
 
-              if (s.fixedValue !== undefined && s.fixedValue !== null) {
-                splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
-              }
+            if (s.fixedValue !== undefined && s.fixedValue !== null) {
+              splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
+            }
 
-              if (splitRefundValue > 0) {
-                splitRefunds.push({
-                  id: s.id,
-                  value: splitRefundValue
-                });
-              }
+            if (splitRefundValue > 0) {
+              splitRefunds.push({
+                id: s.id,
+                value: splitRefundValue
+              });
             }
           }
+        }
 
-          const refundPayload: Record<string, any> = {
-            value: refundValue,
-            description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
-          };
+        const refundPayload: Record<string, any> = {
+          value: refundValue,
+          description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
+        };
 
-          if (splitRefunds.length > 0) {
-            refundPayload.splitRefunds = splitRefunds;
-          }
+        if (splitRefunds.length > 0) {
+          refundPayload.splitRefunds = splitRefunds;
+        }
 
-          console.log(`[Asaas Refund] Issuing refund of ${refundValue} for payment ${paymentId}.`);
+        if (!installmentId) {
+          console.log(`[Asaas Refund] Issuing partial refund of ${refundValue} for payment ${paymentId}. Payload:`, JSON.stringify(refundPayload));
           const refundRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
             method: 'POST',
             body: JSON.stringify(refundPayload)
@@ -205,6 +205,23 @@ Deno.serve(async (req) => {
           }
           console.log(`✅ Asaas payment ${paymentId} partially refunded successfully.`);
         } else {
+          // Installment Flow
+          console.log(`[Asaas Installment Refund] Issuing partial refund of ${refundValue} for installment ${installmentId}. Payload:`, JSON.stringify(refundPayload));
+          const refundRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}/refund`, {
+            method: 'POST',
+            body: JSON.stringify(refundPayload)
+          });
+
+          if (!refundRes.ok) {
+            const errText = await refundRes.text();
+            console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${errText}`);
+            throw new Error(`Asaas installment refund failed: ${errText}`);
+          }
+          console.log(`✅ Asaas installment ${installmentId} partially refunded successfully.`);
+        }
+      } else {
+        // Pending / Unpaid Flow
+        if (!installmentId) {
           console.log(`[Asaas Cancel] Cancelling pending payment ${paymentId}`);
           const cancelRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, {
             method: 'DELETE'
@@ -216,21 +233,6 @@ Deno.serve(async (req) => {
           } else {
             console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
           }
-        }
-      } else {
-        // Installment Flow
-        if (isPaid) {
-          console.log(`[Asaas Installment Refund] Refunding installment ${installmentId}`);
-          const refundRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}/refund`, {
-            method: 'POST'
-          });
-
-          if (!refundRes.ok) {
-            const errText = await refundRes.text();
-            console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${errText}`);
-            throw new Error(`Asaas installment refund failed: ${errText}`);
-          }
-          console.log(`✅ Asaas installment ${installmentId} refunded successfully.`);
         } else {
           console.log(`[Asaas Installment Cancel] Cancelling pending installment ${installmentId}`);
           const cancelRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, {
