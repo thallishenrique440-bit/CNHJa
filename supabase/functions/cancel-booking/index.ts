@@ -144,6 +144,9 @@ Deno.serve(async (req) => {
       }
 
       const paymentData = await paymentRes.json();
+      console.log("========== ASAAS PAYMENT ==========");
+      console.log(JSON.stringify(paymentData, null, 2));
+
       const installmentId = paymentData.installment;
       isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
 
@@ -151,6 +154,7 @@ Deno.serve(async (req) => {
         const refundValue = appointment.price / 100;
         let totalPurchaseValue = paymentData.value || 0;
         let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+        let instData: any = null;
 
         // If this is an installment payment, retrieve total purchase value and splits from the installment resource
         if (installmentId) {
@@ -159,7 +163,10 @@ Deno.serve(async (req) => {
             method: 'GET'
           });
           if (instRes.ok) {
-            const instData = await instRes.json();
+            instData = await instRes.json();
+            console.log("========== ASAAS INSTALLMENT ==========");
+            console.log(JSON.stringify(instData, null, 2));
+
             if (instData.value && instData.value > 0) {
               totalPurchaseValue = instData.value;
             }
@@ -176,12 +183,33 @@ Deno.serve(async (req) => {
           }
         }
 
+        console.log("========== SPLIT SOURCE ==========");
+        if (Array.isArray(instData?.splits) && instData.splits.length > 0) {
+            console.log("SOURCE: installment.splits");
+        } else if (Array.isArray(instData?.split) && instData.split.length > 0) {
+            console.log("SOURCE: installment.split");
+        } else {
+            console.log("SOURCE: payment.split (fallback)");
+        }
+        console.log(JSON.stringify(splits, null, 2));
+
         const hasSplits = Array.isArray(splits) && splits.length > 0;
         const splitRefunds: Array<{ id: string; value: number }> = [];
 
+        console.log("========== SPLITS USED ==========");
         if (hasSplits) {
           for (const s of splits) {
             if (!s) continue;
+
+            console.log({
+                id: s.id,
+                walletId: s.walletId ?? s.wallet_id,
+                fixedValue: s.fixedValue,
+                percentualValue: s.percentualValue,
+                totalValue: s.totalValue,
+                status: s.status
+            });
+
             const hasIdAndWallet = !!(s.id && (s.walletId || s.wallet_id));
             const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
 
@@ -217,6 +245,9 @@ Deno.serve(async (req) => {
           refundPayload.splitRefunds = splitRefunds;
         }
 
+        console.log("========== REFUND PAYLOAD ==========");
+        console.log(JSON.stringify(refundPayload, null, 2));
+
         if (!installmentId) {
           console.log(`[Asaas Refund] Issuing partial refund of ${refundValue} for payment ${paymentId}. Payload:`, JSON.stringify(refundPayload));
           const refundRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
@@ -224,10 +255,14 @@ Deno.serve(async (req) => {
             body: JSON.stringify(refundPayload)
           });
 
+          console.log("========== REFUND RESPONSE ==========");
+          console.log(refundRes.status);
+          const responseBody = await refundRes.text();
+          console.log(responseBody);
+
           if (!refundRes.ok) {
-            const errText = await refundRes.text();
-            console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${errText}`);
-            throw new Error(`Asaas refund failed: ${errText}`);
+            console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${responseBody}`);
+            throw new Error(`Asaas refund failed: ${responseBody}`);
           }
           console.log(`✅ Asaas payment ${paymentId} partially refunded successfully.`);
         } else {
@@ -238,10 +273,14 @@ Deno.serve(async (req) => {
             body: JSON.stringify(refundPayload)
           });
 
+          console.log("========== REFUND RESPONSE ==========");
+          console.log(refundRes.status);
+          const responseBody = await refundRes.text();
+          console.log(responseBody);
+
           if (!refundRes.ok) {
-            const errText = await refundRes.text();
-            console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${errText}`);
-            throw new Error(`Asaas installment refund failed: ${errText}`);
+            console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${responseBody}`);
+            throw new Error(`Asaas installment refund failed: ${responseBody}`);
           }
           console.log(`✅ Asaas installment ${installmentId} partially refunded successfully.`);
         }
