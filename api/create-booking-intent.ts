@@ -383,10 +383,8 @@ providerInstance=${paymentProvider.getProviderName()}`);
           .in('status', ['reserved', 'pending', 'awaiting_payment']);
     }
 
-    // 4. Create appointments in DB (awaiting_payment)
-    const basePrice = Math.floor(finalPrice / lessons.length);
-    const remainder = finalPrice % lessons.length;
-
+    // 4. Create appointments in DB (awaiting_payment) with proportional discount allocation
+    let allocatedSum = 0;
     const appointmentsToInsert = lessons.map((lesson: any, index: number) => {
       // Check if it's last minute (within 20 mins)
       const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
@@ -395,7 +393,19 @@ providerInstance=${paymentProvider.getProviderName()}`);
       const diffMinutes = diffMs / (1000 * 60);
       const isLastMinute = diffMinutes <= 20;
 
-      console.log(`[DEBUG] Creating appointment: Date=${lesson.date}, Time=${lesson.startTime}, UTC=${startTimeUtc}, isLastMinute=${isLastMinute}`);
+      const origPrice = lesson.price || 0;
+      let discountedLessonPrice = 0;
+
+      if (index === lessons.length - 1) {
+        // Last lesson takes exact remainder of finalPrice to guarantee sum(price) === finalPrice
+        discountedLessonPrice = finalPrice - allocatedSum;
+      } else {
+        const itemDiscount = Math.round((discountAmount * origPrice) / (totalBasePrice || 1));
+        discountedLessonPrice = origPrice - itemDiscount;
+        allocatedSum += discountedLessonPrice;
+      }
+
+      console.log(`[DEBUG] Creating appointment: Date=${lesson.date}, Time=${lesson.startTime}, UTC=${startTimeUtc}, origPrice=${origPrice}, discountedPrice=${discountedLessonPrice}, isLastMinute=${isLastMinute}`);
 
       return {
         instructor_id: instructorId,
@@ -406,7 +416,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
         end_time: lesson.endTime,
         category: category,
         status: 'awaiting_payment',
-        price: index < remainder ? basePrice + 1 : basePrice, // Distribute discounted price with remainder adjustment
+        price: discountedLessonPrice, // Proportional net price in cents
         group_id: groupId,
         expires_at: expiresAt,
         created_at: new Date().toISOString(),

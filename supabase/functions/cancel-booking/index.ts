@@ -149,21 +149,47 @@ Deno.serve(async (req) => {
 
       if (isPaid) {
         const refundValue = appointment.price / 100;
-        const splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+        let totalPurchaseValue = paymentData.value || 0;
+        let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+
+        // If this is an installment payment, retrieve total purchase value and splits from the installment resource
+        if (installmentId) {
+          console.log(`[Asaas] Fetching installment details for ${installmentId}`);
+          const instRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, {
+            method: 'GET'
+          });
+          if (instRes.ok) {
+            const instData = await instRes.json();
+            if (instData.value && instData.value > 0) {
+              totalPurchaseValue = instData.value;
+            }
+            if (Array.isArray(instData.splits) && instData.splits.length > 0) {
+              splits = instData.splits;
+            } else if (Array.isArray(instData.split) && instData.split.length > 0) {
+              splits = instData.split;
+            }
+          } else {
+            console.warn(`⚠️ Failed to fetch installment ${installmentId}, falling back to payment value estimate.`);
+            if (paymentData.value && paymentData.installmentCount) {
+              totalPurchaseValue = paymentData.value * paymentData.installmentCount;
+            }
+          }
+        }
+
         const hasSplits = Array.isArray(splits) && splits.length > 0;
         const splitRefunds: Array<{ id: string; value: number }> = [];
 
         if (hasSplits) {
           for (const s of splits) {
             if (!s) continue;
-            const hasIdAndWallet = !!(s.id && s.walletId);
+            const hasIdAndWallet = !!(s.id && (s.walletId || s.wallet_id));
             const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
 
             if (!hasIdAndWallet || !isActive) continue;
 
             let splitRefundValue = 0;
             if (s.fixedValue !== undefined && s.fixedValue !== null) {
-              const ratio = (paymentData.value && paymentData.value > 0) ? (refundValue / paymentData.value) : 1;
+              const ratio = (totalPurchaseValue && totalPurchaseValue > 0) ? (refundValue / totalPurchaseValue) : 1;
               splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
             } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
               splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
