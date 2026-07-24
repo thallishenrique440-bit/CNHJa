@@ -408,6 +408,72 @@ export default async function handler(req: Request, res: Response) {
           }
         }
       }
+    } else if (['PAYMENT_REFUNDED', 'PAYMENT_PARTIALLY_REFUNDED'].includes(event.toUpperCase())) {
+      const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
+
+      if (!currentPaymentId) {
+        console.error('❌ Asaas Webhook: Payment ID missing for refund event.');
+        return res.status(400).json({ error: 'Missing paymentId' });
+      }
+
+      console.log(`🔍 [ASAAS WEBHOOK] Refund event ${event} received for payment ${currentPaymentId}`);
+
+      const { data: apts, error: fetchErr } = await supabaseAdmin
+        .from('appointments')
+        .select('id, status, payment_status')
+        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
+
+      if (fetchErr) {
+        console.error(`❌ [ASAAS WEBHOOK] Error querying appointments for refund event:`, fetchErr.message);
+        return res.status(500).json({ error: 'Database verification failed' });
+      }
+
+      if (!apts || apts.length === 0) {
+        console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for refunded payment: ${currentPaymentId}`);
+        return res.status(200).json({
+          success: true,
+          message: 'Refund event processed but no associated appointment found',
+          event,
+          timestamp
+        });
+      }
+
+      const cancellingApts = apts.filter(a => a.status === 'cancelling');
+
+      if (cancellingApts.length === 0) {
+        console.log(`ℹ️ [ASAAS WEBHOOK] No appointments in 'cancelling' status for payment ${currentPaymentId} (already cancelled or not cancelling). Idempotent no-op.`);
+        return res.status(200).json({
+          success: true,
+          message: 'Refund event processed (idempotent/no-op)',
+          event,
+          timestamp
+        });
+      }
+
+      const { data: updatedApts, error: updateErr } = await supabaseAdmin
+        .from('appointments')
+        .update({
+          status: 'cancelled',
+          payment_status: 'refunded',
+          updated_at: new Date().toISOString()
+        })
+        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`)
+        .eq('status', 'cancelling')
+        .select('id');
+
+      if (updateErr) {
+        console.error(`❌ [ASAAS WEBHOOK] Error updating appointments to cancelled:`, updateErr.message);
+        return res.status(500).json({ error: 'Database update failed' });
+      }
+
+      console.log(`✅ [ASAAS WEBHOOK] Successfully reconciled ${updatedApts?.length || 0} appointment(s) from 'cancelling' to 'cancelled'.`);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Refund event reconciled successfully',
+        event,
+        timestamp
+      });
     } else {
       console.log(`ℹ️ [ASAAS WEBHOOK] Event ${event} parsed but ignored.`);
     }

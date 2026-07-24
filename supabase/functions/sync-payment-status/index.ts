@@ -11,11 +11,11 @@ Deno.serve(async (req) => {
   try {
     console.log("🔄 Starting sync-payment-status job...")
 
-    // Find 'reserved' or 'pending_approval' or 'awaiting_payment' appointments
+    // Find 'reserved' or 'pending_approval' or 'awaiting_payment' or 'cancelling' appointments
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id')
-      .in('status', ['reserved', 'pending_approval', 'awaiting_payment'])
+      .in('status', ['reserved', 'pending_approval', 'awaiting_payment', 'cancelling'])
 
     if (fetchError) {
       throw fetchError
@@ -127,19 +127,33 @@ Deno.serve(async (req) => {
             console.error('⚠️ [Sync job] Error notifying instructor:', notifErr);
           }
         }
-      } else {
-        console.log(`ℹ️ Group ${groupId}: Asaas status is ${asaasStatus}. Not paid yet.`);
-        return { groupId, status: 'skipped', asaas_status: asaasStatus };
-      }
 
-      if (Object.keys(updates).length > 0) {
         const { error: updateError } = await supabaseAdmin
           .from('appointments')
           .update(updates)
           .eq('group_id', groupId)
           .in('status', ['reserved', 'pending_approval', 'awaiting_payment']);
-        
+
         if (updateError) throw updateError;
+      } else if (['REFUNDED', 'PARTIALLY_REFUNDED'].includes(asaasStatus)) {
+        console.log(`✅ Repairing Group ${groupId}: Asaas is refunded (${asaasStatus}). Updating cancelling -> cancelled.`);
+        updates = {
+          status: 'cancelled',
+          payment_status: 'refunded',
+          updated_at: new Date().toISOString()
+        };
+        action = 'repaired_refunded';
+
+        const { error: updateError } = await supabaseAdmin
+          .from('appointments')
+          .update(updates)
+          .eq('group_id', groupId)
+          .eq('status', 'cancelling');
+
+        if (updateError) throw updateError;
+      } else {
+        console.log(`ℹ️ Group ${groupId}: Asaas status is ${asaasStatus}. No action taken.`);
+        return { groupId, status: 'skipped', asaas_status: asaasStatus };
       }
 
       return { groupId, status: 'success', action };
