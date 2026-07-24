@@ -221,6 +221,7 @@ export const InstructorFinance: React.FC = () => {
   const [lessonTotalRevenue, setLessonTotalRevenue] = useState(0);
   const [tipMonthRevenue, setTipMonthRevenue] = useState(0);
   const [tipTotalRevenue, setTipTotalRevenue] = useState(0);
+  const [pendingInstallmentsRevenue, setPendingInstallmentsRevenue] = useState(0);
   
   // Asaas States
   const [asaasStatus, setAsaasStatus] = useState<AsaasStatus>('none');
@@ -374,6 +375,16 @@ export const InstructorFinance: React.FC = () => {
             profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles,
             appointments: Array.isArray(t.appointments) ? t.appointments[0] : t.appointments
         })) as Transaction[];
+
+        // 2b. Fetch Pending Installments
+        const { data: pendingInstData } = await supabase
+            .from('payment_installments')
+            .select('instructor_amount')
+            .eq('instructor_id', userId)
+            .eq('status', 'PENDING');
+
+        const pendingCents = (pendingInstData || []).reduce((acc: number, item: any) => acc + (item.instructor_amount || 0), 0);
+        setPendingInstallmentsRevenue(pendingCents);
 
         // --- Financial Calculations (Strictly from transactions) ---
         let totalRev = 0;
@@ -823,6 +834,10 @@ export const InstructorFinance: React.FC = () => {
                 <span className="text-indigo-200">Ganhos em caixinhas</span>
                 <span className="font-semibold">{loading ? '...' : formatCurrency(tipTotalRevenue)}</span>
               </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-indigo-200">Parcelas a receber</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(pendingInstallmentsRevenue)}</span>
+              </div>
             </div>
           </div>
 
@@ -874,7 +889,7 @@ export const InstructorFinance: React.FC = () => {
                       <span>💳</span> Pagamentos parcelados
                     </h5>
                     <p className="leading-relaxed text-gray-500 pl-5">
-                      O aluno pode parcelar o pagamento. O parcelamento não altera o valor líquido da sua aula. Seu repasse permanece exatamente o mesmo.
+                      Quando um aluno compra um pacote parcelado, as parcelas futuras aparecem em "Parcelas a receber". Conforme cada parcela é paga e liquidada pelo Asaas, o valor sai de "Parcelas a receber" e entra em "Ganhos em aulas".
                     </p>
                   </div>
 

@@ -72,10 +72,10 @@ Deno.serve(async (req) => {
       throw new Error('Invalid actor')
     }
 
-    // Validation 1: Already cancelled?
-    if (appointment.status === 'cancelled') {
+    // Validation 1: Already cancelled or cancelling?
+    if (appointment.status === 'cancelled' || appointment.status === 'cancelling') {
       return new Response(
-        JSON.stringify({ message: 'Appointment already cancelled', appointment }),
+        JSON.stringify({ message: 'Appointment already cancelled or cancellation in progress', appointment }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -110,6 +110,26 @@ Deno.serve(async (req) => {
       }
     }
 
+    // 3.5 Compare-And-Set (CAS): Atomically transition status to 'cancelling'
+    const originalStatus = appointment.status;
+    const { data: casAppointment, error: casError } = await adminClient
+      .from('appointments')
+      .update({
+        status: 'cancelling',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', appointment_id)
+      .eq('status', originalStatus)
+      .select('id, status')
+      .maybeSingle();
+
+    if (casError || !casAppointment) {
+      return new Response(
+        JSON.stringify({ message: 'Appointment cancellation is already in progress or completed', appointment }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
 
     console.log(JSON.stringify({
@@ -122,196 +142,260 @@ Deno.serve(async (req) => {
 
     let isPaid = appointment.payment_status === 'paid' || appointment.payment_status === 'received' || appointment.payment_status === 'confirmed';
 
+    // Custom Error class to identify deterministic vs indeterminate Asaas errors
+    class AsaasError extends Error {
+      isDeterministic: boolean;
+      statusCode: number;
+      constructor(message: string, isDeterministic: boolean, statusCode: number) {
+        super(message);
+        this.isDeterministic = isDeterministic;
+        this.statusCode = statusCode;
+      }
+    }
+
     // 4. Act on Asaas
-    if (paymentId) {
-      const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || '';
-      const asaasApiUrl = Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+    try {
+      if (paymentId) {
+        const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || '';
+        const asaasApiUrl = Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
 
-      if (!asaasApiKey) {
-        console.error('❌ ASAAS_API_KEY is not defined. Cannot cancel/refund Asaas payment.');
-        throw new Error('CONFIG_ERROR: Missing ASAAS_API_KEY');
-      }
+        if (!asaasApiKey) {
+          console.error('❌ ASAAS_API_KEY is not defined. Cannot cancel/refund Asaas payment.');
+          throw new AsaasError('CONFIG_ERROR: Missing ASAAS_API_KEY', true, 500);
+        }
 
-      console.log(`[Asaas] Fetching payment details for ${paymentId}`);
-      const paymentRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, {
-        method: 'GET'
-      });
-
-      if (!paymentRes.ok) {
-        const errText = await paymentRes.text();
-        console.error(`❌ Failed to retrieve Asaas payment ${paymentId}: ${errText}`);
-        throw new Error(`Asaas verification failed: ${errText}`);
-      }
-
-      const paymentData = await paymentRes.json();
-      console.log("========== ASAAS PAYMENT ==========");
-      console.log(JSON.stringify(paymentData, null, 2));
-
-      const installmentId = paymentData.installment;
-      isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
-
-      if (isPaid) {
-        const refundValue = appointment.price / 100;
-        let totalPurchaseValue = paymentData.value || 0;
-        let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
-        let instData: any = null;
-
-        // If this is an installment payment, retrieve total purchase value and splits from the installment resource
-        if (installmentId) {
-          console.log(`[Asaas] Fetching installment details for ${installmentId}`);
-          const instRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, {
+        console.log(`[Asaas] Fetching payment details for ${paymentId}`);
+        let paymentRes: Response;
+        try {
+          paymentRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, {
             method: 'GET'
           });
-          if (instRes.ok) {
-            instData = await instRes.json();
-            console.log("========== ASAAS INSTALLMENT ==========");
-            console.log(JSON.stringify(instData, null, 2));
-
-            if (instData.value && instData.value > 0) {
-              totalPurchaseValue = instData.value;
-            }
-            if (Array.isArray(instData.splits) && instData.splits.length > 0) {
-              splits = instData.splits;
-            } else if (Array.isArray(instData.split) && instData.split.length > 0) {
-              splits = instData.split;
-            }
-          } else {
-            console.warn(`⚠️ Failed to fetch installment ${installmentId}, falling back to payment value estimate.`);
-            if (paymentData.value && paymentData.installmentCount) {
-              totalPurchaseValue = paymentData.value * paymentData.installmentCount;
-            }
-          }
+        } catch (netErr: any) {
+          throw new AsaasError(`Network error fetching payment: ${netErr.message}`, false, 0);
         }
 
-        console.log("========== SPLIT SOURCE ==========");
-        if (Array.isArray(instData?.splits) && instData.splits.length > 0) {
-            console.log("SOURCE: installment.splits");
-        } else if (Array.isArray(instData?.split) && instData.split.length > 0) {
-            console.log("SOURCE: installment.split");
-        } else {
-            console.log("SOURCE: payment.split (fallback)");
+        if (!paymentRes.ok) {
+          const errText = await paymentRes.text();
+          console.error(`❌ Failed to retrieve Asaas payment ${paymentId}: ${errText}`);
+          const is4xx = paymentRes.status >= 400 && paymentRes.status < 500;
+          throw new AsaasError(`Asaas verification failed: ${errText}`, is4xx, paymentRes.status);
         }
-        console.log(JSON.stringify(splits, null, 2));
 
-        const hasSplits = Array.isArray(splits) && splits.length > 0;
-        const splitRefunds: Array<{ id: string; value: number }> = [];
+        const paymentData = await paymentRes.json();
+        console.log("========== ASAAS PAYMENT ==========");
+        console.log(JSON.stringify(paymentData, null, 2));
 
-        console.log("========== SPLITS USED ==========");
-        if (hasSplits) {
-          for (const s of splits) {
-            if (!s) continue;
+        const installmentId = paymentData.installment;
+        isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
 
-            console.log({
-                id: s.id,
-                walletId: s.walletId ?? s.wallet_id,
-                fixedValue: s.fixedValue,
-                percentualValue: s.percentualValue,
-                totalValue: s.totalValue,
-                status: s.status
-            });
+        if (isPaid) {
+          const refundValue = appointment.price / 100;
+          let totalPurchaseValue = paymentData.value || 0;
+          let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+          let instData: any = null;
 
-            const hasIdAndWallet = !!(s.id && (s.walletId || s.wallet_id));
-            const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
-
-            if (!hasIdAndWallet || !isActive) continue;
-
-            let splitRefundValue = 0;
-            if (s.fixedValue !== undefined && s.fixedValue !== null) {
-              const ratio = (totalPurchaseValue && totalPurchaseValue > 0) ? (refundValue / totalPurchaseValue) : 1;
-              splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
-            } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
-              splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
-            }
-
-            if (s.fixedValue !== undefined && s.fixedValue !== null) {
-              splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
-            }
-
-            if (splitRefundValue > 0) {
-              splitRefunds.push({
-                id: s.id,
-                value: splitRefundValue
+          // If this is an installment payment, retrieve total purchase value and splits from the installment resource
+          if (installmentId) {
+            console.log(`[Asaas] Fetching installment details for ${installmentId}`);
+            let instRes: Response;
+            try {
+              instRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, {
+                method: 'GET'
               });
+            } catch (netErr: any) {
+              throw new AsaasError(`Network error fetching installment: ${netErr.message}`, false, 0);
+            }
+
+            if (instRes.ok) {
+              instData = await instRes.json();
+              console.log("========== ASAAS INSTALLMENT ==========");
+              console.log(JSON.stringify(instData, null, 2));
+
+              if (instData.value && instData.value > 0) {
+                totalPurchaseValue = instData.value;
+              }
+              if (Array.isArray(instData.splits) && instData.splits.length > 0) {
+                splits = instData.splits;
+              } else if (Array.isArray(instData.split) && instData.split.length > 0) {
+                splits = instData.split;
+              }
+            } else {
+              console.warn(`⚠️ Failed to fetch installment ${installmentId}, falling back to payment value estimate.`);
+              if (paymentData.value && paymentData.installmentCount) {
+                totalPurchaseValue = paymentData.value * paymentData.installmentCount;
+              }
             }
           }
-        }
 
-        const refundPayload: Record<string, any> = {
-          value: refundValue,
-          description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
-        };
-
-        if (splitRefunds.length > 0) {
-          refundPayload.splitRefunds = splitRefunds;
-        }
-
-        console.log("========== REFUND PAYLOAD ==========");
-        console.log(JSON.stringify(refundPayload, null, 2));
-
-        if (!installmentId) {
-          console.log(`[Asaas Refund] Issuing partial refund of ${refundValue} for payment ${paymentId}. Payload:`, JSON.stringify(refundPayload));
-          const refundRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
-            method: 'POST',
-            body: JSON.stringify(refundPayload)
-          });
-
-          console.log("========== REFUND RESPONSE ==========");
-          console.log(refundRes.status);
-          const responseBody = await refundRes.text();
-          console.log(responseBody);
-
-          if (!refundRes.ok) {
-            console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${responseBody}`);
-            throw new Error(`Asaas refund failed: ${responseBody}`);
-          }
-          console.log(`✅ Asaas payment ${paymentId} partially refunded successfully.`);
-        } else {
-          // Installment Flow
-          console.log(`[Asaas Installment Refund] Issuing partial refund of ${refundValue} for installment ${installmentId}. Payload:`, JSON.stringify(refundPayload));
-          const refundRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}/refund`, {
-            method: 'POST',
-            body: JSON.stringify(refundPayload)
-          });
-
-          console.log("========== REFUND RESPONSE ==========");
-          console.log(refundRes.status);
-          const responseBody = await refundRes.text();
-          console.log(responseBody);
-
-          if (!refundRes.ok) {
-            console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${responseBody}`);
-            throw new Error(`Asaas installment refund failed: ${responseBody}`);
-          }
-          console.log(`✅ Asaas installment ${installmentId} partially refunded successfully.`);
-        }
-      } else {
-        // Pending / Unpaid Flow
-        if (!installmentId) {
-          console.log(`[Asaas Cancel] Cancelling pending payment ${paymentId}`);
-          const cancelRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, {
-            method: 'DELETE'
-          });
-
-          if (!cancelRes.ok) {
-            const errText = await cancelRes.text();
-            console.warn(`⚠️ Asaas pending payment cancel failed (may have been deleted already): ${errText}`);
+          console.log("========== SPLIT SOURCE ==========");
+          if (Array.isArray(instData?.splits) && instData.splits.length > 0) {
+              console.log("SOURCE: installment.splits");
+          } else if (Array.isArray(instData?.split) && instData.split.length > 0) {
+              console.log("SOURCE: installment.split");
           } else {
-            console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
+              console.log("SOURCE: payment.split (fallback)");
+          }
+          console.log(JSON.stringify(splits, null, 2));
+
+          const hasSplits = Array.isArray(splits) && splits.length > 0;
+          const splitRefunds: Array<{ id: string; value: number }> = [];
+
+          console.log("========== SPLITS USED ==========");
+          if (hasSplits) {
+            for (const s of splits) {
+              if (!s) continue;
+
+              console.log({
+                  id: s.id,
+                  walletId: s.walletId ?? s.wallet_id,
+                  fixedValue: s.fixedValue,
+                  percentualValue: s.percentualValue,
+                  totalValue: s.totalValue,
+                  status: s.status
+              });
+
+              const hasIdAndWallet = !!(s.id && (s.walletId || s.wallet_id));
+              const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
+
+              if (!hasIdAndWallet || !isActive) continue;
+
+              let splitRefundValue = 0;
+              if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                const ratio = (totalPurchaseValue && totalPurchaseValue > 0) ? (refundValue / totalPurchaseValue) : 1;
+                splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
+              } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
+                splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
+              }
+
+              if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
+              }
+
+              if (splitRefundValue > 0) {
+                splitRefunds.push({
+                  id: s.id,
+                  value: splitRefundValue
+                });
+              }
+            }
+          }
+
+          const refundPayload: Record<string, any> = {
+            value: refundValue,
+            description: actor === 'instructor' ? 'Cancelamento parcial de aula pelo instrutor' : 'Cancelamento parcial de aula pelo aluno'
+          };
+
+          if (splitRefunds.length > 0) {
+            refundPayload.splitRefunds = splitRefunds;
+          }
+
+          console.log("========== REFUND PAYLOAD ==========");
+          console.log(JSON.stringify(refundPayload, null, 2));
+
+          if (!installmentId) {
+            console.log(`[Asaas Refund] Issuing partial refund of ${refundValue} for payment ${paymentId}. Payload:`, JSON.stringify(refundPayload));
+            let refundRes: Response;
+            try {
+              refundRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}/refund`, {
+                method: 'POST',
+                body: JSON.stringify(refundPayload)
+              });
+            } catch (netErr: any) {
+              throw new AsaasError(`Network error issuing refund: ${netErr.message}`, false, 0);
+            }
+
+            console.log("========== REFUND RESPONSE ==========");
+            console.log(refundRes.status);
+            const responseBody = await refundRes.text();
+            console.log(responseBody);
+
+            if (!refundRes.ok) {
+              console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${responseBody}`);
+              const is4xx = refundRes.status >= 400 && refundRes.status < 500;
+              throw new AsaasError(`Asaas refund failed: ${responseBody}`, is4xx, refundRes.status);
+            }
+            console.log(`✅ Asaas payment ${paymentId} partially refunded successfully.`);
+          } else {
+            // Installment Flow
+            console.log(`[Asaas Installment Refund] Issuing partial refund of ${refundValue} for installment ${installmentId}. Payload:`, JSON.stringify(refundPayload));
+            let refundRes: Response;
+            try {
+              refundRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}/refund`, {
+                method: 'POST',
+                body: JSON.stringify(refundPayload)
+              });
+            } catch (netErr: any) {
+              throw new AsaasError(`Network error issuing installment refund: ${netErr.message}`, false, 0);
+            }
+
+            console.log("========== REFUND RESPONSE ==========");
+            console.log(refundRes.status);
+            const responseBody = await refundRes.text();
+            console.log(responseBody);
+
+            if (!refundRes.ok) {
+              console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${responseBody}`);
+              const is4xx = refundRes.status >= 400 && refundRes.status < 500;
+              throw new AsaasError(`Asaas installment refund failed: ${responseBody}`, is4xx, refundRes.status);
+            }
+            console.log(`✅ Asaas installment ${installmentId} partially refunded successfully.`);
           }
         } else {
-          console.log(`[Asaas Installment Cancel] Cancelling pending installment ${installmentId}`);
-          const cancelRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, {
-            method: 'DELETE'
-          });
+          // Pending / Unpaid Flow
+          if (!installmentId) {
+            console.log(`[Asaas Cancel] Cancelling pending payment ${paymentId}`);
+            let cancelRes: Response;
+            try {
+              cancelRes = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, {
+                method: 'DELETE'
+              });
+            } catch (netErr: any) {
+              throw new AsaasError(`Network error cancelling payment: ${netErr.message}`, false, 0);
+            }
 
-          if (!cancelRes.ok) {
-            const errText = await cancelRes.text();
-            console.error(`❌ Asaas installment cancellation failed for installment ${installmentId}: ${errText}`);
-            throw new Error(`Asaas installment cancel failed: ${errText}`);
+            if (!cancelRes.ok) {
+              const errText = await cancelRes.text();
+              console.warn(`⚠️ Asaas pending payment cancel failed (may have been deleted already): ${errText}`);
+            } else {
+              console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
+            }
+          } else {
+            console.log(`[Asaas Installment Cancel] Cancelling pending installment ${installmentId}`);
+            let cancelRes: Response;
+            try {
+              cancelRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, {
+                method: 'DELETE'
+              });
+            } catch (netErr: any) {
+              throw new AsaasError(`Network error cancelling installment: ${netErr.message}`, false, 0);
+            }
+
+            if (!cancelRes.ok) {
+              const errText = await cancelRes.text();
+              console.error(`❌ Asaas installment cancellation failed for installment ${installmentId}: ${errText}`);
+              const is4xx = cancelRes.status >= 400 && cancelRes.status < 500;
+              throw new AsaasError(`Asaas installment cancel failed: ${errText}`, is4xx, cancelRes.status);
+            }
+            console.log(`✅ Asaas installment ${installmentId} cancelled successfully.`);
           }
-          console.log(`✅ Asaas installment ${installmentId} cancelled successfully.`);
         }
       }
+    } catch (asaasError: any) {
+      const isDeterministic = asaasError instanceof AsaasError ? asaasError.isDeterministic : false;
+      if (isDeterministic) {
+        console.warn(`⚠️ Deterministic failure from Asaas (${asaasError.message}). Performing rollback to '${originalStatus}'.`);
+        await adminClient
+          .from('appointments')
+          .update({
+            status: originalStatus,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', appointment_id)
+          .eq('status', 'cancelling');
+      } else {
+        console.error(`❌ Indeterminate failure from Asaas (${asaasError.message}). Keeping status as 'cancelling' for reconciliation.`);
+      }
+      throw asaasError;
     }
 
     // 5. Update appointment in DB

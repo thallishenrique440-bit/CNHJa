@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { NotificationService } from '../lib/NotificationService.js';
+import { InstallmentService } from '../lib/payments/InstallmentService.js';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -377,6 +378,35 @@ export default async function handler(req: Request, res: Response) {
           console.error(`⚠️ [ASAAS WEBHOOK] Error logging transaction:`, txErr);
         }
 
+        // Record Cash Flow Settlement in payment_installments & payment_settlements
+        try {
+          const grossVal = Math.round((payload.payment?.value || 0) * 100);
+          const netVal = payload.payment?.netValue !== undefined 
+            ? Math.round(payload.payment.netValue * 100) 
+            : Math.round(grossVal * 0.90);
+          const platformFeeVal = grossVal - netVal;
+          const instNum = payload.payment?.installmentNumber || 1;
+          const totalInst = payload.payment?.installmentCount || 1;
+          const payDate = payload.payment?.paymentDate || payload.payment?.clientPaymentDate || new Date().toISOString();
+
+          await InstallmentService.recordPaymentSettlement(supabaseAdmin, {
+            providerPaymentId: currentPaymentId,
+            installmentNumber: instNum,
+            totalInstallments: totalInst,
+            grossAmountCents: grossVal,
+            netAmountCents: netVal,
+            platformFeeCents: platformFeeVal,
+            paymentDate: payDate,
+            groupId: groupId,
+            appointmentId: firstApt.id,
+            studentId: firstApt.student_id,
+            instructorId: firstApt.instructor_id,
+            providerSettlementId: payload.payment?.id || currentPaymentId,
+          });
+        } catch (settleErr) {
+          console.error(`⚠️ [ASAAS WEBHOOK] Error recording payment settlement:`, settleErr);
+        }
+
         // Notify instructor about new booking request pending approval (Idempotent)
         const instructorId = firstApt.instructor_id;
         if (instructorId) {
@@ -467,6 +497,20 @@ export default async function handler(req: Request, res: Response) {
       }
 
       console.log(`✅ [ASAAS WEBHOOK] Successfully reconciled ${updatedApts?.length || 0} appointment(s) from 'cancelling' to 'cancelled'.`);
+
+      // Record Refund Settlement in payment_installments & payment_settlements
+      try {
+        const refundVal = Math.round((payload.payment?.value || 0) * 100);
+        await InstallmentService.recordRefundSettlement(supabaseAdmin, {
+          providerPaymentId: currentPaymentId,
+          installmentNumber: payload.payment?.installmentNumber,
+          refundAmountCents: refundVal,
+          providerSettlementId: payload.payment?.id ? `${payload.payment.id}_refund` : undefined,
+          refundDate: new Date().toISOString()
+        });
+      } catch (refErr) {
+        console.error(`⚠️ [ASAAS WEBHOOK] Error recording refund settlement:`, refErr);
+      }
 
       return res.status(200).json({
         success: true,

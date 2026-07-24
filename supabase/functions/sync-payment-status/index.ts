@@ -135,6 +135,59 @@ Deno.serve(async (req) => {
           .in('status', ['reserved', 'pending_approval', 'awaiting_payment']);
 
         if (updateError) throw updateError;
+
+        // Reconcile payment_installments & payment_settlements
+        try {
+          const grossVal = Math.round((paymentData?.value || 0) * 100);
+          const netVal = paymentData?.netValue !== undefined 
+            ? Math.round(paymentData.netValue * 100) 
+            : Math.round(grossVal * 0.90);
+          const platformFeeVal = grossVal - netVal;
+          const instNum = paymentData?.installmentNumber || 1;
+          const totalInst = paymentData?.installmentCount || 1;
+          const payDate = paymentData?.paymentDate || paymentData?.clientPaymentDate || new Date().toISOString();
+          const instructorAmount = grossVal - platformFeeVal;
+
+          const { data: instData } = await supabaseAdmin
+            .from('payment_installments')
+            .upsert({
+              provider_payment_id: paymentId,
+              installment_number: instNum,
+              total_installments: totalInst,
+              gross_amount: grossVal,
+              net_amount: netVal,
+              fee_amount: 0,
+              platform_fee: platformFeeVal,
+              instructor_amount: instructorAmount,
+              status: 'PAID',
+              payment_date: payDate,
+              group_id: groupId,
+              appointment_id: firstApt.id,
+              student_id: firstApt.student_id,
+              instructor_id: firstApt.instructor_id,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'provider_payment_id,installment_number' })
+            .select('id')
+            .single();
+
+          const settlementId = paymentData?.id || paymentId;
+          await supabaseAdmin
+            .from('payment_settlements')
+            .upsert({
+              installment_id: instData?.id || null,
+              provider_payment_id: paymentId,
+              provider_settlement_id: settlementId,
+              settlement_type: 'PAYMENT',
+              gross_amount: grossVal,
+              net_amount: netVal,
+              fee_amount: 0,
+              platform_fee: platformFeeVal,
+              instructor_amount: instructorAmount,
+              settled_at: payDate,
+            }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
+        } catch (instSyncErr) {
+          console.error('⚠️ [Sync job] Error syncing installment/settlement:', instSyncErr);
+        }
       } else if (['REFUNDED', 'PARTIALLY_REFUNDED'].includes(asaasStatus)) {
         console.log(`✅ Repairing Group ${groupId}: Asaas is refunded (${asaasStatus}). Updating cancelling -> cancelled.`);
         updates = {
@@ -151,6 +204,32 @@ Deno.serve(async (req) => {
           .eq('status', 'cancelling');
 
         if (updateError) throw updateError;
+
+        // Reconcile payment_installments & payment_settlements for refund
+        try {
+          const grossVal = Math.round((paymentData?.value || 0) * 100);
+          await supabaseAdmin
+            .from('payment_installments')
+            .update({ status: 'REFUNDED', updated_at: new Date().toISOString() })
+            .eq('provider_payment_id', paymentId);
+
+          const settlementId = `${paymentId}_sync_refund`;
+          await supabaseAdmin
+            .from('payment_settlements')
+            .upsert({
+              provider_payment_id: paymentId,
+              provider_settlement_id: settlementId,
+              settlement_type: 'REFUND',
+              gross_amount: -Math.abs(grossVal),
+              net_amount: -Math.abs(Math.round(grossVal * 0.90)),
+              fee_amount: 0,
+              platform_fee: -Math.abs(Math.round(grossVal * 0.10)),
+              instructor_amount: -Math.abs(Math.round(grossVal * 0.90)),
+              settled_at: new Date().toISOString(),
+            }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
+        } catch (refSyncErr) {
+          console.error('⚠️ [Sync job] Error syncing refund installment/settlement:', refSyncErr);
+        }
       } else {
         console.log(`ℹ️ Group ${groupId}: Asaas status is ${asaasStatus}. No action taken.`);
         return { groupId, status: 'skipped', asaas_status: asaasStatus };

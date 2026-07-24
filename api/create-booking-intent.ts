@@ -4,6 +4,7 @@ import { calculateDiscount, getInstructorDiscounts } from '../lib/discount-utils
 import { AGENDA_SLOTS } from '../lib/slots.js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
+import { InstallmentService } from '../lib/payments/InstallmentService.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -500,6 +501,25 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
           provider_name: providerName
         })
         .eq('group_id', groupId);
+
+      // 6b. Record Financial Schedule in payment_installments
+      try {
+        const firstAptId = appointments && appointments.length > 0 ? appointments[0].id : null;
+        await InstallmentService.recordInitialSchedule(supabase, {
+          providerPaymentId: paymentResponse.providerPaymentId,
+          totalInstallments: installmentCount || 1,
+          grossAmountCents: totalPriceWithFee,
+          netAmountCents: finalPrice - applicationFeeAmount,
+          platformFeeCents: applicationFeeAmount + processingFee,
+          feeAmountCents: processingFee,
+          groupId: groupId,
+          appointmentId: firstAptId,
+          studentId: secureStudentId,
+          instructorId: instructorId,
+        });
+      } catch (instError) {
+        console.error('⚠️ [InstallmentService] Error recording initial schedule:', instError);
+      }
 
     } catch (paymentError: any) {
       console.error(`[ERROR] Payment Provider creation error on ${providerName}, rolling back appointments:`, paymentError);
