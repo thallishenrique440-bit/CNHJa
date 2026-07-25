@@ -386,51 +386,59 @@ export const InstructorFinance: React.FC = () => {
         const pendingCents = (pendingInstData || []).reduce((acc: number, item: any) => acc + (item.instructor_amount || 0), 0);
         setPendingInstallmentsRevenue(pendingCents);
 
-        // --- Financial Calculations (Strictly from transactions) ---
-        let totalRev = 0;
-        let monthRev = 0;
+        // 2c. Fetch Settled Lesson Earnings from payment_settlements
+        const { data: settlementsData } = await supabase
+            .from('payment_settlements')
+            .select(`
+                id,
+                settlement_type,
+                instructor_amount,
+                settled_at,
+                payment_installments!inner (
+                    instructor_id
+                )
+            `)
+            .eq('payment_installments.instructor_id', userId)
+            .eq('settlement_type', 'PAYMENT');
+
         let lessonMRev = 0;
         let lessonTRev = 0;
-        let tipMRev = 0;
-        let tipTRev = 0;
 
         const now = new Date();
         const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
 
+        (settlementsData || []).forEach((s: any) => {
+            if (s.settlement_type !== 'PAYMENT') return;
+            const amountInCents = s.instructor_amount || 0;
+            lessonTRev += amountInCents;
+
+            const sDate = new Date(s.settled_at);
+            if (sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear) {
+                lessonMRev += amountInCents;
+            }
+        });
+
+        // 2d. Calculate Tips from Transactions (Tips continue in transactions table)
+        let tipMRev = 0;
+        let tipTRev = 0;
+
         typedTrans.forEach(t => {
-            // Include captured and completed
             if (!['completed'].includes(t.status)) return;
+            if (t.type === 'tip') {
+                const val = t.net_amount || 0;
+                const tDate = new Date(t.event_date || t.created_at);
+                const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
 
-            const val = t.net_amount || 0;
-
-            // Earnings Summary (Total historical earnings)
-            const tDate = new Date(t.event_date || t.created_at);
-            const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
-            
-            if (t.type === 'lesson_payment') {
-                totalRev += val;
-                lessonTRev += val;
-                if (isCurrentMonth) {
-                    monthRev += val;
-                    lessonMRev += val;
-                }
-            } else if (t.type === 'tip') {
-                totalRev += val;
                 tipTRev += val;
                 if (isCurrentMonth) {
-                    monthRev += val;
                     tipMRev += val;
-                }
-            } else if (t.type === 'refund') {
-                totalRev += val; // val is negative for refunds
-                lessonTRev += val;
-                if (isCurrentMonth) {
-                    monthRev += val;
-                    lessonMRev += val;
                 }
             }
         });
+
+        const totalRev = lessonTRev + tipTRev;
+        const monthRev = lessonMRev + tipMRev;
 
         setTotalRevenue(totalRev);
         setMonthlyRevenue(monthRev);
@@ -579,7 +587,52 @@ export const InstructorFinance: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [session]);
+
+    const userId = session?.user?.id;
+    if (!userId) return;
+
+    // Supabase Realtime Channel for automatic updates
+    const channel = supabase
+      .channel(`instructor-finance-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'payment_settlements',
+        },
+        () => {
+          loadData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'payment_installments',
+          filter: `instructor_id=eq.${userId}`,
+        },
+        () => {
+          loadData();
+        }
+      )
+      .subscribe();
+
+    // Refresh on tab refocus
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      supabase.removeChannel(channel);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [session?.user?.id]);
 
   const handleCpfCnpjChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawVal = e.target.value;
@@ -835,7 +888,7 @@ export const InstructorFinance: React.FC = () => {
                 <span className="font-semibold">{loading ? '...' : formatCurrency(tipTotalRevenue)}</span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-indigo-200">Parcelas a receber</span>
+                <span className="text-indigo-200">Recebimentos futuros</span>
                 <span className="font-semibold">{loading ? '...' : formatCurrency(pendingInstallmentsRevenue)}</span>
               </div>
             </div>
@@ -889,7 +942,7 @@ export const InstructorFinance: React.FC = () => {
                       <span>💳</span> Pagamentos parcelados
                     </h5>
                     <p className="leading-relaxed text-gray-500 pl-5">
-                      Quando um aluno compra um pacote parcelado, as parcelas futuras aparecem em "Parcelas a receber". Conforme cada parcela é paga e liquidada pelo Asaas, o valor sai de "Parcelas a receber" e entra em "Ganhos em aulas".
+                      Quando um aluno realiza um pagamento parcelado, o valor líquido das parcelas que ainda não foram liquidadas é exibido em 'Recebimentos futuros'. À medida que cada parcela é paga e liquidada pelo Asaas, o respectivo valor deixa 'Recebimentos futuros' e passa automaticamente para 'Ganhos em aulas'.
                     </p>
                   </div>
 
@@ -899,7 +952,7 @@ export const InstructorFinance: React.FC = () => {
                       <span>🎁</span> Caixinhas
                     </h5>
                     <p className="leading-relaxed text-gray-500 pl-5">
-                      As caixinhas são repassadas integralmente ao instrutor. Quando existirem taxas do meio de pagamento, apenas essas taxas poderão ser descontadas.
+                      Ao final da aula, o aluno pode agradecer pelo seu trabalho deixando uma caixinha (gorjeta). A CNHJá não retém comissão sobre esse valor, sendo descontadas apenas as taxas de processamento do meio de pagamento (Asaas). Afinal, gentileza gera gentileza. 💙
                     </p>
                   </div>
 
