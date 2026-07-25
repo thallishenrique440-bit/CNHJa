@@ -450,7 +450,7 @@ export default async function handler(req: Request, res: Response) {
 
       const { data: apts, error: fetchErr } = await supabaseAdmin
         .from('appointments')
-        .select('id, status, payment_status')
+        .select('id, status, payment_status, group_id')
         .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
 
       if (fetchErr) {
@@ -501,8 +501,10 @@ export default async function handler(req: Request, res: Response) {
       // Record Refund Settlement in payment_installments & payment_settlements
       try {
         const refundVal = Math.round((payload.payment?.value || 0) * 100);
+        const refundGroupId = apts && apts.length > 0 ? apts[0].group_id : null;
         await InstallmentService.recordRefundSettlement(supabaseAdmin, {
           providerPaymentId: currentPaymentId,
+          groupId: refundGroupId,
           installmentNumber: payload.payment?.installmentNumber,
           refundAmountCents: refundVal,
           providerSettlementId: payload.payment?.id ? `${payload.payment.id}_refund` : undefined,

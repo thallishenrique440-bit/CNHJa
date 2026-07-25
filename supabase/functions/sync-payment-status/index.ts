@@ -148,6 +148,7 @@ Deno.serve(async (req) => {
           const payDate = paymentData?.paymentDate || paymentData?.clientPaymentDate || new Date().toISOString();
           const instructorAmount = grossVal - platformFeeVal;
 
+          const conflictTarget = groupId ? 'group_id,installment_number' : 'provider_payment_id,installment_number';
           const { data: instData } = await supabaseAdmin
             .from('payment_installments')
             .upsert({
@@ -166,7 +167,7 @@ Deno.serve(async (req) => {
               student_id: firstApt.student_id,
               instructor_id: firstApt.instructor_id,
               updated_at: new Date().toISOString()
-            }, { onConflict: 'provider_payment_id,installment_number' })
+            }, { onConflict: conflictTarget })
             .select('id')
             .single();
 
@@ -211,7 +212,7 @@ Deno.serve(async (req) => {
           await supabaseAdmin
             .from('payment_installments')
             .update({ status: 'REFUNDED', updated_at: new Date().toISOString() })
-            .eq('provider_payment_id', paymentId);
+            .or(`group_id.eq.${groupId},provider_payment_id.eq.${paymentId}`);
 
           const settlementId = `${paymentId}_sync_refund`;
           await supabaseAdmin

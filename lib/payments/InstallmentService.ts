@@ -34,6 +34,7 @@ export interface RecordSettlementDTO {
 
 export interface RecordRefundDTO {
   providerPaymentId: string;
+  groupId?: string | null;
   installmentNumber?: number;
   refundAmountCents: number;
   providerSettlementId?: string | null;
@@ -111,9 +112,10 @@ export class InstallmentService {
     }
 
     for (const inst of installmentsToInsert) {
+      const conflictTarget = inst.group_id ? 'group_id,installment_number' : 'provider_payment_id,installment_number';
       const { error } = await supabase
         .from('payment_installments')
-        .upsert(inst, { onConflict: 'provider_payment_id,installment_number' });
+        .upsert(inst, { onConflict: conflictTarget });
 
       if (error) {
         console.error(`❌ [InstallmentService] Error recording schedule for installment ${inst.installment_number}:`, error.message);
@@ -133,7 +135,32 @@ export class InstallmentService {
     const paymentDate = dto.paymentDate || new Date().toISOString();
     const instructorAmount = dto.grossAmountCents - dto.platformFeeCents;
 
-    // 1. Upsert payment_installments to PAID
+    let resolvedGroupId = dto.groupId || null;
+    if (!resolvedGroupId) {
+      const { data: existingInst } = await supabase
+        .from('payment_installments')
+        .select('group_id')
+        .eq('provider_payment_id', dto.providerPaymentId)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingInst?.group_id) {
+        resolvedGroupId = existingInst.group_id;
+      } else if (dto.appointmentId) {
+        const { data: apt } = await supabase
+          .from('appointments')
+          .select('group_id')
+          .eq('id', dto.appointmentId)
+          .maybeSingle();
+        if (apt?.group_id) {
+          resolvedGroupId = apt.group_id;
+        }
+      }
+    }
+
+    const conflictTarget = resolvedGroupId ? 'group_id,installment_number' : 'provider_payment_id,installment_number';
+
+    // 1. Upsert payment_installments in-place to PAID
     const { data: instData, error: instError } = await supabase
       .from('payment_installments')
       .upsert({
@@ -147,13 +174,13 @@ export class InstallmentService {
         instructor_amount: instructorAmount,
         status: 'PAID',
         payment_date: paymentDate,
-        group_id: dto.groupId || null,
+        group_id: resolvedGroupId,
         appointment_id: dto.appointmentId || null,
         transaction_id: dto.transactionId || null,
         student_id: dto.studentId || null,
         instructor_id: dto.instructorId || null,
         updated_at: new Date().toISOString()
-      }, { onConflict: 'provider_payment_id,installment_number' })
+      }, { onConflict: conflictTarget })
       .select('id')
       .single();
 
@@ -196,11 +223,16 @@ export class InstallmentService {
   ): Promise<void> {
     const refundDate = dto.refundDate || new Date().toISOString();
 
-    // Fetch existing installments for this provider_payment_id
+    // Fetch existing installments for this group_id or provider_payment_id
     let query = supabase
       .from('payment_installments')
-      .select('id, installment_number, gross_amount, platform_fee, instructor_amount')
-      .eq('provider_payment_id', dto.providerPaymentId);
+      .select('id, installment_number, gross_amount, platform_fee, instructor_amount');
+
+    if (dto.groupId) {
+      query = query.eq('group_id', dto.groupId);
+    } else {
+      query = query.eq('provider_payment_id', dto.providerPaymentId);
+    }
 
     if (dto.installmentNumber) {
       query = query.eq('installment_number', dto.installmentNumber);
