@@ -13,8 +13,12 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Middleware for parsing JSON
-  app.use(express.json());
+  // Middleware for parsing JSON with Raw Body preservation for cryptographic hashing
+  app.use(express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    }
+  }));
 
   // API Routes
   app.post('/api/:handler', async (req, res) => {

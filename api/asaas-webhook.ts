@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import crypto from 'crypto';
 import { NotificationService } from '../lib/NotificationService.js';
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
 
@@ -7,6 +8,27 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+function getStrictRawBodyString(req: Request): string {
+  const rawBody = (req as any).rawBody;
+  if (Buffer.isBuffer(rawBody)) {
+    return rawBody.toString('utf-8');
+  }
+  if (typeof rawBody === 'string' && rawBody.length > 0) {
+    return rawBody;
+  }
+  if (Buffer.isBuffer(req.body)) {
+    return req.body.toString('utf-8');
+  }
+  if (typeof req.body === 'string' && req.body.length > 0) {
+    return req.body;
+  }
+  throw new Error('RAW_HTTP_BODY_UNAVAILABLE');
+}
+
+function computeRawPayloadHash(rawBodyStr: string): string {
+  return crypto.createHash('sha256').update(rawBodyStr, 'utf-8').digest('hex');
+}
 
 export default async function handler(req: Request, res: Response) {
   // 1. Receber requisições POST do Asaas.
@@ -32,21 +54,167 @@ export default async function handler(req: Request, res: Response) {
     const event = payload?.event || 'UNKNOWN_EVENT';
     const accountId = payload?.account?.id || payload?.accountId || payload?.account || null;
     const paymentId = payload?.payment?.id || payload?.paymentId || null;
-    const payloadBruto = JSON.stringify(payload);
+
+    // 1. Compute Raw HTTP Payload SHA-256 Hash
+    let rawBodyStr: string;
+    try {
+      rawBodyStr = getStrictRawBodyString(req);
+    } catch (err) {
+      console.error('❌ [ASAAS WEBHOOK] Infrastructure Error: Raw HTTP request body unavailable for cryptographic hash calculation.');
+      return res.status(500).json({ error: 'Infrastructure Error: Raw HTTP body unavailable for cryptographic hash' });
+    }
+    const payloadHash = computeRawPayloadHash(rawBodyStr);
+
+    // 2. Extract Native Provider Event ID (STRICT: null if missing from provider)
+    const providerEventId: string | null = payload?.id || null;
+
+    // 3. Compute Deterministic Idempotency Key
+    const idempotencyKey = providerEventId ? `evt_${providerEventId}` : `hash_${payloadHash}`;
 
     // 3. Registrar logs estruturados
     console.log('=== [ASAAS WEBHOOK EVENT RECEIVED] ===');
-    console.log(`Timestamp:  ${timestamp}`);
-    console.log(`Event:      ${event}`);
-    console.log(`Account ID: ${accountId || 'N/A'}`);
-    console.log(`Payment ID: ${paymentId || 'N/A'}`);
-    console.log(`Payload Bruto:\n${payloadBruto}`);
+    console.log(`Timestamp:        ${timestamp}`);
+    console.log(`Event:            ${event}`);
+    console.log(`Provider Event ID:${providerEventId || 'N/A (Using Hash Idempotency)'}`);
+    console.log(`Idempotency Key:  ${idempotencyKey}`);
+    console.log(`Account ID:       ${accountId || 'N/A'}`);
+    console.log(`Payment ID:       ${paymentId || 'N/A'}`);
+    console.log(`Payload Hash:     ${payloadHash}`);
     console.log('=======================================');
+
+    // --- EVENT LEDGER INGESTION & IDEMPOTENCY CHECK (ETAPA 1) ---
+    let ledgerQuery = supabaseAdmin
+      .from('transactions')
+      .select('id, processing_status, attempt_count, metadata')
+      .eq('type', 'webhook_event')
+      .eq('provider', 'asaas');
+
+    if (providerEventId) {
+      ledgerQuery = ledgerQuery.eq('provider_event_id', providerEventId);
+    } else {
+      ledgerQuery = ledgerQuery.eq('idempotency_key', idempotencyKey);
+    }
+
+    const { data: existingLedger } = await ledgerQuery.maybeSingle();
+
+    let ledgerId: string;
+    let currentAttempt = 1;
+
+    if (existingLedger) {
+      ledgerId = existingLedger.id;
+      currentAttempt = (existingLedger.attempt_count || 1) + 1;
+
+      const existingMetadata = existingLedger.metadata && typeof existingLedger.metadata === 'object' ? existingLedger.metadata : {};
+      const rawHistory = Array.isArray(existingMetadata.retry_history) ? existingMetadata.retry_history : [];
+
+      const newAttemptRecord = {
+        attempt: currentAttempt,
+        received_at: timestamp,
+        payload_hash: payloadHash
+      };
+
+      // Refinement 2 Policy: Capped array at max 10 records (ring-buffer strategy: preserve initial attempt + last 9 attempts)
+      let updatedHistory = [...rawHistory, newAttemptRecord];
+      if (updatedHistory.length > 10) {
+        updatedHistory = [updatedHistory[0], ...updatedHistory.slice(updatedHistory.length - 9)];
+      }
+
+      const updatedMetadata = {
+        ...existingMetadata,
+        retry_history: updatedHistory,
+        last_attempt_at: timestamp
+      };
+
+      // Idempotency Check (Refinement 1 & Approved Model)
+      if (existingLedger.processing_status === 'PROCESSED') {
+        console.log(`ℹ️ [EVENT LEDGER] Duplicate event received and already PROCESSED. Provider Event ID: ${providerEventId}, Attempt: ${currentAttempt}. Idempotency hit.`);
+
+        await supabaseAdmin
+          .from('transactions')
+          .update({
+            attempt_count: currentAttempt,
+            metadata: updatedMetadata,
+            updated_at: timestamp
+          })
+          .eq('id', ledgerId);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Webhook event already processed (idempotent)',
+          provider_event_id: providerEventId,
+          idempotency_key: idempotencyKey,
+          receipt_status: 'RECEIVED',
+          processing_status: 'PROCESSED'
+        });
+      }
+
+      // Retry attempt: update record to RECEIVED / PENDING for re-processing
+      await supabaseAdmin
+        .from('transactions')
+        .update({
+          attempt_count: currentAttempt,
+          receipt_status: 'RECEIVED',
+          processing_status: 'PENDING',
+          metadata: updatedMetadata,
+          updated_at: timestamp
+        })
+        .eq('id', ledgerId);
+
+    } else {
+      const initialMetadata = {
+        retry_history: [{
+          attempt: 1,
+          received_at: timestamp,
+          payload_hash: payloadHash
+        }]
+      };
+
+      const { data: insertedLedger, error: ledgerErr } = await supabaseAdmin
+        .from('transactions')
+        .insert({
+          type: 'webhook_event',
+          provider: 'asaas',
+          provider_event_id: providerEventId,
+          idempotency_key: idempotencyKey,
+          receipt_status: 'RECEIVED',
+          processing_status: 'PENDING',
+          attempt_count: 1,
+          raw_payload: payload,
+          payload_hash: payloadHash,
+          processor_version: '1.0.0',
+          metadata: initialMetadata
+        })
+        .select('id')
+        .single();
+
+      if (ledgerErr) {
+        console.error(`❌ [EVENT LEDGER] Critical error persisting event ledger: ${ledgerErr.message}`);
+        return res.status(500).json({ error: 'Internal Server Error: Event Ledger ingestion failed' });
+      }
+
+      ledgerId = insertedLedger.id;
+    }
+
+    const finalizeLedger = async (status: 'PROCESSED' | 'FAILED' | 'IGNORED', errorMsg?: string) => {
+      try {
+        await supabaseAdmin
+          .from('transactions')
+          .update({
+            processing_status: status,
+            processed_at: new Date().toISOString(),
+            ...(errorMsg ? { processing_error: errorMsg } : {})
+          })
+          .eq('id', ledgerId);
+      } catch (err) {
+        console.error(`⚠️ [EVENT LEDGER] Failed to update processing status to ${status}:`, err);
+      }
+    };
 
     // Procesasmento exclusivo do evento ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED
     if (event === 'ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED') {
       if (!accountId) {
         console.error('❌ Asaas Webhook Error: Event ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED received but accountId is missing.');
+        await finalizeLedger('FAILED', 'Bad Request: accountId/account object is missing from payload');
         return res.status(400).json({ error: 'Bad Request: accountId/account object is missing from payload' });
       }
 
@@ -59,11 +227,13 @@ export default async function handler(req: Request, res: Response) {
 
       if (selectError) {
         console.error(`❌ [ASAAS WEBHOOK] Error retrieving instructor metadata: ${selectError.message}`);
+        await finalizeLedger('FAILED', selectError.message);
         return res.status(500).json({ error: 'Internal Server Error' });
       }
 
       if (!instructor) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No instructor found registered with provider_account_id: ${accountId}`);
+        await finalizeLedger('FAILED', `Not Found: No instructor found for provider_account_id ${accountId}`);
         return res.status(404).json({ error: `Not Found: No instructor found for provider_account_id ${accountId}` });
       }
 
@@ -74,6 +244,7 @@ export default async function handler(req: Request, res: Response) {
         instructor.payouts_enabled === true
       ) {
         console.log(`ℹ️ [ASAAS WEBHOOK] Duplicate event ignored. Instructor ${instructor.id} already approved with active payouts.`);
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'Webhook processed (no-op/idempotent): Instructor status already approved',
@@ -94,10 +265,18 @@ export default async function handler(req: Request, res: Response) {
 
       if (updateError) {
         console.error(`❌ [ASAAS WEBHOOK] Error updating instructor: ${updateError.message}`);
+        await finalizeLedger('FAILED', updateError.message);
         return res.status(500).json({ error: 'Internal Server Error: Unable to update instructor status' });
       }
 
       console.log(`✅ [ASAAS WEBHOOK] Successfully processed ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED status update for instructor ID: ${instructor.id}`);
+      await finalizeLedger('PROCESSED');
+      return res.status(200).json({
+        success: true,
+        message: 'ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED processed successfully',
+        event,
+        timestamp
+      });
     } else if (['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED', 'PAYMENT_UPDATED'].includes(event.toUpperCase())) {
       const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
       let groupId = payload.payment?.externalReference;
@@ -106,6 +285,7 @@ export default async function handler(req: Request, res: Response) {
       // If PAYMENT_UPDATED, we only want to mark as paid if the status is actually RECEIVED or CONFIRMED or RECEIVED_IN_CASH
       if (event.toUpperCase() === 'PAYMENT_UPDATED' && !['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(paymentStatus?.toUpperCase())) {
         console.log(`ℹ️ [ASAAS WEBHOOK] Payment updated but status is ${paymentStatus}. Not confirming booking yet.`);
+        await finalizeLedger('IGNORED');
         return res.status(200).json({
           success: true,
           message: 'Updated status ignored (not paid yet)',
@@ -116,6 +296,7 @@ export default async function handler(req: Request, res: Response) {
 
       if (!currentPaymentId) {
         console.error('❌ Asaas Webhook: Payment ID missing for payment event.');
+        await finalizeLedger('FAILED', 'Missing paymentId');
         return res.status(400).json({ error: 'Missing paymentId' });
       }
 
@@ -131,6 +312,7 @@ export default async function handler(req: Request, res: Response) {
 
         if (!appointmentId || !transactionId) {
           console.error(`❌ [ASAAS WEBHOOK] Caixinha com referência inválida: ${externalRef}`);
+          await finalizeLedger('FAILED', 'Invalid tip externalReference format');
           return res.status(400).json({ error: 'Invalid tip externalReference format' });
         }
 
@@ -143,16 +325,19 @@ export default async function handler(req: Request, res: Response) {
 
         if (fetchTxError) {
           console.error(`❌ [ASAAS WEBHOOK] Error fetching transaction ${transactionId}:`, fetchTxError.message);
+          await finalizeLedger('FAILED', fetchTxError.message);
           return res.status(500).json({ error: 'Database error fetching transaction' });
         }
 
         if (!tx) {
           console.error(`❌ [ASAAS WEBHOOK] Nenhuma transação provisória encontrada com ID ${transactionId}.`);
+          await finalizeLedger('FAILED', 'Provisional transaction not found');
           return res.status(404).json({ error: 'Provisional transaction not found' });
         }
 
         if (tx.status === 'completed') {
           console.log(`ℹ️ [ASAAS WEBHOOK] Caixinha transação ${transactionId} já está concluída (idempotente).`);
+          await finalizeLedger('PROCESSED');
           return res.status(200).json({
             success: true,
             message: 'Caixinha already completed (idempotent)',
@@ -189,6 +374,7 @@ export default async function handler(req: Request, res: Response) {
 
         if (updateTxError) {
           console.error(`❌ [ASAAS WEBHOOK] Error completing tip transaction ${transactionId}:`, updateTxError.message);
+          await finalizeLedger('FAILED', updateTxError.message);
           return res.status(500).json({ error: 'Database error completing transaction' });
         }
 
@@ -213,6 +399,7 @@ export default async function handler(req: Request, res: Response) {
             if (logError) {
               if (logError.code === '23505') {
                 console.log(`ℹ️ [ASAAS WEBHOOK] Notificação de caixinha já enviada para o appointment ${appointmentId} (idempotente via notification_logs).`);
+                await finalizeLedger('PROCESSED');
                 return res.status(200).json({
                   success: true,
                   message: 'Tip notification already processed (idempotency)',
@@ -236,6 +423,7 @@ export default async function handler(req: Request, res: Response) {
           }
         }
 
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'Caixinha payment confirmed and processed successfully',
@@ -258,6 +446,7 @@ export default async function handler(req: Request, res: Response) {
 
       if (!groupId) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No group_id found for payment identifier: ${currentPaymentId}`);
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'Processed but no associated booking found',
@@ -276,11 +465,13 @@ export default async function handler(req: Request, res: Response) {
 
       if (fetchAptsError) {
         console.error(`❌ [ASAAS WEBHOOK] Error querying appointments for validation:`, fetchAptsError.message);
+        await finalizeLedger('FAILED', fetchAptsError.message);
         return res.status(500).json({ error: 'Database verification failed' });
       }
 
       if (!existingApts || existingApts.length === 0) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for group: ${groupId}`);
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'No appointments found',
@@ -292,6 +483,7 @@ export default async function handler(req: Request, res: Response) {
       const hasInvalidStatus = existingApts.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
       if (hasInvalidStatus) {
         console.warn(`⚠️ Pagamento recebido para reserva expirada. Necessária análise manual. (Grupo: ${groupId})`);
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'Pagamento recebido para reserva expirada. Necessária análise manual.',
@@ -316,6 +508,7 @@ export default async function handler(req: Request, res: Response) {
 
       if (updateErr) {
         console.error(`❌ [ASAAS WEBHOOK] Error updating appointments for group ${groupId}:`, updateErr.message);
+        await finalizeLedger('FAILED', updateErr.message);
         return res.status(500).json({ error: 'Database update failed' });
       }
 
@@ -438,11 +631,20 @@ export default async function handler(req: Request, res: Response) {
           }
         }
       }
+
+      await finalizeLedger('PROCESSED');
+      return res.status(200).json({
+        success: true,
+        message: 'Payment event processed successfully',
+        event,
+        timestamp
+      });
     } else if (['PAYMENT_REFUNDED', 'PAYMENT_PARTIALLY_REFUNDED'].includes(event.toUpperCase())) {
       const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
 
       if (!currentPaymentId) {
         console.error('❌ Asaas Webhook: Payment ID missing for refund event.');
+        await finalizeLedger('FAILED', 'Missing paymentId');
         return res.status(400).json({ error: 'Missing paymentId' });
       }
 
@@ -455,11 +657,13 @@ export default async function handler(req: Request, res: Response) {
 
       if (fetchErr) {
         console.error(`❌ [ASAAS WEBHOOK] Error querying appointments for refund event:`, fetchErr.message);
+        await finalizeLedger('FAILED', fetchErr.message);
         return res.status(500).json({ error: 'Database verification failed' });
       }
 
       if (!apts || apts.length === 0) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for refunded payment: ${currentPaymentId}`);
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'Refund event processed but no associated appointment found',
@@ -472,6 +676,7 @@ export default async function handler(req: Request, res: Response) {
 
       if (cancellingApts.length === 0) {
         console.log(`ℹ️ [ASAAS WEBHOOK] No appointments in 'cancelling' status for payment ${currentPaymentId} (already cancelled or not cancelling). Idempotent no-op.`);
+        await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
           message: 'Refund event processed (idempotent/no-op)',
@@ -493,6 +698,7 @@ export default async function handler(req: Request, res: Response) {
 
       if (updateErr) {
         console.error(`❌ [ASAAS WEBHOOK] Error updating appointments to cancelled:`, updateErr.message);
+        await finalizeLedger('FAILED', updateErr.message);
         return res.status(500).json({ error: 'Database update failed' });
       }
 
@@ -514,6 +720,7 @@ export default async function handler(req: Request, res: Response) {
         console.error(`⚠️ [ASAAS WEBHOOK] Error recording refund settlement:`, refErr);
       }
 
+      await finalizeLedger('PROCESSED');
       return res.status(200).json({
         success: true,
         message: 'Refund event reconciled successfully',
@@ -522,9 +729,17 @@ export default async function handler(req: Request, res: Response) {
       });
     } else {
       console.log(`ℹ️ [ASAAS WEBHOOK] Event ${event} parsed but ignored.`);
+      await finalizeLedger('IGNORED');
+      return res.status(200).json({
+        success: true,
+        message: 'Event ignored',
+        event,
+        timestamp
+      });
     }
 
     // 4. Responder HTTP 200 quando o payload for válido.
+    await finalizeLedger('PROCESSED');
     return res.status(200).json({ 
       success: true, 
       message: 'Webhook processed successfully',
@@ -533,6 +748,21 @@ export default async function handler(req: Request, res: Response) {
     });
   } catch (error: any) {
     console.error('⚠️ Error processing Asaas Webhook:', error.message);
+    // Best-effort attempt to log ledger error if ledgerId was defined
+    try {
+      await supabaseAdmin
+        .from('transactions')
+        .update({
+          processing_status: 'FAILED',
+          processing_error: error.message,
+          processed_at: new Date().toISOString()
+        })
+        .eq('type', 'webhook_event')
+        .eq('provider', 'asaas')
+        .eq('provider_event_id', req.body?.id || 'unknown');
+    } catch (e) {
+      // ignore secondary catch error
+    }
     return res.status(400).json({ error: `Bad Request: ${error.message}` });
   }
 }
