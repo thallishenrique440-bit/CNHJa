@@ -9,25 +9,63 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function getStrictRawBodyString(req: Request): string {
-  const rawBody = (req as any).rawBody;
-  if (Buffer.isBuffer(rawBody)) {
-    return rawBody.toString('utf-8');
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+async function getRawBodyBuffer(req: any): Promise<Buffer> {
+  // 1. Check if rawBody Buffer was attached by Express verify middleware (server.ts)
+  if (Buffer.isBuffer(req.rawBody)) {
+    req.ingestionMode = 'express_middleware';
+    return req.rawBody;
   }
-  if (typeof rawBody === 'string' && rawBody.length > 0) {
-    return rawBody;
+  if (typeof req.rawBody === 'string' && req.rawBody.length > 0) {
+    req.ingestionMode = 'express_middleware';
+    return Buffer.from(req.rawBody, 'utf-8');
   }
+
+  // 2. Check if req.body is already a Buffer or String
   if (Buffer.isBuffer(req.body)) {
-    return req.body.toString('utf-8');
-  }
-  if (typeof req.body === 'string' && req.body.length > 0) {
+    req.ingestionMode = 'raw_buffer_body';
     return req.body;
   }
+  if (typeof req.body === 'string' && req.body.length > 0) {
+    req.ingestionMode = 'raw_string_body';
+    return Buffer.from(req.body, 'utf-8');
+  }
+
+  // 3. Read directly from the raw HTTP incoming stream (Vercel Serverless with bodyParser: false)
+  if (req.readable !== false && (req.readable || typeof req[Symbol.asyncIterator] === 'function')) {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      }
+      const fullBuffer = Buffer.concat(chunks);
+      if (fullBuffer.length > 0) {
+        req.rawBody = fullBuffer;
+        req.ingestionMode = 'raw_stream';
+        return fullBuffer;
+      }
+    } catch (streamErr) {
+      console.warn('⚠️ [ASAAS WEBHOOK] Stream reading encountered an error, checking fallback:', streamErr);
+    }
+  }
+
+  // 4. Contingency fallback if body was pre-parsed by upstream middleware without preserving rawBody
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    console.warn('⚠️ [ASAAS WEBHOOK] Contingency Fallback Triggered: Raw stream unavailable. Re-serializing parsed req.body to Buffer.');
+    req.ingestionMode = 'contingency_fallback';
+    return Buffer.from(JSON.stringify(req.body), 'utf-8');
+  }
+
   throw new Error('RAW_HTTP_BODY_UNAVAILABLE');
 }
 
-function computeRawPayloadHash(rawBodyStr: string): string {
-  return crypto.createHash('sha256').update(rawBodyStr, 'utf-8').digest('hex');
+function computeRawPayloadHash(rawBuffer: Buffer): string {
+  return crypto.createHash('sha256').update(rawBuffer).digest('hex');
 }
 
 export default async function handler(req: Request, res: Response) {
@@ -46,24 +84,40 @@ export default async function handler(req: Request, res: Response) {
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing asaas-access-token' });
   }
 
+  let ledgerId: string | undefined;
+
   try {
-    const payload = req.body;
-    
+    // 1. Read Raw HTTP Body Buffer (Authentic wire bytes) & compute SHA-256
+    let rawBodyBuffer: Buffer;
+    let rawBodyStr: string;
+    try {
+      rawBodyBuffer = await getRawBodyBuffer(req);
+      rawBodyStr = rawBodyBuffer.toString('utf-8');
+    } catch (err) {
+      console.error('❌ [ASAAS WEBHOOK] Infrastructure Error: Raw HTTP request body unavailable for cryptographic hash calculation.');
+      return res.status(500).json({ error: 'Infrastructure Error: Raw HTTP body unavailable for cryptographic hash' });
+    }
+
+    const payloadHash = computeRawPayloadHash(rawBodyBuffer);
+
+    // 2. Parse JSON payload securely from authentic raw body string
+    let payload: any;
+    try {
+      payload = JSON.parse(rawBodyStr);
+    } catch (parseErr: any) {
+      if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+        payload = req.body;
+      } else {
+        console.error('❌ [ASAAS WEBHOOK] Malformed JSON payload received:', parseErr.message);
+        return res.status(400).json({ error: 'Bad Request: Malformed JSON payload' });
+      }
+    }
+
     // Parse fields safely
     const timestamp = new Date().toISOString();
     const event = payload?.event || 'UNKNOWN_EVENT';
     const accountId = payload?.account?.id || payload?.accountId || payload?.account || null;
     const paymentId = payload?.payment?.id || payload?.paymentId || null;
-
-    // 1. Compute Raw HTTP Payload SHA-256 Hash
-    let rawBodyStr: string;
-    try {
-      rawBodyStr = getStrictRawBodyString(req);
-    } catch (err) {
-      console.error('❌ [ASAAS WEBHOOK] Infrastructure Error: Raw HTTP request body unavailable for cryptographic hash calculation.');
-      return res.status(500).json({ error: 'Infrastructure Error: Raw HTTP body unavailable for cryptographic hash' });
-    }
-    const payloadHash = computeRawPayloadHash(rawBodyStr);
 
     // 2. Extract Native Provider Event ID (STRICT: null if missing from provider)
     const providerEventId: string | null = payload?.id || null;
@@ -97,7 +151,6 @@ export default async function handler(req: Request, res: Response) {
 
     const { data: existingLedger } = await ledgerQuery.maybeSingle();
 
-    let ledgerId: string;
     let currentAttempt = 1;
 
     if (existingLedger) {
@@ -162,6 +215,8 @@ export default async function handler(req: Request, res: Response) {
 
     } else {
       const initialMetadata = {
+        ingestion_mode: (req as any).ingestionMode || 'raw_stream',
+        raw_body_bytes: rawBodyBuffer.length,
         retry_history: [{
           attempt: 1,
           received_at: timestamp,
@@ -737,32 +792,23 @@ export default async function handler(req: Request, res: Response) {
         timestamp
       });
     }
-
-    // 4. Responder HTTP 200 quando o payload for válido.
-    await finalizeLedger('PROCESSED');
-    return res.status(200).json({ 
-      success: true, 
-      message: 'Webhook processed successfully',
-      event,
-      timestamp
-    });
   } catch (error: any) {
     console.error('⚠️ Error processing Asaas Webhook:', error.message);
     // Best-effort attempt to log ledger error if ledgerId was defined
-    try {
-      await supabaseAdmin
-        .from('transactions')
-        .update({
-          processing_status: 'FAILED',
-          processing_error: error.message,
-          processed_at: new Date().toISOString()
-        })
-        .eq('type', 'webhook_event')
-        .eq('provider', 'asaas')
-        .eq('provider_event_id', req.body?.id || 'unknown');
-    } catch (e) {
-      // ignore secondary catch error
+    if (typeof ledgerId !== 'undefined') {
+      try {
+        await supabaseAdmin
+          .from('transactions')
+          .update({
+            processing_status: 'FAILED',
+            processing_error: error.message,
+            processed_at: new Date().toISOString()
+          })
+          .eq('id', ledgerId);
+      } catch (e) {
+        // ignore secondary catch error
+      }
     }
-    return res.status(400).json({ error: `Bad Request: ${error.message}` });
+    return res.status(500).json({ error: `Internal Server Error: ${error.message}` });
   }
 }
