@@ -36,12 +36,37 @@ export class CashFlowProjector {
     const results: CashFlowProjectionRecord[] = [];
     let isDuplicate = true;
 
+    let instructorId = payload.instructorId;
+
+    if (!instructorId && payload.providerPaymentId) {
+      const { data: inst } = await supabase
+        .from('payment_installments')
+        .select('instructor_id')
+        .eq('provider_payment_id', payload.providerPaymentId)
+        .limit(1)
+        .maybeSingle();
+
+      if (inst?.instructor_id) {
+        instructorId = inst.instructor_id;
+      } else {
+        const { data: apt } = await supabase
+          .from('appointments')
+          .select('instructor_id')
+          .eq('provider_payment_id', payload.providerPaymentId)
+          .limit(1)
+          .maybeSingle();
+        if (apt?.instructor_id) {
+          instructorId = apt.instructor_id;
+        }
+      }
+    }
+
     // 1. Instructor Cash Flow
-    if (payload.instructorId) {
+    if (instructorId) {
       const { record: instCf, updated } = await this.updateCashFlowEntry(
         supabase,
         'INSTRUCTOR',
-        payload.instructorId,
+        instructorId,
         projectionDate,
         payload
       );

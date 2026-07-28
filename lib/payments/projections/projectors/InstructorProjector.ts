@@ -33,7 +33,31 @@ export class InstructorProjector {
     supabase: SupabaseClient,
     payload: ProjectionEventPayload
   ): Promise<ProjectionResult> {
-    const instructorId = payload.instructorId;
+    let instructorId = payload.instructorId;
+
+    if (!instructorId && payload.providerPaymentId) {
+      const { data: inst } = await supabase
+        .from('payment_installments')
+        .select('instructor_id')
+        .eq('provider_payment_id', payload.providerPaymentId)
+        .limit(1)
+        .maybeSingle();
+
+      if (inst?.instructor_id) {
+        instructorId = inst.instructor_id;
+      } else {
+        const { data: apt } = await supabase
+          .from('appointments')
+          .select('instructor_id')
+          .eq('provider_payment_id', payload.providerPaymentId)
+          .limit(1)
+          .maybeSingle();
+        if (apt?.instructor_id) {
+          instructorId = apt.instructor_id;
+        }
+      }
+    }
+
     if (!instructorId) {
       ProjectionLogger.info('InstructorProjector', 'Event ignored: missing instructorId', {
         eventType: 'Projection Ignored',

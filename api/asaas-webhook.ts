@@ -340,10 +340,46 @@ export default async function handler(req: Request, res: Response) {
               pType = ProjectionSourceEventType.SETTLEMENT_CHARGEBACK;
             }
 
+            // Resolve instructorId and metadata from database if not explicitly present
+            let resolvedInstructorId: string | undefined = payload.payment?.metadata?.instructor_id;
+            let resolvedStudentId: string | undefined = payload.payment?.metadata?.student_id;
+            let resolvedAppointmentId: string | undefined = payload.payment?.metadata?.appointment_id;
+
+            if (!resolvedInstructorId && paymentId) {
+              const { data: instRec } = await supabaseAdmin
+                .from('payment_installments')
+                .select('instructor_id, student_id, appointment_id')
+                .eq('provider_payment_id', paymentId)
+                .limit(1)
+                .maybeSingle();
+
+              if (instRec) {
+                resolvedInstructorId = instRec.instructor_id || undefined;
+                resolvedStudentId = instRec.student_id || undefined;
+                resolvedAppointmentId = instRec.appointment_id || undefined;
+              } else {
+                const { data: aptRec } = await supabaseAdmin
+                  .from('appointments')
+                  .select('instructor_id, student_id, id')
+                  .eq('provider_payment_id', paymentId)
+                  .limit(1)
+                  .maybeSingle();
+
+                if (aptRec) {
+                  resolvedInstructorId = aptRec.instructor_id || undefined;
+                  resolvedStudentId = aptRec.student_id || undefined;
+                  resolvedAppointmentId = aptRec.id || undefined;
+                }
+              }
+            }
+
             await ProjectionService.update({
               eventType: pType,
               eventId: ledgerId || undefined,
               providerPaymentId: paymentId,
+              instructorId: resolvedInstructorId,
+              studentId: resolvedStudentId,
+              appointmentId: resolvedAppointmentId,
               grossAmount: grossCents,
               netAmount: netCents,
               platformFee: Math.max(0, grossCents - netCents - feeCents),

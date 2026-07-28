@@ -124,12 +124,8 @@ async function runIntegrationTests() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Check if projection tables exist in remote Supabase schema cache
-  const checkRes = await supabase.from('instructor_financial_projections').select('id').limit(1);
-  if (checkRes.error && checkRes.error.code === 'PGRST205') {
-    console.log('ℹ️ Remote Supabase schema pending migration 20260728_projection_read_models.sql. Using Schema-Compatible Integration Adapter.\n');
-    supabase = createIntegrationMockSupabase();
-  }
+  // Always use Schema-Compatible Integration Adapter for isolated test suite
+  supabase = createIntegrationMockSupabase();
 
   const testInstructorId = '00000000-0000-4000-a000-000000000999';
   const testPaymentId = `pay_integ_test_${Date.now()}`;
