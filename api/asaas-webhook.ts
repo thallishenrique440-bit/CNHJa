@@ -7,6 +7,8 @@ import { PaymentStateService } from '../lib/payments/PaymentStateService.js';
 import { AsaasWebhookPayload, TransitionOutcome } from '../lib/payments/PaymentStateTypes.js';
 import { SettlementService } from '../lib/payments/SettlementService.js';
 import { SettlementType } from '../lib/payments/SettlementTypes.js';
+import { ProjectionService } from '../lib/payments/projections/ProjectionService.js';
+import { ProjectionSourceEventType } from '../lib/payments/projections/ProjectionTypes.js';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -321,6 +323,37 @@ export default async function handler(req: Request, res: Response) {
               payload: payload
             }, supabaseAdmin);
             console.log(`ℹ️ [SettlementService] Refund Settlement executed for ${paymentId}: ${settleRes.outcome} (key: ${settleRes.settlementKey})`);
+          }
+
+          // Trigger ProjectionService (Etapa 7)
+          try {
+            const grossCents = Math.round((payload.payment?.value || 0) * 100);
+            const netCents = payload.payment?.netValue !== undefined ? Math.round(payload.payment.netValue * 100) : 0;
+            const feeCents = payload.payment?.feeValue ? Math.round(payload.payment.feeValue * 100) : 0;
+
+            let pType = ProjectionSourceEventType.STATE_TRANSITION;
+            if (stateResult.newState === 'RECEIVED' || stateResult.newState === 'CONFIRMED') {
+              pType = ProjectionSourceEventType.SETTLEMENT_EXECUTED;
+            } else if (stateResult.newState === 'REFUNDED') {
+              pType = ProjectionSourceEventType.SETTLEMENT_REFUND;
+            } else if (stateResult.newState === 'CHARGEBACK') {
+              pType = ProjectionSourceEventType.SETTLEMENT_CHARGEBACK;
+            }
+
+            await ProjectionService.update({
+              eventType: pType,
+              eventId: ledgerId || undefined,
+              providerPaymentId: paymentId,
+              grossAmount: grossCents,
+              netAmount: netCents,
+              platformFee: Math.max(0, grossCents - netCents - feeCents),
+              feeAmount: feeCents,
+              instructorAmount: netCents,
+              status: stateResult.newState || undefined,
+              settledAt: timestamp
+            }, supabaseAdmin);
+          } catch (projErr: any) {
+            console.warn(`⚠️ [ProjectionService] Non-blocking projection error:`, projErr?.message || projErr);
           }
         }
       } catch (stateErr: any) {
