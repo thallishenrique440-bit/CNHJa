@@ -3,6 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { NotificationService } from '../lib/NotificationService.js';
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
+import { PaymentStateService } from '../lib/payments/PaymentStateService.js';
+import { AsaasWebhookPayload, TransitionOutcome } from '../lib/payments/PaymentStateTypes.js';
+import { SettlementService } from '../lib/payments/SettlementService.js';
+import { SettlementType } from '../lib/payments/SettlementTypes.js';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -264,6 +268,65 @@ export default async function handler(req: Request, res: Response) {
         console.error(`⚠️ [EVENT LEDGER] Failed to update processing status to ${status}:`, err);
       }
     };
+
+    // Invoke PaymentStateService (Etapa 5) & SettlementService (Etapa 6)
+    if (paymentId && event.toUpperCase().startsWith('PAYMENT_')) {
+      try {
+        const stateResult = await PaymentStateService.processEvent({
+          providerPaymentId: paymentId,
+          providerEventId: providerEventId,
+          eventType: event,
+          installmentNumber: payload.payment?.installmentNumber || null,
+          externalReference: payload.payment?.externalReference || null,
+          payload: payload as AsaasWebhookPayload,
+          ledgerId: ledgerId,
+          timestamp: timestamp
+        }, supabaseAdmin);
+        console.log(`ℹ️ [PaymentStateService] Executed transition for ${paymentId}: ${stateResult.outcome} (${stateResult.oldState} -> ${stateResult.newState})`);
+
+        // OFFICIAL SETTLEMENT SERVICE TRIGGER MATRIX (Etapa 6)
+        if (stateResult.outcome === TransitionOutcome.TRANSITION_EXECUTED) {
+          const grossCents = Math.round((payload.payment?.value || 0) * 100);
+          const netVal = payload.payment?.netValue;
+          const netCents = netVal !== undefined ? Math.round(netVal * 100) : undefined;
+
+          if (stateResult.newState === 'RECEIVED' || stateResult.newState === 'CONFIRMED') {
+            const settleRes = await SettlementService.processSettlement({
+              providerPaymentId: paymentId,
+              installmentNumber: payload.payment?.installmentNumber || 1,
+              providerSettlementId: payload.payment?.id || paymentId,
+              settlementType: SettlementType.PAYMENT,
+              grossAmount: grossCents,
+              netAmount: netCents,
+              feeAmount: payload.payment?.feeValue ? Math.round(payload.payment.feeValue * 100) : undefined,
+              paymentMethod: payload.payment?.billingType,
+              settledAt: payload.payment?.paymentDate || payload.payment?.clientPaymentDate || timestamp,
+              eventLedgerId: ledgerId,
+              payload: payload
+            }, supabaseAdmin);
+            console.log(`ℹ️ [SettlementService] Settlement executed for ${paymentId}: ${settleRes.outcome} (key: ${settleRes.settlementKey})`);
+
+          } else if (stateResult.newState === 'REFUNDED' || stateResult.newState === 'CHARGEBACK') {
+            const sType = stateResult.newState === 'CHARGEBACK' ? SettlementType.CHARGEBACK : SettlementType.REFUND;
+            const settleRes = await SettlementService.processRefundSettlement({
+              providerPaymentId: paymentId,
+              installmentNumber: payload.payment?.installmentNumber || 1,
+              providerSettlementId: payload.payment?.id ? `${payload.payment.id}_${sType.toLowerCase()}` : undefined,
+              settlementType: sType,
+              grossAmount: grossCents,
+              netAmount: netCents,
+              paymentMethod: payload.payment?.billingType,
+              settledAt: timestamp,
+              eventLedgerId: ledgerId,
+              payload: payload
+            }, supabaseAdmin);
+            console.log(`ℹ️ [SettlementService] Refund Settlement executed for ${paymentId}: ${settleRes.outcome} (key: ${settleRes.settlementKey})`);
+          }
+        }
+      } catch (stateErr: any) {
+        console.warn(`⚠️ [PaymentStateService/SettlementService] Processing error:`, stateErr?.message || stateErr);
+      }
+    }
 
     // Procesasmento exclusivo do evento ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED
     if (event === 'ACCOUNT_STATUS_GENERAL_APPROVAL_APPROVED') {

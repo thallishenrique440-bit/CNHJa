@@ -172,7 +172,7 @@ export class InstallmentService {
         fee_amount: dto.feeAmountCents || 0,
         platform_fee: dto.platformFeeCents,
         instructor_amount: instructorAmount,
-        status: 'PAID',
+        status: 'RECEIVED',
         payment_date: paymentDate,
         group_id: resolvedGroupId,
         appointment_id: dto.appointmentId || null,
