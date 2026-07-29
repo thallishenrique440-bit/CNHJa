@@ -85,11 +85,12 @@ export interface ProjectionEventPayload {
   installmentId?: string;
   instructorId?: string;
   studentId?: string;
-  grossAmount: number;           // Cents
-  netAmount: number;             // Cents
-  platformFee: number;           // Cents
-  feeAmount: number;             // Cents
-  instructorAmount: number;      // Cents
+  appointmentId?: string;
+  grossAmount?: number;          // Cents
+  netAmount?: number;            // Cents
+  platformFee?: number;          // Cents
+  feeAmount?: number;            // Cents
+  instructorAmount?: number;     // Cents
   status?: string;               // e.g. PENDING, RECEIVED, REFUNDED
   settlementType?: 'PAYMENT' | 'REFUND' | 'CHARGEBACK';
   dueDate?: string;              // ISO or YYYY-MM-DD
