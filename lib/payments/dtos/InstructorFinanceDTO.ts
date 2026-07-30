@@ -8,12 +8,14 @@
 
 export interface InstructorFinanceSummaryDTO {
   instructorId: string;
-  futureReceivablesCents: number;
-  pendingReleaseCents: number;
-  settledAvailableCents: number;
-  totalGrossCents: number;
-  totalPlatformFeeCents: number;
-  totalNetCents: number;
+  availableBalanceCents: number;      // settled_available
+  futureReceivablesCents: number;     // future_receivables
+  totalNetSettledCents: number;       // total_net
+  totalGrossCents: number;            // total_gross
+  totalFeesCents: number;             // total_platform_fee
+  pendingReleaseCents: number;        // pending_release
+  pendingPayoutCents: number;         // pending_payout
+  totalPaidOutCents: number;          // total_paid_out
   totalRefundsCents: number;
   totalChargebacksCents: number;
   totalOverdueCents: number;

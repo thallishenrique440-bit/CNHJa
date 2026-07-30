@@ -102,6 +102,22 @@ function createMockSupabase(existingData: Record<string, any> = {}) {
               return { data: { ...payload }, error: null };
             }
           })
+        }),
+        update: (payload: any) => ({
+          eq: (f1: string, v1: any) => ({
+            eq: (f2: string, v2: any) => ({
+              select: () => ({
+                maybeSingle: async () => {
+                  const idx = store.findIndex((item: any) => item[f1] === v1 && item[f2] === v2);
+                  if (idx === -1) {
+                    return { data: null, error: null };
+                  }
+                  store[idx] = { ...store[idx], ...payload };
+                  return { data: { ...store[idx] }, error: null };
+                }
+              })
+            })
+          })
         })
       };
     }
@@ -184,15 +200,15 @@ async function runUnitTests() {
   assert(dupRes.outcome === ProjectionOutcome.NO_OP_ALREADY_PROJECTED, 'InstructorProjector detects duplicate event');
   assert(dupRes.rebuildVersion === 2, 'Rebuild version is preserved on duplicate check');
 
-  // 4. Multiple Transition Events (PENDING -> OVERDUE)
-  console.log('\n📌 GROUP 4: Multiple Transition Events Sequence');
+  // 4. Multiple Transition Events (FINANCIAL_SCHEDULE_CREATED -> SETTLEMENT_CREATED)
+  console.log('\n📌 GROUP 4: Wave 2 Event Sequence (FINANCIAL_SCHEDULE_CREATED -> SETTLEMENT_CREATED)');
   const mockMulti = createMockSupabase();
   const instId = 'inst_uuid_202';
 
-  // Event 1: PENDING
+  // Event 1: FINANCIAL_SCHEDULE_CREATED
   const e1: ProjectionEventPayload = {
-    eventType: ProjectionSourceEventType.STATE_TRANSITION,
-    eventId: 'evt_t1',
+    eventType: ProjectionSourceEventType.FINANCIAL_SCHEDULE_CREATED,
+    eventId: 'sched_pay_m1',
     providerPaymentId: 'pay_m1',
     instructorId: instId,
     grossAmount: 20000,
@@ -204,12 +220,12 @@ async function runUnitTests() {
   };
   await InstructorProjector.project(mockMulti, e1);
   const check1 = await mockMulti.from('instructor_financial_projections').select('*').eq('instructor_id', instId).maybeSingle();
-  assert(check1.data.future_receivables === 17000, 'PENDING state increases future_receivables to 17000');
+  assert(check1.data.future_receivables === 17000, 'FINANCIAL_SCHEDULE_CREATED increases future_receivables to 17000');
 
-  // Event 2: OVERDUE
+  // Event 2: SETTLEMENT_CREATED
   const e2: ProjectionEventPayload = {
-    eventType: ProjectionSourceEventType.STATE_TRANSITION,
-    eventId: 'evt_t2',
+    eventType: ProjectionSourceEventType.SETTLEMENT_CREATED,
+    settlementId: 'st_m1',
     providerPaymentId: 'pay_m1',
     instructorId: instId,
     grossAmount: 20000,
@@ -217,12 +233,13 @@ async function runUnitTests() {
     platformFee: 3000,
     feeAmount: 0,
     instructorAmount: 17000,
-    status: 'OVERDUE'
+    settledAt: new Date().toISOString()
   };
   await InstructorProjector.project(mockMulti, e2);
   const check2 = await mockMulti.from('instructor_financial_projections').select('*').eq('instructor_id', instId).maybeSingle();
-  assert(check2.data.future_receivables === 0, 'OVERDUE state removes from future_receivables');
-  assert(check2.data.total_overdue === 17000, 'OVERDUE state adds to total_overdue');
+  assert(check2.data.future_receivables === 0, 'SETTLEMENT_CREATED removes from future_receivables');
+  assert(check2.data.settled_available === 17000, 'SETTLEMENT_CREATED adds to settled_available');
+  assert(check2.data.total_net === 17000, 'SETTLEMENT_CREATED adds to total_net');
   assert(check2.data.projection_version === 2, 'projection_version incremented to 2');
 
   // 5. Multiple Settlement Events

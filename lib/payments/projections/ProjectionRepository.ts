@@ -20,7 +20,7 @@ import {
   CashFlowEntityType,
   MonthlyForecastDTO
 } from './ProjectionTypes.js';
-import { ProjectionPersistenceError } from './ProjectionErrors.js';
+import { ProjectionPersistenceError, ProjectionOptimisticLockError } from './ProjectionErrors.js';
 import { ProjectionLogger } from './ProjectionLogger.js';
 
 export class ProjectionRepository {
@@ -49,7 +49,7 @@ export class ProjectionRepository {
   }
 
   /**
-   * Save or update instructor projection record
+   * Save or update instructor projection record with atomic single-statement update & optimistic locking
    */
   public static async saveInstructorProjection(
     supabase: SupabaseClient,
@@ -73,6 +73,38 @@ export class ProjectionRepository {
       updated_at: new Date().toISOString()
     };
 
+    // If updating an existing version (version > 1), enforce optimistic locking on projection_version
+    if (record.projection_version > 1) {
+      const expectedOldVersion = record.projection_version - 1;
+      const { data, error } = await supabase
+        .from('instructor_financial_projections')
+        .update(payload)
+        .eq('instructor_id', record.instructor_id)
+        .eq('projection_version', expectedOldVersion)
+        .select('*')
+        .maybeSingle();
+
+      if (error) {
+        ProjectionLogger.error('ProjectionRepository', `Failed updating instructor projection for ${record.instructor_id}: ${error.message}`, {
+          identifier: record.instructor_id,
+          metadata: { code: error.code }
+        });
+        throw new ProjectionPersistenceError(`Failed updating instructor projection: ${error.message}`, error);
+      }
+
+      if (!data) {
+        // Optimistic locking conflict: version changed concurrently
+        throw new ProjectionOptimisticLockError(
+          `Concurrent modification on instructor projection for ${record.instructor_id}. Expected version ${expectedOldVersion}`,
+          record.instructor_id,
+          expectedOldVersion
+        );
+      }
+
+      return data as InstructorProjectionRecord;
+    }
+
+    // Initial insert or version 1 upsert
     const { data, error } = await supabase
       .from('instructor_financial_projections')
       .upsert(payload, { onConflict: 'instructor_id' })

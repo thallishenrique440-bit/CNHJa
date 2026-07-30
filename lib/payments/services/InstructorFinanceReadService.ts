@@ -27,18 +27,59 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     instructorId: string
   ): Promise<InstructorFinanceSummaryDTO | null> {
     const proj = await ProjectionService.getInstructorProjection(supabaseClient, instructorId);
+    
+    // Fetch payouts totals if present
+    let pendingPayoutCents = 0;
+    let totalPaidOutCents = 0;
+
+    try {
+      const { data: payouts } = await supabaseClient
+        .from('payouts')
+        .select('amount, status')
+        .eq('instructor_id', instructorId);
+
+      if (payouts && payouts.length > 0) {
+        for (const p of payouts) {
+          if (p.status === 'PROCESSING' || p.status === 'SCHEDULED' || p.status === 'PENDING') {
+            pendingPayoutCents += p.amount || 0;
+          } else if (p.status === 'PAID' || p.status === 'COMPLETED') {
+            totalPaidOutCents += p.amount || 0;
+          }
+        }
+      }
+    } catch {
+      // Payouts table query non-fatal fallback
+    }
+
     if (!proj) {
-      return null;
+      return {
+        instructorId,
+        availableBalanceCents: 0,
+        futureReceivablesCents: 0,
+        totalNetSettledCents: 0,
+        totalGrossCents: 0,
+        totalFeesCents: 0,
+        pendingReleaseCents: 0,
+        pendingPayoutCents,
+        totalPaidOutCents,
+        totalRefundsCents: 0,
+        totalChargebacksCents: 0,
+        totalOverdueCents: 0,
+        projectionVersion: 0,
+        updatedAt: new Date().toISOString()
+      };
     }
 
     return {
       instructorId: proj.instructorId,
+      availableBalanceCents: proj.settledAvailableCents,
       futureReceivablesCents: proj.futureReceivablesCents,
-      pendingReleaseCents: proj.pendingReleaseCents,
-      settledAvailableCents: proj.settledAvailableCents,
+      totalNetSettledCents: proj.totalNetCents,
       totalGrossCents: proj.totalGrossCents,
-      totalPlatformFeeCents: proj.totalPlatformFeeCents,
-      totalNetCents: proj.totalNetCents,
+      totalFeesCents: proj.totalPlatformFeeCents,
+      pendingReleaseCents: proj.pendingReleaseCents,
+      pendingPayoutCents,
+      totalPaidOutCents,
       totalRefundsCents: proj.totalRefundsCents,
       totalChargebacksCents: proj.totalChargebacksCents,
       totalOverdueCents: proj.totalOverdueCents,

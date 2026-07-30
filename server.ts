@@ -20,24 +20,25 @@ async function startServer() {
     }
   }));
 
-  // API Routes
-  app.post('/api/:handler', async (req, res) => {
-    const { handler } = req.params;
+  // API Routes (Handles /api/handler and subpaths like /api/handler/summary)
+  app.use('/api', async (req, res) => {
+    const parts = req.path.split('/').filter(Boolean);
+    if (parts.length === 0) {
+      return res.status(400).json({ error: 'Missing API handler' });
+    }
+    const handler = parts[0];
     const handlerPath = path.join(__dirname, 'api', `${handler}.ts`);
     
     if (fs.existsSync(handlerPath)) {
       try {
-        // Dynamic import for the handler
-        // Note: In a real production app, you'd pre-compile or use a more robust routing system
         const module = await import(`./api/${handler}.ts`);
         const handlerFn = module.default;
-        
-        // Mock Next.js req/res for the handler
-        // This is a simplified shim
         await handlerFn(req, res);
       } catch (error: any) {
         console.error(`Error in API handler ${handler}:`, error);
-        res.status(500).json({ error: error.message });
+        if (!res.headersSent) {
+          res.status(500).json({ error: error.message });
+        }
       }
     } else {
       res.status(404).json({ error: `Handler ${handler} not found` });

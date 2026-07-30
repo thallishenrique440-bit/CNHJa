@@ -222,6 +222,9 @@ export const InstructorFinance: React.FC = () => {
   const [tipMonthRevenue, setTipMonthRevenue] = useState(0);
   const [tipTotalRevenue, setTipTotalRevenue] = useState(0);
   const [pendingInstallmentsRevenue, setPendingInstallmentsRevenue] = useState(0);
+  const [availableBalanceCents, setAvailableBalanceCents] = useState(0);
+  const [totalNetSettledCents, setTotalNetSettledCents] = useState(0);
+  const [totalPaidOutCents, setTotalPaidOutCents] = useState(0);
   
   // Asaas States
   const [asaasStatus, setAsaasStatus] = useState<AsaasStatus>('none');
@@ -376,15 +379,26 @@ export const InstructorFinance: React.FC = () => {
             appointments: Array.isArray(t.appointments) ? t.appointments[0] : t.appointments
         })) as Transaction[];
 
-        // 2b. Fetch Pending Installments
-        const { data: pendingInstData } = await supabase
-            .from('payment_installments')
-            .select('instructor_amount')
-            .eq('instructor_id', userId)
-            .eq('status', 'PENDING');
-
-        const pendingCents = (pendingInstData || []).reduce((acc: number, item: any) => acc + (item.instructor_amount || 0), 0);
-        setPendingInstallmentsRevenue(pendingCents);
+        // 2b. Fetch Read Model Summary via Official Dedicated API Endpoint (/summary)
+        try {
+          const summaryRes = await fetch(`/api/instructor-finance/summary?instructorId=${userId}`, {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`
+            }
+          });
+          if (summaryRes.ok) {
+            const summaryData = await summaryRes.json();
+            if (summaryData?.summary) {
+              const s = summaryData.summary;
+              setAvailableBalanceCents(s.availableBalanceCents || 0);
+              setPendingInstallmentsRevenue(s.futureReceivablesCents || 0);
+              setTotalNetSettledCents(s.totalNetSettledCents || 0);
+              setTotalPaidOutCents(s.totalPaidOutCents || 0);
+            }
+          }
+        } catch (apiErr) {
+          console.warn('⚠️ [InstructorFinance] Failed to fetch projection summary from API:', apiErr);
+        }
 
         // 2c. Fetch Settled Lesson Earnings from payment_settlements
         const { data: settlementsData } = await supabase
@@ -591,9 +605,21 @@ export const InstructorFinance: React.FC = () => {
     const userId = session?.user?.id;
     if (!userId) return;
 
-    // Supabase Realtime Channel for automatic updates
+    // Supabase Realtime Channel for automatic updates based on Read Models & Financial Events
     const channel = supabase
       .channel(`instructor-finance-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'instructor_financial_projections',
+          filter: `instructor_id=eq.${userId}`,
+        },
+        () => {
+          loadData();
+        }
+      )
       .on(
         'postgres_changes',
         {
@@ -854,16 +880,16 @@ export const InstructorFinance: React.FC = () => {
       <div className="flex-1 px-6 py-6 space-y-6">
         
         <div className="space-y-4">
-          {/* Main Card: Este mês */}
+          {/* Main Card: Ganhos do Mês */}
           <div className="bg-indigo-600 p-6 rounded-3xl shadow-lg shadow-indigo-100 flex flex-col text-white">
-            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-widest mb-1 block">Este mês</span>
-            <span className="text-4xl font-bold block mb-1">
+            <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-widest mb-1 block">GANHOS DO MÊS</span>
+            <span className="text-4xl font-bold block mb-4">
                 {loading ? '...' : formatCurrency(monthlyRevenue)}
             </span>
-            <p className="text-[10px] text-indigo-200 font-medium mb-4">Valor líquido recebido após taxas</p>
             
             {/* Seção de detalhamento do mês */}
             <div className="pt-4 border-t border-indigo-500/50">
+              <span className="text-[10px] text-indigo-200 font-bold uppercase tracking-widest mb-2 block text-center">Ganhos mensais em:</span>
               <div className="grid grid-cols-2 text-center">
                 <div className="flex flex-col items-center justify-center border-r border-indigo-500/30">
                   <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider mb-0.5">Aulas</span>
@@ -876,16 +902,12 @@ export const InstructorFinance: React.FC = () => {
               </div>
             </div>
 
-            {/* Parte inferior do card (Ganhos Totais na Plataforma) */}
+            {/* Parte inferior do card (Seu Resumo Financeiro - UX Simplificada) */}
             <div className="pt-4 mt-4 border-t border-indigo-500/50 space-y-2">
-              <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider block mb-1">Ganhos Totais na Plataforma</span>
+              <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider block mb-1">SEU RESUMO FINANCEIRO</span>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-indigo-200">Ganhos em aulas</span>
-                <span className="font-semibold">{loading ? '...' : formatCurrency(lessonTotalRevenue)}</span>
-              </div>
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-indigo-200">Ganhos em caixinhas</span>
-                <span className="font-semibold">{loading ? '...' : formatCurrency(tipTotalRevenue)}</span>
+                <span className="text-indigo-200">Total ganho com a CNHJá</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(totalNetSettledCents || totalRevenue)}</span>
               </div>
               <div className="flex justify-between items-center text-xs">
                 <span className="text-indigo-200">Recebimentos futuros</span>
@@ -942,7 +964,7 @@ export const InstructorFinance: React.FC = () => {
                       <span>💳</span> Pagamentos parcelados
                     </h5>
                     <p className="leading-relaxed text-gray-500 pl-5">
-                      Quando um aluno realiza um pagamento parcelado, o valor líquido das parcelas que ainda não foram liquidadas é exibido em 'Recebimentos futuros'. À medida que cada parcela é paga e liquidada pelo Asaas, o respectivo valor deixa 'Recebimentos futuros' e passa automaticamente para 'Ganhos em aulas'.
+                      Quando um aluno realiza um pagamento parcelado, o valor líquido das parcelas que ainda não foram liquidadas é exibido em 'Recebimentos futuros'. À medida que cada parcela é paga e liquidada pelo Asaas, o respectivo valor deixa 'Recebimentos futuros', passa a compor os 'Ganhos em aulas' e é automaticamente incorporado ao 'Total ganho com a CNHJá'.
                     </p>
                   </div>
 

@@ -41,3 +41,14 @@ export class ProjectionRebuildError extends ProjectionBaseError {
     this.cause = cause;
   }
 }
+
+export class ProjectionOptimisticLockError extends ProjectionBaseError {
+  public readonly entityId: string;
+  public readonly expectedVersion: number;
+
+  constructor(message: string, entityId: string, expectedVersion: number) {
+    super(message);
+    this.entityId = entityId;
+    this.expectedVersion = expectedVersion;
+  }
+}

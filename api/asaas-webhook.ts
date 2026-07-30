@@ -7,7 +7,7 @@ import { PaymentStateService } from '../lib/payments/PaymentStateService.js';
 import { AsaasWebhookPayload, TransitionOutcome } from '../lib/payments/PaymentStateTypes.js';
 import { SettlementService } from '../lib/payments/SettlementService.js';
 import { SettlementType } from '../lib/payments/SettlementTypes.js';
-import { ProjectionService } from '../lib/payments/projections/ProjectionService.js';
+import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDispatcher.js';
 import { ProjectionSourceEventType } from '../lib/payments/projections/ProjectionTypes.js';
 
 const supabaseAdmin = createClient(
@@ -422,7 +422,7 @@ export default async function handler(req: Request, res: Response) {
               pType = ProjectionSourceEventType.SETTLEMENT_CHARGEBACK;
             }
 
-            await ProjectionService.update({
+            await ProjectionDispatcher.dispatch(supabaseAdmin, {
               eventType: pType,
               eventId: ledgerId || undefined,
               providerPaymentId: paymentId,
@@ -436,7 +436,7 @@ export default async function handler(req: Request, res: Response) {
               instructorAmount: netCents,
               status: stateResult.newState || undefined,
               settledAt: timestamp
-            }, supabaseAdmin);
+            });
           } catch (projErr: any) {
             console.warn(`⚠️ [ProjectionService] Non-blocking projection error:`, projErr?.message || projErr);
           }

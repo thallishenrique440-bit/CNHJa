@@ -53,26 +53,52 @@ export class ProjectionDispatcher {
       const plat = platRes.status === 'fulfilled' ? platRes.value : null;
       const cash = cashRes.status === 'fulfilled' ? cashRes.value : null;
 
+      // Audit & Record any projector failures in Event Ledger / metadata
+      const failures: string[] = [];
       if (instRes.status === 'rejected') {
-        ProjectionLogger.error('ProjectionDispatcher', `InstructorProjector failed: ${instRes.reason?.message || instRes.reason}`, {
+        const msg = `InstructorProjector failed: ${instRes.reason?.message || instRes.reason}`;
+        failures.push(msg);
+        ProjectionLogger.error('ProjectionDispatcher', msg, {
           eventType: 'Projection Failed',
           identifier: payload.instructorId || 'INSTRUCTOR',
           metadata: { reason: String(instRes.reason) }
         });
       }
       if (platRes.status === 'rejected') {
-        ProjectionLogger.error('ProjectionDispatcher', `PlatformProjector failed: ${platRes.reason?.message || platRes.reason}`, {
+        const msg = `PlatformProjector failed: ${platRes.reason?.message || platRes.reason}`;
+        failures.push(msg);
+        ProjectionLogger.error('ProjectionDispatcher', msg, {
           eventType: 'Projection Failed',
           identifier: 'PLATFORM',
           metadata: { reason: String(platRes.reason) }
         });
       }
       if (cashRes.status === 'rejected') {
-        ProjectionLogger.error('ProjectionDispatcher', `CashFlowProjector failed: ${cashRes.reason?.message || cashRes.reason}`, {
+        const msg = `CashFlowProjector failed: ${cashRes.reason?.message || cashRes.reason}`;
+        failures.push(msg);
+        ProjectionLogger.error('ProjectionDispatcher', msg, {
           eventType: 'Projection Failed',
           identifier: 'CASH_FLOW',
           metadata: { reason: String(cashRes.reason) }
         });
+      }
+
+      // Hardening 2: Persist failure audit log in event ledger if failures occurred
+      if (failures.length > 0 && payload.providerPaymentId) {
+        try {
+          await supabase.from('transactions').insert({
+            payment_provider_id: payload.providerPaymentId,
+            event_type: 'PROJECTION_DISPATCH_FAILURE',
+            payload: {
+              failures,
+              payload,
+              timestamp: new Date().toISOString()
+            },
+            processing_status: 'PROJECTION_FAILED'
+          });
+        } catch {
+          // Fallback audit log write non-blocking
+        }
       }
 
       // Check if any projector executed an update or duplicate
@@ -80,7 +106,9 @@ export class ProjectionDispatcher {
       const isUpdated = outcomes.includes(ProjectionOutcome.PROJECTION_UPDATED);
       const isDuplicate = outcomes.length > 0 && outcomes.every(o => o === ProjectionOutcome.NO_OP_ALREADY_PROJECTED);
 
-      const finalOutcome = isUpdated
+      const finalOutcome = failures.length > 0 && !isUpdated
+        ? ProjectionOutcome.ERROR
+        : isUpdated
         ? ProjectionOutcome.PROJECTION_UPDATED
         : isDuplicate
         ? ProjectionOutcome.NO_OP_ALREADY_PROJECTED
@@ -94,8 +122,10 @@ export class ProjectionDispatcher {
         projectionVersion: inst?.projectionVersion || plat?.projectionVersion || 1,
         rebuildVersion: payload.rebuildVersion || 1,
         lastProcessedEventId: payload.eventId || null,
-        lastProcessedSettlementId: payload.settlementId || null
+        lastProcessedSettlementId: payload.settlementId || null,
+        error: failures.length > 0 ? failures.join('; ') : undefined
       };
+
 
     } catch (err: any) {
       ProjectionLogger.error('ProjectionDispatcher', `Unexpected error during dispatch: ${err?.message || String(err)}`, {

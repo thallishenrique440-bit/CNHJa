@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
-import { ProjectionService } from '../lib/payments/projections/ProjectionService.js';
+import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDispatcher.js';
 import { ProjectionSourceEventType } from '../lib/payments/projections/ProjectionTypes.js';
 
 const supabaseAdmin = createClient(
@@ -136,15 +136,15 @@ export default async function handler(req: any, res: any) {
       throw updateError;
     }
 
-    // Trigger ProjectionService update (Etapa 7.1 Hardening)
+    // Trigger ProjectionDispatcher update (Etapa 7.2 Hardening)
     try {
-      await ProjectionService.update({
+      await ProjectionDispatcher.dispatch(supabaseAdmin, {
         eventType: ProjectionSourceEventType.STATE_TRANSITION,
         providerPaymentId: paymentId,
         instructorId: appointment.instructor_id,
         appointmentId: appointment.id,
         status: 'CONFIRMED'
-      }, supabaseAdmin);
+      });
     } catch (projErr: any) {
       console.warn('⚠️ [ConfirmBooking] Non-blocking projection error:', projErr?.message || projErr);
     }

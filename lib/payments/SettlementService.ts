@@ -28,6 +28,8 @@ import { SettlementRepository } from './SettlementRepository.js';
 import {
   InstallmentForSettlementNotFoundError
 } from './SettlementErrors.js';
+import { ProjectionDispatcher } from './projections/ProjectionDispatcher.js';
+import { ProjectionSourceEventType } from './projections/ProjectionTypes.js';
 
 export class SettlementService {
   /**
@@ -158,6 +160,37 @@ export class SettlementService {
           eventLedgerId: input.eventLedgerId
         }
       );
+
+      // 6. Dispatch Settlement event to ProjectionDispatcher (Official Wave 2 Pipeline)
+      try {
+        const sType = input.settlementType === SettlementType.CHARGEBACK
+          ? ProjectionSourceEventType.CHARGEBACK_CREATED
+          : input.settlementType === SettlementType.REFUND
+          ? ProjectionSourceEventType.REFUND_CREATED
+          : ProjectionSourceEventType.SETTLEMENT_CREATED;
+
+        await ProjectionDispatcher.dispatch(
+          supabase,
+          {
+            eventType: sType,
+            settlementId: settlementRecord.id,
+            providerPaymentId: input.providerPaymentId,
+            installmentId: installment.id,
+            instructorId: installment.instructor_id,
+            studentId: installment.student_id,
+            grossAmount: calcResult.grossAmount,
+            netAmount: calcResult.netAmount,
+            platformFee: calcResult.platformFee,
+            feeAmount: calcResult.feeAmount,
+            instructorAmount: calcResult.instructorAmount,
+            settlementType: input.settlementType,
+            settledAt: calcResult.settledAt,
+            releaseDate: calcResult.settledAt
+          }
+        );
+      } catch (projErr) {
+        console.warn('⚠️ [SettlementService] Failed to dispatch projection event:', projErr);
+      }
 
       return {
         outcome: SettlementOutcome.SETTLEMENT_EXECUTED,

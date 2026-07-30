@@ -22,6 +22,8 @@ import {
 } from './PaymentStateTypes.js';
 import { PaymentStateMachine } from './PaymentStateMachine.js';
 import { PaymentStateMapper } from './PaymentStateMapper.js';
+import { ProjectionDispatcher } from './projections/ProjectionDispatcher.js';
+import { ProjectionSourceEventType } from './projections/ProjectionTypes.js';
 
 export class PaymentStateService {
   /**
@@ -270,6 +272,34 @@ export class PaymentStateService {
       } catch (ledgerMetaErr) {
         console.warn('⚠️ [PaymentStateService] Ledger metadata update non-fatal warning:', ledgerMetaErr);
       }
+    }
+
+    // 8b. Dispatch Projection Event via ProjectionDispatcher
+    try {
+      const isCancellation = targetState === 'CANCELLED' || targetState === 'REFUNDED';
+      const evtType = isCancellation
+        ? ProjectionSourceEventType.CANCELLATION_CREATED
+        : ProjectionSourceEventType.STATE_TRANSITION;
+
+      await ProjectionDispatcher.dispatch(
+        supabase,
+        {
+          eventType: evtType,
+          eventId: `state_tr_${providerPaymentId}_${targetState}`,
+          providerPaymentId: providerPaymentId,
+          installmentId: installmentId,
+          instructorId: (installment as any)?.instructor_id,
+          studentId: (installment as any)?.student_id,
+          grossAmount: (installment as any)?.gross_amount || 0,
+          netAmount: (installment as any)?.net_amount || (installment as any)?.instructor_amount || 0,
+          platformFee: (installment as any)?.platform_fee || 0,
+          feeAmount: (installment as any)?.fee_amount || 0,
+          instructorAmount: (installment as any)?.instructor_amount || 0,
+          status: targetState
+        }
+      );
+    } catch (projErr) {
+      console.warn('⚠️ [PaymentStateService] Non-fatal projection dispatch warning:', projErr);
     }
 
     return {

@@ -1,4 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { ProjectionDispatcher } from './projections/ProjectionDispatcher.js';
+import { ProjectionSourceEventType } from './projections/ProjectionTypes.js';
 
 export interface RecordScheduleDTO {
   providerPaymentId: string;
@@ -120,6 +122,31 @@ export class InstallmentService {
       if (error) {
         console.error(`❌ [InstallmentService] Error recording schedule for installment ${inst.installment_number}:`, error.message);
       }
+    }
+
+    // Dispatch FinancialScheduleCreated event to ProjectionDispatcher (Official Wave 2 Trigger)
+    try {
+      if (dto.instructorId) {
+        await ProjectionDispatcher.dispatch(
+          supabase,
+          {
+            eventType: ProjectionSourceEventType.FINANCIAL_SCHEDULE_CREATED,
+            eventId: `sched_${dto.providerPaymentId}`,
+            providerPaymentId: dto.providerPaymentId,
+            instructorId: dto.instructorId,
+            studentId: dto.studentId || undefined,
+            grossAmount: dto.grossAmountCents,
+            netAmount: dto.netAmountCents,
+            platformFee: dto.platformFeeCents,
+            feeAmount: dto.feeAmountCents || 0,
+            instructorAmount: dto.netAmountCents,
+            status: 'PENDING',
+            dueDate: dto.dueDate || new Date().toISOString()
+          }
+        );
+      }
+    } catch (projErr) {
+      console.warn('⚠️ [InstallmentService] Failed to dispatch FINANCIAL_SCHEDULE_CREATED event:', projErr);
     }
   }
 

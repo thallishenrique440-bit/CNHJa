@@ -166,15 +166,26 @@ export class CashFlowProjector {
       ? (payload.instructorAmount || payload.netAmount || 0)
       : (payload.platformFee || payload.grossAmount || 0);
 
-    if (payload.eventType === ProjectionSourceEventType.STATE_TRANSITION) {
+    if (
+      payload.eventType === ProjectionSourceEventType.FINANCIAL_SCHEDULE_CREATED ||
+      payload.eventType === ProjectionSourceEventType.STATE_TRANSITION
+    ) {
       const status = (payload.status || 'PENDING').toUpperCase();
       if (status === 'PENDING' || status === 'AUTHORIZED') {
         record.expected_inflow += amount;
       }
-    } else if (payload.eventType === ProjectionSourceEventType.SETTLEMENT_EXECUTED) {
+    } else if (
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_CREATED ||
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_EXECUTED
+    ) {
       record.expected_inflow = Math.max(0, record.expected_inflow - amount);
       record.settled_inflow += amount;
-    } else if (payload.eventType === ProjectionSourceEventType.SETTLEMENT_REFUND || payload.eventType === ProjectionSourceEventType.SETTLEMENT_CHARGEBACK) {
+    } else if (
+      payload.eventType === ProjectionSourceEventType.REFUND_CREATED ||
+      payload.eventType === ProjectionSourceEventType.CHARGEBACK_CREATED ||
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_REFUND ||
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_CHARGEBACK
+    ) {
       record.settled_outflow += amount;
     }
 

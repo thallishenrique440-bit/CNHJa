@@ -84,14 +84,23 @@ export class PlatformProjector {
     const netInstructor = payload.instructorAmount || payload.netAmount || 0;
 
     // 3. Process event according to source type
-    if (payload.eventType === ProjectionSourceEventType.SETTLEMENT_EXECUTED) {
+    if (
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_CREATED ||
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_EXECUTED
+    ) {
       record.gmv += gross;
       record.total_revenue += platformFee;
       record.total_fee_collected += providerFee;
       record.total_instructor_payouts += netInstructor;
-    } else if (payload.eventType === ProjectionSourceEventType.SETTLEMENT_REFUND) {
+    } else if (
+      payload.eventType === ProjectionSourceEventType.REFUND_CREATED ||
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_REFUND
+    ) {
       record.total_refunds += gross;
-    } else if (payload.eventType === ProjectionSourceEventType.SETTLEMENT_CHARGEBACK) {
+    } else if (
+      payload.eventType === ProjectionSourceEventType.CHARGEBACK_CREATED ||
+      payload.eventType === ProjectionSourceEventType.SETTLEMENT_CHARGEBACK
+    ) {
       record.total_chargebacks += gross;
     }
 
