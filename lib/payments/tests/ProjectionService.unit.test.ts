@@ -53,24 +53,35 @@ function createMockSupabase(existingData: Record<string, any> = {}) {
 
       return {
         select: (_cols?: string) => ({
-          eq: (field: string, val: any) => ({
-            eq: (f2: string, v2: any) => ({
-              eq: (f3: string, v3: any) => ({
+          eq: (field: string, val: any) => {
+            const makeResultObj = (f1: string, v1: any, f2?: string, v2?: any, f3?: string, v3?: any) => {
+              const findMatch = () => store.find((item: any) => 
+                item[f1] === v1 &&
+                (f2 === undefined || item[f2] === v2) &&
+                (f3 === undefined || item[f3] === v3)
+              );
+              return {
+                limit: () => ({
+                  maybeSingle: async () => {
+                    const match = findMatch();
+                    return { data: match ? { ...match } : null, error: null };
+                  }
+                }),
                 maybeSingle: async () => {
-                  const match = store.find((item: any) => item[field] === val && item[f2] === v2 && item[f3] === v3);
+                  const match = findMatch();
                   return { data: match ? { ...match } : null, error: null };
                 }
-              }),
-              maybeSingle: async () => {
-                const match = store.find((item: any) => item[field] === val && item[f2] === v2);
-                return { data: match ? { ...match } : null, error: null };
-              }
-            }),
-            maybeSingle: async () => {
-              const match = store.find((item: any) => item[field] === val);
-              return { data: match ? { ...match } : null, error: null };
-            }
-          }),
+              };
+            };
+
+            return {
+              ...makeResultObj(field, val),
+              eq: (f2: string, v2: any) => ({
+                ...makeResultObj(field, val, f2, v2),
+                eq: (f3: string, v3: any) => makeResultObj(field, val, f2, v2, f3, v3)
+              })
+            };
+          },
           maybeSingle: async () => {
             return { data: store[0] ? { ...store[0] } : null, error: null };
           }

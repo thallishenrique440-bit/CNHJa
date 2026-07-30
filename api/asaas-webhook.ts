@@ -256,7 +256,7 @@ export default async function handler(req: Request, res: Response) {
       ledgerId = insertedLedger.id;
     }
 
-    const finalizeLedger = async (status: 'PROCESSED' | 'FAILED' | 'IGNORED', errorMsg?: string) => {
+    const finalizeLedger = async (status: 'PROCESSED' | 'FAILED' | 'IGNORED' | 'RECONCILIATION_PENDING', errorMsg?: string) => {
       try {
         await supabaseAdmin
           .from('transactions')
@@ -273,6 +273,92 @@ export default async function handler(req: Request, res: Response) {
 
     // Invoke PaymentStateService (Etapa 5) & SettlementService (Etapa 6)
     if (paymentId && event.toUpperCase().startsWith('PAYMENT_')) {
+      const instNumber = payload.payment?.installmentNumber || 1;
+
+      // STRICT HARDENING: Check presence of Official Contract (payment_installments)
+      let officialInstRecord: {
+        instructor_id: string | null;
+        student_id: string | null;
+        appointment_id: string | null;
+        gross_amount: number;
+        net_amount: number;
+        platform_fee: number;
+      } | null = null;
+
+      if (paymentId) {
+        const { data: instRec } = await supabaseAdmin
+          .from('payment_installments')
+          .select('instructor_id, student_id, appointment_id, gross_amount, net_amount, platform_fee')
+          .eq('provider_payment_id', paymentId)
+          .eq('installment_number', instNumber)
+          .limit(1)
+          .maybeSingle();
+
+        if (instRec) {
+          officialInstRecord = instRec;
+        } else {
+          const { data: instRecAny } = await supabaseAdmin
+            .from('payment_installments')
+            .select('instructor_id, student_id, appointment_id, gross_amount, net_amount, platform_fee')
+            .eq('provider_payment_id', paymentId)
+            .limit(1)
+            .maybeSingle();
+
+          if (instRecAny) {
+            officialInstRecord = instRecAny;
+          }
+        }
+      }
+
+      // IF OFFICIAL CONTRACT DOES NOT EXIST -> RETAIN FOR RECONCILIATION
+      if (!officialInstRecord) {
+        const reconciliationErrorMsg = `Missing official contract in payment_installments for provider_payment_id '${paymentId}' (installment: ${instNumber}). Event retained for reconciliation.`;
+        console.warn(`⚠️ [RECONCILIATION REQUIRED] ${reconciliationErrorMsg}`, {
+          provider_payment_id: paymentId,
+          installment_number: instNumber,
+          provider_event_id: providerEventId,
+          event_type: event,
+          timestamp: timestamp
+        });
+
+        await finalizeLedger('RECONCILIATION_PENDING', reconciliationErrorMsg);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Webhook event retained for reconciliation: missing payment_installments contract',
+          provider_payment_id: paymentId,
+          installment_number: instNumber,
+          provider_event_id: providerEventId,
+          event_type: event,
+          processing_status: 'RECONCILIATION_PENDING',
+          reason: reconciliationErrorMsg
+        });
+      }
+
+      // OFFICIAL CONTRACT CONFIRMED -> Strictly use contractual amounts from payment_installments
+      const grossCents = officialInstRecord.gross_amount;
+      const netCents = officialInstRecord.net_amount;
+      const platformFeeCents = officialInstRecord.platform_fee;
+
+      let resolvedInstructorId: string | undefined = payload.payment?.metadata?.instructor_id || officialInstRecord.instructor_id || undefined;
+      let resolvedStudentId: string | undefined = payload.payment?.metadata?.student_id || officialInstRecord.student_id || undefined;
+      let resolvedAppointmentId: string | undefined = payload.payment?.metadata?.appointment_id || officialInstRecord.appointment_id || undefined;
+
+      if (!resolvedInstructorId && paymentId) {
+        const { data: aptRec } = await supabaseAdmin
+          .from('appointments')
+          .select('instructor_id, student_id, id')
+          .eq('provider_payment_id', paymentId)
+          .limit(1)
+          .maybeSingle();
+
+        if (aptRec) {
+          resolvedInstructorId = aptRec.instructor_id || undefined;
+          resolvedStudentId = aptRec.student_id || undefined;
+          resolvedAppointmentId = aptRec.id || undefined;
+        }
+      }
+
       try {
         const stateResult = await PaymentStateService.processEvent({
           providerPaymentId: paymentId,
@@ -288,18 +374,15 @@ export default async function handler(req: Request, res: Response) {
 
         // OFFICIAL SETTLEMENT SERVICE TRIGGER MATRIX (Etapa 6)
         if (stateResult.outcome === TransitionOutcome.TRANSITION_EXECUTED) {
-          const grossCents = Math.round((payload.payment?.value || 0) * 100);
-          const netVal = payload.payment?.netValue;
-          const netCents = netVal !== undefined ? Math.round(netVal * 100) : undefined;
-
           if (stateResult.newState === 'RECEIVED' || stateResult.newState === 'CONFIRMED') {
             const settleRes = await SettlementService.processSettlement({
               providerPaymentId: paymentId,
-              installmentNumber: payload.payment?.installmentNumber || 1,
+              installmentNumber: instNumber,
               providerSettlementId: payload.payment?.id || paymentId,
               settlementType: SettlementType.PAYMENT,
               grossAmount: grossCents,
               netAmount: netCents,
+              platformFee: platformFeeCents,
               feeAmount: payload.payment?.feeValue ? Math.round(payload.payment.feeValue * 100) : undefined,
               paymentMethod: payload.payment?.billingType,
               settledAt: payload.payment?.paymentDate || payload.payment?.clientPaymentDate || timestamp,
@@ -312,11 +395,12 @@ export default async function handler(req: Request, res: Response) {
             const sType = stateResult.newState === 'CHARGEBACK' ? SettlementType.CHARGEBACK : SettlementType.REFUND;
             const settleRes = await SettlementService.processRefundSettlement({
               providerPaymentId: paymentId,
-              installmentNumber: payload.payment?.installmentNumber || 1,
+              installmentNumber: instNumber,
               providerSettlementId: payload.payment?.id ? `${payload.payment.id}_${sType.toLowerCase()}` : undefined,
               settlementType: sType,
               grossAmount: grossCents,
               netAmount: netCents,
+              platformFee: platformFeeCents,
               paymentMethod: payload.payment?.billingType,
               settledAt: timestamp,
               eventLedgerId: ledgerId,
@@ -327,8 +411,6 @@ export default async function handler(req: Request, res: Response) {
 
           // Trigger ProjectionService (Etapa 7)
           try {
-            const grossCents = Math.round((payload.payment?.value || 0) * 100);
-            const netCents = payload.payment?.netValue !== undefined ? Math.round(payload.payment.netValue * 100) : 0;
             const feeCents = payload.payment?.feeValue ? Math.round(payload.payment.feeValue * 100) : 0;
 
             let pType = ProjectionSourceEventType.STATE_TRANSITION;
@@ -340,39 +422,6 @@ export default async function handler(req: Request, res: Response) {
               pType = ProjectionSourceEventType.SETTLEMENT_CHARGEBACK;
             }
 
-            // Resolve instructorId and metadata from database if not explicitly present
-            let resolvedInstructorId: string | undefined = payload.payment?.metadata?.instructor_id;
-            let resolvedStudentId: string | undefined = payload.payment?.metadata?.student_id;
-            let resolvedAppointmentId: string | undefined = payload.payment?.metadata?.appointment_id;
-
-            if (!resolvedInstructorId && paymentId) {
-              const { data: instRec } = await supabaseAdmin
-                .from('payment_installments')
-                .select('instructor_id, student_id, appointment_id')
-                .eq('provider_payment_id', paymentId)
-                .limit(1)
-                .maybeSingle();
-
-              if (instRec) {
-                resolvedInstructorId = instRec.instructor_id || undefined;
-                resolvedStudentId = instRec.student_id || undefined;
-                resolvedAppointmentId = instRec.appointment_id || undefined;
-              } else {
-                const { data: aptRec } = await supabaseAdmin
-                  .from('appointments')
-                  .select('instructor_id, student_id, id')
-                  .eq('provider_payment_id', paymentId)
-                  .limit(1)
-                  .maybeSingle();
-
-                if (aptRec) {
-                  resolvedInstructorId = aptRec.instructor_id || undefined;
-                  resolvedStudentId = aptRec.student_id || undefined;
-                  resolvedAppointmentId = aptRec.id || undefined;
-                }
-              }
-            }
-
             await ProjectionService.update({
               eventType: pType,
               eventId: ledgerId || undefined,
@@ -382,7 +431,7 @@ export default async function handler(req: Request, res: Response) {
               appointmentId: resolvedAppointmentId,
               grossAmount: grossCents,
               netAmount: netCents,
-              platformFee: Math.max(0, grossCents - netCents - feeCents),
+              platformFee: platformFeeCents,
               feeAmount: feeCents,
               instructorAmount: netCents,
               status: stateResult.newState || undefined,
@@ -760,29 +809,36 @@ export default async function handler(req: Request, res: Response) {
 
         // Record Cash Flow Settlement in payment_installments & payment_settlements
         try {
-          const grossVal = Math.round((payload.payment?.value || 0) * 100);
-          const netVal = payload.payment?.netValue !== undefined 
-            ? Math.round(payload.payment.netValue * 100) 
-            : Math.round(grossVal * 0.90);
-          const platformFeeVal = grossVal - netVal;
           const instNum = payload.payment?.installmentNumber || 1;
           const totalInst = payload.payment?.installmentCount || 1;
           const payDate = payload.payment?.paymentDate || payload.payment?.clientPaymentDate || new Date().toISOString();
 
-          await InstallmentService.recordPaymentSettlement(supabaseAdmin, {
-            providerPaymentId: currentPaymentId,
-            installmentNumber: instNum,
-            totalInstallments: totalInst,
-            grossAmountCents: grossVal,
-            netAmountCents: netVal,
-            platformFeeCents: platformFeeVal,
-            paymentDate: payDate,
-            groupId: groupId,
-            appointmentId: firstApt.id,
-            studentId: firstApt.student_id,
-            instructorId: firstApt.instructor_id,
-            providerSettlementId: payload.payment?.id || currentPaymentId,
-          });
+          const { data: existingInstRecord } = await supabaseAdmin
+            .from('payment_installments')
+            .select('gross_amount, net_amount, platform_fee')
+            .eq('provider_payment_id', currentPaymentId)
+            .eq('installment_number', instNum)
+            .limit(1)
+            .maybeSingle();
+
+          if (existingInstRecord) {
+            await InstallmentService.recordPaymentSettlement(supabaseAdmin, {
+              providerPaymentId: currentPaymentId,
+              installmentNumber: instNum,
+              totalInstallments: totalInst,
+              grossAmountCents: existingInstRecord.gross_amount,
+              netAmountCents: existingInstRecord.net_amount,
+              platformFeeCents: existingInstRecord.platform_fee,
+              paymentDate: payDate,
+              groupId: groupId,
+              appointmentId: firstApt.id,
+              studentId: firstApt.student_id,
+              instructorId: firstApt.instructor_id,
+              providerSettlementId: payload.payment?.id || currentPaymentId,
+            });
+          } else {
+            console.warn(`⚠️ [ASAAS WEBHOOK] recordPaymentSettlement skipped: payment_installments official contract missing for ${currentPaymentId}`);
+          }
         } catch (settleErr) {
           console.error(`⚠️ [ASAAS WEBHOOK] Error recording payment settlement:`, settleErr);
         }
