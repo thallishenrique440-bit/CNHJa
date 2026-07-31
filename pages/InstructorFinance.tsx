@@ -297,9 +297,9 @@ export const InstructorFinance: React.FC = () => {
             }
         }
 
-        // 2a. Fetch Read Model Summary via Official Dedicated API Endpoint (/summary)
+        // 2a. Fetch Read Model Summary via Official Dedicated API Endpoint (?action=summary)
         try {
-          const summaryRes = await fetch(`/api/instructor-finance/summary?instructorId=${userId}`, {
+          const summaryRes = await fetch(`/api/instructor-finance?action=summary&instructorId=${userId}`, {
             headers: {
               'Authorization': `Bearer ${session.access_token}`
             }
@@ -316,9 +316,9 @@ export const InstructorFinance: React.FC = () => {
           console.warn('⚠️ [InstructorFinance] Failed to fetch projection summary from API:', apiErr);
         }
 
-        // 2b. Fetch Monthly Financial Metrics via Official Read Model Endpoint (/monthly)
+        // 2b. Fetch Monthly Financial Metrics via Official Read Model Endpoint (?action=monthly)
         try {
-          const monthlyRes = await fetch(`/api/instructor-finance/monthly?instructorId=${userId}`, {
+          const monthlyRes = await fetch(`/api/instructor-finance?action=monthly&instructorId=${userId}`, {
             headers: {
               'Authorization': `Bearer ${session.access_token}`
             }
@@ -336,9 +336,9 @@ export const InstructorFinance: React.FC = () => {
           console.warn('⚠️ [InstructorFinance] Failed to fetch monthly metrics from API:', apiErr);
         }
 
-        // 2c. Fetch Financial Statement via Official Read Model Endpoint (/statement)
+        // 2c. Fetch Financial Statement via Official Read Model Endpoint (?action=statement)
         try {
-          const statementRes = await fetch(`/api/instructor-finance/statement?instructorId=${userId}`, {
+          const statementRes = await fetch(`/api/instructor-finance?action=statement&instructorId=${userId}`, {
             headers: {
               'Authorization': `Bearer ${session.access_token}`
             }
