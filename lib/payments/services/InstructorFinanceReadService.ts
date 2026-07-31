@@ -14,7 +14,8 @@ import { IInstructorFinanceReadService } from '../interfaces/IInstructorFinanceR
 import {
   InstructorFinanceSummaryDTO,
   InstructorStatementEntryDTO,
-  InstructorCashFlowDTO
+  InstructorCashFlowDTO,
+  InstructorMonthlyMetricsDTO
 } from '../dtos/InstructorFinanceDTO.js';
 import { ProjectionService } from '../projections/ProjectionService.js';
 
@@ -85,6 +86,104 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       totalOverdueCents: proj.totalOverdueCents,
       projectionVersion: proj.projectionVersion,
       updatedAt: proj.updatedAt
+    };
+  }
+
+  /**
+   * Reads monthly financial metrics directly from payment_settlements (SSOT).
+   */
+  public async getMonthlyMetrics(
+    supabaseClient: SupabaseClient,
+    instructorId: string,
+    year?: number,
+    month?: number
+  ): Promise<InstructorMonthlyMetricsDTO> {
+    const now = new Date();
+    const currentYear = year && year > 2000 ? year : now.getUTCFullYear();
+    const currentMonth = month && month >= 1 && month <= 12 ? month : (now.getUTCMonth() + 1);
+
+    const periodStart = new Date(Date.UTC(currentYear, currentMonth - 1, 1, 0, 0, 0, 0)).toISOString();
+    const periodEnd = new Date(Date.UTC(currentYear, currentMonth, 1, 0, 0, 0, 0)).toISOString();
+
+    const { data, error } = await supabaseClient
+      .from('payment_settlements')
+      .select(`
+        id,
+        settlement_type,
+        gross_amount,
+        net_amount,
+        platform_fee,
+        instructor_amount,
+        settled_at,
+        payment_installments!inner (
+          instructor_id,
+          appointment_id,
+          transaction_id
+        )
+      `)
+      .eq('payment_installments.instructor_id', instructorId)
+      .gte('settled_at', periodStart)
+      .lt('settled_at', periodEnd);
+
+    if (error || !data || data.length === 0) {
+      return {
+        instructorId,
+        year: currentYear,
+        month: currentMonth,
+        periodStart,
+        periodEnd,
+        monthlyGrossCents: 0,
+        monthlyNetCents: 0,
+        monthlyPlatformFeeCents: 0,
+        monthlyLessonNetCents: 0,
+        monthlyTipNetCents: 0,
+        settlementsCount: 0,
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    let monthlyGrossCents = 0;
+    let monthlyNetCents = 0;
+    let monthlyPlatformFeeCents = 0;
+    let monthlyLessonNetCents = 0;
+    let monthlyTipNetCents = 0;
+    let settlementsCount = 0;
+
+    for (const item of data) {
+      const isRefundOrChargeback = item.settlement_type === 'REFUND' || item.settlement_type === 'CHARGEBACK';
+      const multiplier = isRefundOrChargeback ? -1 : 1;
+
+      const gross = (item.gross_amount || 0) * multiplier;
+      const net = (item.net_amount !== undefined ? item.net_amount : (item.instructor_amount || 0)) * multiplier;
+      const fee = (item.platform_fee || 0) * multiplier;
+
+      monthlyGrossCents += gross;
+      monthlyNetCents += net;
+      monthlyPlatformFeeCents += fee;
+
+      const inst = item.payment_installments as any;
+      const isLesson = Boolean(inst && inst.appointment_id);
+      if (isLesson) {
+        monthlyLessonNetCents += net;
+      } else {
+        monthlyTipNetCents += net;
+      }
+      settlementsCount += 1;
+    }
+
+    return {
+      instructorId,
+      year: currentYear,
+      month: currentMonth,
+      periodStart,
+      periodEnd,
+      monthlyGrossCents,
+      monthlyNetCents,
+      monthlyPlatformFeeCents,
+      monthlyLessonNetCents,
+      monthlyTipNetCents,
+      settlementsCount,
+      updatedAt: new Date().toISOString()
     };
   }
 

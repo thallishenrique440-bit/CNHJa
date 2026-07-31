@@ -10,7 +10,8 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import {
   InstructorFinanceSummaryDTO,
   InstructorStatementEntryDTO,
-  InstructorCashFlowDTO
+  InstructorCashFlowDTO,
+  InstructorMonthlyMetricsDTO
 } from '../dtos/InstructorFinanceDTO.js';
 
 export interface IInstructorFinanceReadService {
@@ -18,6 +19,13 @@ export interface IInstructorFinanceReadService {
     supabaseClient: SupabaseClient,
     instructorId: string
   ): Promise<InstructorFinanceSummaryDTO | null>;
+
+  getMonthlyMetrics(
+    supabaseClient: SupabaseClient,
+    instructorId: string,
+    year?: number,
+    month?: number
+  ): Promise<InstructorMonthlyMetricsDTO>;
 
   getStatement(
     supabaseClient: SupabaseClient,

@@ -32,6 +32,8 @@ export default async function handler(req: any, res: any) {
   if (!action) {
     if (urlPath.includes('/summary')) {
       action = 'summary';
+    } else if (urlPath.includes('/monthly')) {
+      action = 'monthly';
     } else if (urlPath.includes('/statement')) {
       action = 'statement';
     } else if (urlPath.includes('/cashflow')) {
@@ -47,6 +49,14 @@ export default async function handler(req: any, res: any) {
     if (action === 'summary') {
       const summary = await readService.getSummary(supabase, instructorId);
       return res.status(200).json({ success: true, summary });
+    }
+
+    if (action === 'monthly') {
+      const year = req.query.year ? parseInt(req.query.year as string, 10) : undefined;
+      const month = req.query.month ? parseInt(req.query.month as string, 10) : undefined;
+
+      const monthlyMetrics = await readService.getMonthlyMetrics(supabase, instructorId, year, month);
+      return res.status(200).json({ success: true, monthlyMetrics });
     }
 
     if (action === 'statement') {

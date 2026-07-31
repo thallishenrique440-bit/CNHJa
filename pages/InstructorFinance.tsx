@@ -4,7 +4,7 @@ import { AsaasPartnerSeal } from '../components/AsaasPartnerSeal';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
-import { Info, ChevronDown, CircleHelp, ExternalLink } from 'lucide-react';
+import { ChevronDown, CircleHelp, ExternalLink } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,45 +12,6 @@ import { useToast } from '../contexts/ToastContext';
 import { toTitleCase } from '../lib/stringUtils';
 
 // --- Types ---
-interface Transaction {
-  id: string;
-  created_at: string;
-  event_date: string;
-  type: 'lesson_payment' | 'tip' | 'refund' | 'platform_fee';
-  amount: number; // legacy
-  gross_amount: number;
-  platform_fee: number;
-  net_amount: number;
-  status: 'pending' | 'completed' | 'failed';
-  appointment_id?: string;
-  provider_payout_id?: string;
-  provider_payment_id?: string;
-  profiles: {
-    full_name: string;
-  };
-  appointments?: {
-    id: string;
-    group_id?: string;
-    provider_payment_id?: string;
-    date: string;
-    start_time: string;
-    end_time: string;
-    status: string;
-  } | null;
-}
-
-interface Appointment {
-  id: string;
-  date: string;
-  start_time: string;
-  end_time: string;
-  status: 'pending' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired';
-  price: number;
-  profiles: {
-    full_name: string;
-  };
-}
-
 interface HistoryItem {
   id: string;
   timestamp: string; // display timestamp
@@ -215,16 +176,11 @@ export const InstructorFinance: React.FC = () => {
   const [isInfoExpanded, setIsInfoExpanded] = useState(false);
   
   // Financial Metrics
-  const [totalRevenue, setTotalRevenue] = useState(0);
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
   const [lessonMonthRevenue, setLessonMonthRevenue] = useState(0);
-  const [lessonTotalRevenue, setLessonTotalRevenue] = useState(0);
   const [tipMonthRevenue, setTipMonthRevenue] = useState(0);
-  const [tipTotalRevenue, setTipTotalRevenue] = useState(0);
   const [pendingInstallmentsRevenue, setPendingInstallmentsRevenue] = useState(0);
-  const [availableBalanceCents, setAvailableBalanceCents] = useState(0);
   const [totalNetSettledCents, setTotalNetSettledCents] = useState(0);
-  const [totalPaidOutCents, setTotalPaidOutCents] = useState(0);
   
   // Asaas States
   const [asaasStatus, setAsaasStatus] = useState<AsaasStatus>('none');
@@ -341,45 +297,7 @@ export const InstructorFinance: React.FC = () => {
             }
         }
 
-        // 2. Fetch Transactions
-        const { data: transData, error: transError } = await supabase
-            .from('transactions')
-            .select(`
-                id,
-                created_at,
-                event_date,
-                type,
-                gross_amount,
-                platform_fee,
-                net_amount,
-                status,
-                appointment_id,
-                provider_payout_id,
-                provider_payment_id,
-                profiles ( full_name ),
-                appointments (
-                    id,
-                    group_id,
-                    provider_payment_id,
-                    date,
-                    start_time,
-                    end_time,
-                    status
-                )
-            `)
-            .eq('instructor_id', userId)
-            .in('status', ['completed'])
-            .order('event_date', { ascending: false });
-
-        if (transError) throw transError;
-
-        const typedTrans = (transData || []).map((t: any) => ({
-            ...t,
-            profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles,
-            appointments: Array.isArray(t.appointments) ? t.appointments[0] : t.appointments
-        })) as Transaction[];
-
-        // 2b. Fetch Read Model Summary via Official Dedicated API Endpoint (/summary)
+        // 2a. Fetch Read Model Summary via Official Dedicated API Endpoint (/summary)
         try {
           const summaryRes = await fetch(`/api/instructor-finance/summary?instructorId=${userId}`, {
             headers: {
@@ -390,206 +308,71 @@ export const InstructorFinance: React.FC = () => {
             const summaryData = await summaryRes.json();
             if (summaryData?.summary) {
               const s = summaryData.summary;
-              setAvailableBalanceCents(s.availableBalanceCents || 0);
               setPendingInstallmentsRevenue(s.futureReceivablesCents || 0);
               setTotalNetSettledCents(s.totalNetSettledCents || 0);
-              setTotalPaidOutCents(s.totalPaidOutCents || 0);
             }
           }
         } catch (apiErr) {
           console.warn('⚠️ [InstructorFinance] Failed to fetch projection summary from API:', apiErr);
         }
 
-        // 2c. Fetch Settled Lesson Earnings from payment_settlements
-        const { data: settlementsData } = await supabase
-            .from('payment_settlements')
-            .select(`
-                id,
-                settlement_type,
-                instructor_amount,
-                settled_at,
-                payment_installments!inner (
-                    instructor_id
-                )
-            `)
-            .eq('payment_installments.instructor_id', userId)
-            .eq('settlement_type', 'PAYMENT');
-
-        let lessonMRev = 0;
-        let lessonTRev = 0;
-
-        const now = new Date();
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
-
-        (settlementsData || []).forEach((s: any) => {
-            if (s.settlement_type !== 'PAYMENT') return;
-            const amountInCents = s.instructor_amount || 0;
-            lessonTRev += amountInCents;
-
-            const sDate = new Date(s.settled_at);
-            if (sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear) {
-                lessonMRev += amountInCents;
+        // 2b. Fetch Monthly Financial Metrics via Official Read Model Endpoint (/monthly)
+        try {
+          const monthlyRes = await fetch(`/api/instructor-finance/monthly?instructorId=${userId}`, {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`
             }
-        });
-
-        // 2d. Calculate Tips from Transactions (Tips continue in transactions table)
-        let tipMRev = 0;
-        let tipTRev = 0;
-
-        typedTrans.forEach(t => {
-            if (!['completed'].includes(t.status)) return;
-            if (t.type === 'tip') {
-                const val = t.net_amount || 0;
-                const tDate = new Date(t.event_date || t.created_at);
-                const isCurrentMonth = tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
-
-                tipTRev += val;
-                if (isCurrentMonth) {
-                    tipMRev += val;
-                }
+          });
+          if (monthlyRes.ok) {
+            const monthlyData = await monthlyRes.json();
+            if (monthlyData?.monthlyMetrics) {
+              const m = monthlyData.monthlyMetrics;
+              setMonthlyRevenue(m.monthlyNetCents || 0);
+              setLessonMonthRevenue(m.monthlyLessonNetCents || 0);
+              setTipMonthRevenue(m.monthlyTipNetCents || 0);
             }
-        });
+          }
+        } catch (apiErr) {
+          console.warn('⚠️ [InstructorFinance] Failed to fetch monthly metrics from API:', apiErr);
+        }
 
-        const totalRev = lessonTRev + tipTRev;
-        const monthRev = lessonMRev + tipMRev;
-
-        setTotalRevenue(totalRev);
-        setMonthlyRevenue(monthRev);
-        setLessonMonthRevenue(lessonMRev);
-        setLessonTotalRevenue(lessonTRev);
-        setTipMonthRevenue(tipMRev);
-        setTipTotalRevenue(tipTRev);
-        
-        // --- Build History (Transactions ONLY with in-memory grouping of combos) ---
-        const lessonPaymentsToGroup: Transaction[] = [];
-        const nonGroupedItems: HistoryItem[] = [];
-
-        typedTrans.forEach(t => {
-            const logicalDate = t.event_date || t.created_at;
-            if (t.type === 'lesson_payment') {
-                const groupId = t.appointments?.group_id;
-                const providerPaymentId = t.provider_payment_id || t.appointments?.provider_payment_id;
-
-                if (groupId || providerPaymentId) {
-                    lessonPaymentsToGroup.push(t);
-                } else {
-                    nonGroupedItems.push({
-                        id: t.id,
-                        timestamp: logicalDate,
-                        sortDate: logicalDate,
-                        type: 'lesson',
-                        isFinancial: true,
-                        amount: t.net_amount,
-                        grossAmount: t.gross_amount,
-                        platformFee: t.platform_fee,
-                        netAmount: t.net_amount,
-                        status: t.status,
-                        studentName: t.profiles?.full_name || 'Aluno',
-                        providerPayoutId: t.provider_payout_id
-                    });
-                }
+        // 2c. Fetch Financial Statement via Official Read Model Endpoint (/statement)
+        try {
+          const statementRes = await fetch(`/api/instructor-finance/statement?instructorId=${userId}`, {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`
+            }
+          });
+          if (statementRes.ok) {
+            const statementData = await statementRes.json();
+            if (statementData?.statement && Array.isArray(statementData.statement)) {
+              const items: HistoryItem[] = statementData.statement.map((entry: any) => {
+                const isRefund = entry.status === 'REFUNDED' || entry.status === 'CHARGEBACK';
+                const sortDate = entry.settledAt || entry.dueDate || new Date().toISOString();
+                return {
+                  id: entry.id,
+                  timestamp: sortDate,
+                  sortDate: sortDate,
+                  type: isRefund ? 'refund' : 'lesson',
+                  isFinancial: true,
+                  amount: entry.netAmountCents,
+                  grossAmount: entry.grossAmountCents,
+                  platformFee: entry.platformFeeCents,
+                  netAmount: entry.netAmountCents,
+                  status: (entry.status || '').toLowerCase(),
+                  studentName: entry.studentName || 'Aluno',
+                  providerPayoutId: undefined
+                };
+              });
+              setHistoryItems(items);
             } else {
-                nonGroupedItems.push({
-                    id: t.id,
-                    timestamp: logicalDate,
-                    sortDate: logicalDate,
-                    type: t.type === 'tip' ? 'tip' : 'refund',
-                    isFinancial: true,
-                    amount: t.net_amount,
-                    grossAmount: t.gross_amount,
-                    platformFee: t.platform_fee,
-                    netAmount: t.net_amount,
-                    status: t.status,
-                    studentName: t.profiles?.full_name || 'Aluno',
-                    providerPayoutId: t.provider_payout_id
-                });
+              setHistoryItems([]);
             }
-        });
-
-        const groupMap = new Map<string, Transaction[]>();
-        lessonPaymentsToGroup.forEach(t => {
-            const groupKey = t.appointments?.group_id || t.provider_payment_id || t.appointments?.provider_payment_id || '';
-            if (groupKey) {
-                if (!groupMap.has(groupKey)) {
-                    groupMap.set(groupKey, []);
-                }
-                groupMap.get(groupKey)!.push(t);
-            }
-        });
-
-        const comboHistoryItems: HistoryItem[] = [];
-
-        groupMap.forEach((transactionsInGroup, groupKey) => {
-            if (transactionsInGroup.length === 1) {
-                const t = transactionsInGroup[0];
-                const logicalDate = t.event_date || t.created_at;
-                nonGroupedItems.push({
-                    id: t.id,
-                    timestamp: logicalDate,
-                    sortDate: logicalDate,
-                    type: 'lesson',
-                    isFinancial: true,
-                    amount: t.net_amount,
-                    grossAmount: t.gross_amount,
-                    platformFee: t.platform_fee,
-                    netAmount: t.net_amount,
-                    status: t.status,
-                    studentName: t.profiles?.full_name || 'Aluno',
-                    providerPayoutId: t.provider_payout_id
-                });
-            } else {
-                const sortedGroup = [...transactionsInGroup].sort(
-                    (a, b) => new Date(b.event_date || b.created_at).getTime() - new Date(a.event_date || a.created_at).getTime()
-                );
-
-                const latestTrans = sortedGroup[0];
-                const logicalDate = latestTrans.event_date || latestTrans.created_at;
-
-                let totalGross = 0;
-                let totalFee = 0;
-                let totalNet = 0;
-
-                sortedGroup.forEach(t => {
-                    totalGross += t.gross_amount || 0;
-                    totalFee += t.platform_fee || 0;
-                    totalNet += t.net_amount || 0;
-                });
-
-                const subLessons = sortedGroup.map(t => ({
-                    id: t.id,
-                    date: t.appointments?.date || t.event_date || t.created_at,
-                    startTime: t.appointments?.start_time || '',
-                    endTime: t.appointments?.end_time || '',
-                    netAmount: t.net_amount
-                })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-                comboHistoryItems.push({
-                    id: `combo_${groupKey}`,
-                    timestamp: logicalDate,
-                    sortDate: logicalDate,
-                    type: 'combo',
-                    isFinancial: true,
-                    amount: totalNet,
-                    grossAmount: totalGross,
-                    platformFee: totalFee,
-                    netAmount: totalNet,
-                    status: latestTrans.status,
-                    studentName: latestTrans.profiles?.full_name || 'Aluno',
-                    providerPayoutId: latestTrans.provider_payout_id,
-                    isCombo: true,
-                    lessonCount: sortedGroup.length,
-                    lessons: subLessons,
-                    groupId: latestTrans.appointments?.group_id || groupKey
-                });
-            }
-        });
-
-        const items: HistoryItem[] = [...nonGroupedItems, ...comboHistoryItems].sort(
-            (a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime()
-        );
-
-        setHistoryItems(items);
+          }
+        } catch (apiErr) {
+          console.warn('⚠️ [InstructorFinance] Failed to fetch financial statement from API:', apiErr);
+          setHistoryItems([]);
+        }
 
     } catch (err) {
         console.error("Error loading finance data:", err);
@@ -614,29 +397,6 @@ export const InstructorFinance: React.FC = () => {
           event: '*',
           schema: 'public',
           table: 'instructor_financial_projections',
-          filter: `instructor_id=eq.${userId}`,
-        },
-        () => {
-          loadData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'payment_settlements',
-        },
-        () => {
-          loadData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'payment_installments',
           filter: `instructor_id=eq.${userId}`,
         },
         () => {
@@ -907,7 +667,7 @@ export const InstructorFinance: React.FC = () => {
               <span className="text-[10px] text-indigo-200 uppercase font-bold tracking-wider block mb-1">SEU RESUMO FINANCEIRO</span>
               <div className="flex justify-between items-center text-xs">
                 <span className="text-indigo-200">Total ganho com a CNHJá</span>
-                <span className="font-semibold">{loading ? '...' : formatCurrency(totalNetSettledCents || totalRevenue)}</span>
+                <span className="font-semibold">{loading ? '...' : formatCurrency(totalNetSettledCents)}</span>
               </div>
               <div className="flex justify-between items-center text-xs">
                 <span className="text-indigo-200">Recebimentos futuros</span>

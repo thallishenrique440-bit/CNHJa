@@ -43,3 +43,19 @@ export interface InstructorCashFlowDTO {
   settledInflowCents: number;
   netForecastCents: number;
 }
+
+export interface InstructorMonthlyMetricsDTO {
+  instructorId: string;
+  year: number;
+  month: number;
+  periodStart: string;
+  periodEnd: string;
+  monthlyGrossCents: number;
+  monthlyNetCents: number;
+  monthlyPlatformFeeCents: number;
+  monthlyLessonNetCents: number;
+  monthlyTipNetCents: number;
+  settlementsCount: number;
+  updatedAt: string;
+}
+
