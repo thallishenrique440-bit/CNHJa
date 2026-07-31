@@ -6,6 +6,7 @@ import {
   InstructorAccountResponseDTO,
   CreatePaymentDTO,
   PaymentResponseDTO,
+  InstallmentPaymentItemDTO,
   RefundPaymentDTO,
   RefundResponseDTO,
   AccountStatusResponseDTO,
@@ -118,10 +119,30 @@ export interface AsaasPaymentPayload {
 
 export interface AsaasPaymentResponse {
   id: string;
-  value: number;
+  value?: number;
+  totalValue?: number;
   status: string;
   invoiceUrl?: string;
   clientSecret?: string;
+  installment?: string;
+}
+
+export interface AsaasInstallmentPaymentResponseItem {
+  id: string;
+  installmentNumber: number;
+  value: number;
+  netValue?: number;
+  dueDate?: string;
+  status?: string;
+}
+
+export interface AsaasInstallmentPaymentsListResponse {
+  object?: string;
+  hasMore?: boolean;
+  totalCount?: number;
+  limit?: number;
+  offset?: number;
+  data: AsaasInstallmentPaymentResponseItem[];
 }
 
 export interface AsaasRefundResponse {
@@ -518,20 +539,119 @@ ${JSON.stringify(splitRule, null, 2)}`);
    * Queries precise charge state on Asaas.
    */
   async getPayment(providerPaymentId: string): Promise<PaymentResponseDTO> {
-    const response = await this.request<any>(`/payments/${providerPaymentId}`);
+    const response = await this.request<AsaasPaymentResponse>(`/payments/${providerPaymentId}`);
 
     return this.parseAsaasResponse(response);
   }
 
   /**
+   * Identifies whether an error is transient (eligible for retry) or definitive.
+   * Transient: network errors, timeouts, HTTP 429, 500, 502, 503, 504.
+   * Definitive: local validation/consistency errors, HTTP 400, 401, 403, 404, invalid parameters.
+   */
+  private isTransientError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const message = err.message || '';
+
+    // Local validation and consistency errors must fail fast
+    if (message.includes('Inconsistência') || message.includes('required') || message.includes('Esperado')) {
+      return false;
+    }
+
+    // Parse HTTP status if formatted as "Asaas API error [STATUS]: ..."
+    const statusMatch = message.match(/Asaas API error \[(\d+)\]/);
+    if (statusMatch) {
+      const status = parseInt(statusMatch[1], 10);
+      // Transient HTTP status codes
+      if ([429, 500, 502, 503, 504].includes(status)) {
+        return true;
+      }
+      // Definitive HTTP status codes (400, 401, 403, 404, etc.)
+      return false;
+    }
+
+    // Network level issues (fetch errors, timeouts, etc.) are transient
+    return true;
+  }
+
+  /**
+   * Fetches all individual payments for an installment collection from Asaas.
+   * Includes exponential backoff retry mechanism (transient errors only) and strict sequence validation (1..N).
+   */
+  async getInstallmentPayments(
+    installmentId: string,
+    expectedCount?: number
+  ): Promise<InstallmentPaymentItemDTO[]> {
+    if (!installmentId) {
+      throw new Error('installmentId is required to fetch installment payments');
+    }
+
+    const maxAttempts = 3;
+    const delays = [300, 600, 1000];
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await this.request<AsaasInstallmentPaymentsListResponse>(`/installments/${installmentId}/payments?limit=100`);
+        const payments = response?.data || [];
+
+        if (expectedCount && payments.length < expectedCount && attempt < maxAttempts) {
+          console.warn(`⚠️ [AsaasProvider] Attempt ${attempt}/${maxAttempts}: Expected ${expectedCount} installment payments, received ${payments.length}. Retrying in ${delays[attempt - 1]}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delays[attempt - 1]));
+          continue;
+        }
+
+        // Validate total count match
+        if (expectedCount && payments.length !== expectedCount) {
+          throw new Error(`Inconsistência no parcelamento Asaas: Esperado ${expectedCount} parcelas, retornado ${payments.length}`);
+        }
+
+        // Sort by installmentNumber ascending
+        payments.sort((a, b) => (a.installmentNumber || 0) - (b.installmentNumber || 0));
+
+        // Validate sequential installment numbers 1..N without gaps or duplicates
+        if (expectedCount) {
+          const numbers = payments.map((p) => p.installmentNumber);
+          const expectedSequence = Array.from({ length: expectedCount }, (_, i) => i + 1);
+
+          for (let i = 0; i < expectedCount; i++) {
+            if (numbers[i] !== expectedSequence[i]) {
+              throw new Error(
+                `Inconsistência na sequência de parcelas Asaas: Esperado [${expectedSequence.join(', ')}], recebido [${numbers.join(', ')}]`
+              );
+            }
+          }
+        }
+
+        return payments.map((p) => ({
+          id: p.id,
+          installmentNumber: p.installmentNumber,
+          value: p.value,
+          netValue: p.netValue,
+          dueDate: p.dueDate,
+          status: p.status,
+        }));
+      } catch (err: unknown) {
+        if (attempt === maxAttempts || !this.isTransientError(err)) {
+          throw err;
+        }
+        console.warn(`⚠️ [AsaasProvider] Attempt ${attempt}/${maxAttempts} failed with transient error: ${(err as Error).message}. Retrying in ${delays[attempt - 1]}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delays[attempt - 1]));
+      }
+    }
+
+    throw new Error(`Falha ao obter parcelas do parcelamento '${installmentId}' no Asaas`);
+  }
+
+  /**
    * Resiliently parses any Asaas API response (payment or installment) to a generic PaymentResponseDTO.
    */
-  private parseAsaasResponse(response: any, fallbackAmountCents: number = 0): PaymentResponseDTO {
+  private parseAsaasResponse(response: AsaasPaymentResponse, fallbackAmountCents: number = 0): PaymentResponseDTO {
     if (!response) {
       throw new Error('Empty response from Asaas API');
     }
 
     const providerPaymentId = response.id || '';
+    const providerInstallmentId = response.installment || null;
 
     // Resilient value extraction (Asaas returns decimals, our system expects cents)
     let amountCents = fallbackAmountCents;
@@ -551,6 +671,7 @@ ${JSON.stringify(splitRule, null, 2)}`);
     return {
       providerPaymentId,
       providerName: 'asaas',
+      providerInstallmentId,
       amount: amountCents,
       status,
       clientSecret: null,

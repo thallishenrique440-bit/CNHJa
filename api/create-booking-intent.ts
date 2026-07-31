@@ -502,11 +502,24 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
         })
         .eq('group_id', groupId);
 
-      // 6b. Record Financial Schedule in payment_installments
+      // 6b. Record Financial Schedule in payment_installments using individual payment IDs for installments
       try {
+        let providerPaymentIdMap: Map<number, string> | undefined = undefined;
+        const installmentId = paymentResponse.providerInstallmentId;
+
+        if (installmentCount && installmentCount > 1 && installmentId && typeof paymentProvider.getInstallmentPayments === 'function') {
+          const installmentItems = await paymentProvider.getInstallmentPayments(installmentId, installmentCount);
+          providerPaymentIdMap = new Map<number, string>();
+          for (const item of installmentItems) {
+            providerPaymentIdMap.set(item.installmentNumber, item.id);
+          }
+          console.log(`✅ [CREATE_BOOKING_INTENT] Obtained ${providerPaymentIdMap.size} individual payment IDs for installment collection '${installmentId}'`);
+        }
+
         const firstAptId = appointments && appointments.length > 0 ? appointments[0].id : null;
         await InstallmentService.recordInitialSchedule(supabase, {
           providerPaymentId: paymentResponse.providerPaymentId,
+          providerPaymentIdMap: providerPaymentIdMap,
           totalInstallments: installmentCount || 1,
           grossAmountCents: totalPriceWithFee,
           netAmountCents: finalPrice - applicationFeeAmount,
@@ -517,8 +530,9 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
           studentId: secureStudentId,
           instructorId: instructorId,
         });
-      } catch (instError) {
+      } catch (instError: any) {
         console.error('⚠️ [InstallmentService] Error recording initial schedule:', instError);
+        throw instError;
       }
 
     } catch (paymentError: any) {

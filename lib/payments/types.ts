@@ -131,11 +131,21 @@ export interface CreatePaymentDTO {
 export interface PaymentResponseDTO {
   providerPaymentId: string;
   providerName: ProviderName;
+  providerInstallmentId?: string | null;
   amount: number; // Em centavos 
   status: 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released';
   clientSecret?: string | null; // For checkout element or payment equivalent
   invoiceUrl?: string | null;   // For Asaas invoice display if needed
   rawResponse: Record<string, unknown>;
+}
+
+export interface InstallmentPaymentItemDTO {
+  id: string;
+  installmentNumber: number;
+  value: number;
+  netValue?: number;
+  dueDate?: string;
+  status?: string;
 }
 
 // ==========================================

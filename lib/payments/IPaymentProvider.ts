@@ -5,6 +5,7 @@ import {
   InstructorAccountResponseDTO,
   CreatePaymentDTO,
   PaymentResponseDTO,
+  InstallmentPaymentItemDTO,
   RefundPaymentDTO,
   RefundResponseDTO,
   AccountStatusResponseDTO,
@@ -46,6 +47,14 @@ export interface IPaymentProvider {
    * Fetches full payment credentials and status tracker.
    */
   getPayment(providerPaymentId: string): Promise<PaymentResponseDTO>;
+
+  /**
+   * Fetches all individual payments for an installment collection.
+   */
+  getInstallmentPayments?(
+    installmentId: string,
+    expectedCount?: number
+  ): Promise<InstallmentPaymentItemDTO[]>;
 
   /**
    * Status auditor for sub-accounts and onboarding states/withdraw availability.

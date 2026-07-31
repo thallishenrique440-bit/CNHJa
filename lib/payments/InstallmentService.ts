@@ -4,6 +4,7 @@ import { ProjectionSourceEventType } from './projections/ProjectionTypes.js';
 
 export interface RecordScheduleDTO {
   providerPaymentId: string;
+  providerPaymentIdMap?: Map<number, string> | Record<number, string>;
   totalInstallments: number;
   grossAmountCents: number;
   netAmountCents: number;
@@ -93,8 +94,17 @@ export class InstallmentService {
         computedDueDate = d.toISOString();
       }
 
+      let currentProviderPaymentId = dto.providerPaymentId;
+      if (dto.providerPaymentIdMap) {
+        if (dto.providerPaymentIdMap instanceof Map) {
+          currentProviderPaymentId = dto.providerPaymentIdMap.get(i) || dto.providerPaymentId;
+        } else {
+          currentProviderPaymentId = (dto.providerPaymentIdMap as Record<number, string>)[i] || dto.providerPaymentId;
+        }
+      }
+
       installmentsToInsert.push({
-        provider_payment_id: dto.providerPaymentId,
+        provider_payment_id: currentProviderPaymentId,
         installment_number: i,
         total_installments: count,
         gross_amount: instGross,
