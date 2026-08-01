@@ -215,8 +215,10 @@ export const InstructorFinance: React.FC = () => {
   };
 
   const formatDate = (isoString: string) => {
+    if (!isoString) return '';
     const date = new Date(isoString);
-    return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
+    if (isNaN(date.getTime())) return isoString;
+    return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' }).replace('.', '');
   };
 
   const formatTime = (isoString: string) => {

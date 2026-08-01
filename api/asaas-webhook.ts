@@ -815,7 +815,7 @@ export default async function handler(req: Request, res: Response) {
 
           const { data: existingInstRecord } = await supabaseAdmin
             .from('payment_installments')
-            .select('gross_amount, net_amount, platform_fee')
+            .select('gross_amount, net_amount, platform_fee, fee_amount')
             .eq('provider_payment_id', currentPaymentId)
             .eq('installment_number', instNum)
             .limit(1)
@@ -829,6 +829,7 @@ export default async function handler(req: Request, res: Response) {
               grossAmountCents: existingInstRecord.gross_amount,
               netAmountCents: existingInstRecord.net_amount,
               platformFeeCents: existingInstRecord.platform_fee,
+              feeAmountCents: existingInstRecord.fee_amount || 0,
               paymentDate: payDate,
               groupId: groupId,
               appointmentId: firstApt.id,

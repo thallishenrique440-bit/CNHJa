@@ -104,8 +104,10 @@ export const StudentFinance: React.FC = () => {
 
   // Helper for date
   const formatDate = (iso: string) => {
+    if (!iso) return '';
     const d = new Date(iso);
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' }).replace('.', '');
   };
 
   const formatAppointmentDate = (dateStr: string, timeStr: string) => {
