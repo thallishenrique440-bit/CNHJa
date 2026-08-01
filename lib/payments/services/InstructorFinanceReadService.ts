@@ -207,6 +207,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           gross_amount,
           net_amount,
           platform_fee,
+          fee_amount,
           instructor_amount,
           settled_at,
           created_at,
@@ -242,6 +243,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           const netCents = (item.net_amount !== undefined ? item.net_amount : (item.instructor_amount || 0)) * multiplier;
           const grossCents = (item.gross_amount || 0) * multiplier;
           const feeCents = (item.platform_fee || 0) * multiplier;
+          const gatewayFeeCents = (item.fee_amount || 0) * multiplier;
+          const commissionCnhJaCents = this.calculateCommissionCnhJa(feeCents, gatewayFeeCents);
 
           let status = inst?.status || 'RECEIVED';
           if (item.settlement_type === 'REFUND') status = 'REFUNDED';
@@ -255,6 +258,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             grossAmountCents: grossCents,
             netAmountCents: netCents,
             platformFeeCents: feeCents,
+            feeAmountCents: gatewayFeeCents,
+            commissionCnhJaCents,
             status,
             dueDate: inst?.due_date || item.settled_at || item.created_at,
             settledAt: item.settled_at || item.created_at
@@ -270,7 +275,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     }
 
     let fallbackQuery = installmentsTable
-      .select('id, provider_payment_id, student_id, gross_amount, net_amount, platform_fee, status, due_date, payment_date')
+      .select('id, provider_payment_id, student_id, gross_amount, net_amount, platform_fee, fee_amount, status, due_date, payment_date')
       .eq('instructor_id', instructorId)
       .order('due_date', { ascending: false });
 
@@ -289,18 +294,34 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       return [];
     }
 
-    return fbData.map((item: any) => ({
-      id: item.id,
-      providerPaymentId: item.provider_payment_id,
-      installmentId: item.id,
-      studentId: item.student_id,
-      grossAmountCents: item.gross_amount || 0,
-      netAmountCents: item.net_amount || 0,
-      platformFeeCents: item.platform_fee || 0,
-      status: item.status,
-      dueDate: item.due_date,
-      settledAt: item.payment_date || undefined
-    }));
+    return fbData.map((item: any) => {
+      const platformFeeCents = item.platform_fee || 0;
+      const feeAmountCents = item.fee_amount || 0;
+      const commissionCnhJaCents = this.calculateCommissionCnhJa(platformFeeCents, feeAmountCents);
+
+      return {
+        id: item.id,
+        providerPaymentId: item.provider_payment_id,
+        installmentId: item.id,
+        studentId: item.student_id,
+        grossAmountCents: item.gross_amount || 0,
+        netAmountCents: item.net_amount || 0,
+        platformFeeCents,
+        feeAmountCents,
+        commissionCnhJaCents,
+        status: item.status,
+        dueDate: item.due_date,
+        settledAt: item.payment_date || undefined
+      };
+    });
+  }
+
+  /**
+   * Centralized pure calculation for CNHJá commission in Read Model:
+   * commissionCnhJaCents = platform_fee - fee_amount
+   */
+  private calculateCommissionCnhJa(platformFeeCents: number, gatewayFeeCents: number): number {
+    return platformFeeCents - gatewayFeeCents;
   }
 
   /**

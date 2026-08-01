@@ -81,6 +81,7 @@ async function runStatementUnitTests() {
   assert(statement[0].grossAmountCents === 10000, 'Entry 1 grossAmountCents is 10000');
   assert(statement[0].netAmountCents === 9000, 'Entry 1 netAmountCents is 9000');
   assert(statement[0].platformFeeCents === 1000, 'Entry 1 platformFeeCents is 1000');
+  assert(statement[0].commissionCnhJaCents === 1000, 'Entry 1 commissionCnhJaCents is calculated in Read Model');
   assert(statement[0].status === 'RECEIVED', 'Entry 1 status is RECEIVED');
   assert(statement[0].settledAt === '2026-07-02T10:00:00Z', 'Entry 1 settledAt date matches');
 

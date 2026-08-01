@@ -21,6 +21,8 @@ interface HistoryItem {
   amount: number;
   grossAmount?: number;
   platformFee?: number;
+  feeAmount?: number;
+  commissionCnhJaCents?: number;
   netAmount?: number;
   status: string;
   studentName: string;
@@ -358,6 +360,8 @@ export const InstructorFinance: React.FC = () => {
                   amount: entry.netAmountCents,
                   grossAmount: entry.grossAmountCents,
                   platformFee: entry.platformFeeCents,
+                  feeAmount: entry.feeAmountCents,
+                  commissionCnhJaCents: entry.commissionCnhJaCents,
                   netAmount: entry.netAmountCents,
                   status: (entry.status || '').toLowerCase(),
                   studentName: entry.studentName || 'Aluno',
@@ -910,8 +914,8 @@ export const InstructorFinance: React.FC = () => {
                                               
                                               {item.platformFee !== undefined && item.platformFee > 0 && (
                                                   <>
-                                                      <div className="text-gray-400">Taxa Plataforma (10%):</div>
-                                                      <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee))}</div>
+                                                      <div className="text-gray-400">Comissão CNHJá:</div>
+                                                      <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.commissionCnhJaCents || 0))}</div>
                                                   </>
                                               )}
                                               
@@ -1004,8 +1008,8 @@ export const InstructorFinance: React.FC = () => {
                                                   
                                                   {item.type === 'lesson' && item.platformFee !== undefined && item.platformFee > 0 && (
                                                       <>
-                                                          <div className="text-gray-400">Taxa Plataforma (10%):</div>
-                                                          <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.platformFee))}</div>
+                                                          <div className="text-gray-400">Comissão CNHJá:</div>
+                                                          <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.commissionCnhJaCents || 0))}</div>
                                                       </>
                                                   )}
                                                   

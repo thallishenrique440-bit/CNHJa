@@ -32,6 +32,8 @@ export interface InstructorStatementEntryDTO {
   grossAmountCents: number;
   netAmountCents: number;
   platformFeeCents: number;
+  feeAmountCents?: number;
+  commissionCnhJaCents?: number;
   status: string; // PENDING | CONFIRMED | RECEIVED | OVERDUE | REFUNDED | CHARGEBACK | CANCELLED
   dueDate: string;
   settledAt?: string;
