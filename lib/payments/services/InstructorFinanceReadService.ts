@@ -217,7 +217,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             student_id,
             due_date,
             payment_date,
-            status
+            status,
+            profiles ( full_name )
           )
         `)
         .eq('payment_installments.instructor_id', instructorId)
@@ -238,6 +239,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       if (!error && data && data.length > 0) {
         return data.map((item: any) => {
           const inst = item.payment_installments as any;
+          const profileObj = Array.isArray(inst?.profiles) ? inst?.profiles[0] : inst?.profiles;
+          const studentName = profileObj?.full_name || undefined;
+
           const isRefundOrChargeback = item.settlement_type === 'REFUND' || item.settlement_type === 'CHARGEBACK';
           const multiplier = isRefundOrChargeback ? -1 : 1;
           const netCents = (item.net_amount !== undefined ? item.net_amount : (item.instructor_amount || 0)) * multiplier;
@@ -255,6 +259,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             providerPaymentId: item.provider_payment_id,
             installmentId: item.installment_id || inst?.id || item.id,
             studentId: inst?.student_id,
+            studentName,
             grossAmountCents: grossCents,
             netAmountCents: netCents,
             platformFeeCents: feeCents,
@@ -275,7 +280,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     }
 
     let fallbackQuery = installmentsTable
-      .select('id, provider_payment_id, student_id, gross_amount, net_amount, platform_fee, fee_amount, status, due_date, payment_date')
+      .select('id, provider_payment_id, student_id, gross_amount, net_amount, platform_fee, fee_amount, status, due_date, payment_date, profiles ( full_name )')
       .eq('instructor_id', instructorId)
       .order('due_date', { ascending: false });
 
@@ -295,6 +300,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     }
 
     return fbData.map((item: any) => {
+      const profileObj = Array.isArray(item?.profiles) ? item?.profiles[0] : item?.profiles;
+      const studentName = profileObj?.full_name || undefined;
+
       const platformFeeCents = item.platform_fee || 0;
       const feeAmountCents = item.fee_amount || 0;
       const commissionCnhJaCents = this.calculateCommissionCnhJa(platformFeeCents, feeAmountCents);
@@ -304,6 +312,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         providerPaymentId: item.provider_payment_id,
         installmentId: item.id,
         studentId: item.student_id,
+        studentName,
         grossAmountCents: item.gross_amount || 0,
         netAmountCents: item.net_amount || 0,
         platformFeeCents,

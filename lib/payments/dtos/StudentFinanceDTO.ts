@@ -24,6 +24,8 @@ export interface StudentInstallmentDTO {
 export interface StudentPaymentSummaryDTO {
   studentId: string;
   totalSpentCents: number;
+  classesDone: number;
+  classesScheduled: number;
   pendingPaymentsCents: number;
   confirmedPaymentsCount: number;
   overduePaymentsCount: number;
@@ -35,4 +37,40 @@ export interface StudentAppointmentPaymentStateDTO {
   paymentStatus: string; // PENDING | CONFIRMED | RECEIVED | OVERDUE | REFUNDED | FAILED
   totalAmountCents: number;
   installments: StudentInstallmentDTO[];
+}
+
+export interface StudentLessonDTO {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  status: string;
+  netAmount?: number;
+}
+
+export interface StudentHistoryItemDTO {
+  id: string;
+  providerPaymentId: string;
+  groupId?: string;
+  appointmentId?: string;
+  instructorName: string;
+  grossAmountCents: number;
+  feeAmountCents: number;
+  lessonPriceCents: number;
+  paymentMethod?: string;
+  dueDate: string;
+  paymentDate?: string;
+  status: string; // 'completed' | 'pending' | 'failed' | 'refunded'
+  combo: boolean;
+  isCombo: boolean;
+  lessonCount: number;
+  lessons: StudentLessonDTO[];
+  appointmentDate?: string;
+  appointmentTime?: string;
+  createdAt: string;
+}
+
+export interface StudentFinanceDataDTO {
+  summary: StudentPaymentSummaryDTO;
+  history: StudentHistoryItemDTO[];
 }

@@ -10,7 +10,9 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import {
   StudentInstallmentDTO,
   StudentPaymentSummaryDTO,
-  StudentAppointmentPaymentStateDTO
+  StudentAppointmentPaymentStateDTO,
+  StudentHistoryItemDTO,
+  StudentFinanceDataDTO
 } from '../dtos/StudentFinanceDTO.js';
 
 export interface IStudentFinanceReadService {
@@ -29,4 +31,14 @@ export interface IStudentFinanceReadService {
     supabaseClient: SupabaseClient,
     appointmentId: string
   ): Promise<StudentAppointmentPaymentStateDTO | null>;
+
+  getHistory(
+    supabaseClient: SupabaseClient,
+    studentId: string
+  ): Promise<StudentHistoryItemDTO[]>;
+
+  getFinanceData(
+    supabaseClient: SupabaseClient,
+    studentId: string
+  ): Promise<StudentFinanceDataDTO>;
 }

@@ -2,48 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Shield } from 'lucide-react';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { AsaasPartnerSeal } from '../../components/AsaasPartnerSeal';
-import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
 // --- Types ---
-interface Transaction {
-  id: string;
-  created_at: string;
-  event_date: string;
-  type: 'lesson_payment' | 'tip' | 'refund' | 'platform_fee';
-  amount: number; // legacy
-  gross_amount: number;
-  platform_fee: number;
-  net_amount: number;
-  status: 'pending' | 'completed' | 'failed';
-  instructorName: string;
-  appointment_id?: string;
-  provider_payment_id?: string;
-  appointments?: {
-    id: string;
-    group_id?: string;
-    provider_payment_id?: string;
-    date: string;
-    start_time: string;
-    end_time: string;
-    status: string;
-  } | null;
-}
-
-interface Appointment {
-  id: string;
-  date: string;
-  start_time: string;
-  end_time: string;
-  status: 'pending' | 'pending_approval' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired' | 'reserved';
-  price: number;
-  instructors: {
-    profiles: {
-      full_name: string;
-    };
-  };
-}
-
 interface HistoryItem {
   id: string;
   timestamp: string; // display timestamp
@@ -80,7 +41,7 @@ interface FinanceSummary {
 }
 
 export const StudentFinance: React.FC = () => {
-  const { session, serverTimeOffset } = useAuth();
+  const { session } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
@@ -137,242 +98,57 @@ export const StudentFinance: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!session?.user) return;
+    if (!session?.user || !session?.access_token) return;
 
     const fetchData = async () => {
       setLoading(true);
       setError(null);
       try {
-        const userId = session.user.id;
-        const now = new Date(Date.now() + serverTimeOffset);
-
-        // 1. Fetch Transactions (including appointments for grouping)
-        const { data: transData, error: transError } = await supabase
-          .from('transactions')
-          .select(`
-            id,
-            created_at,
-            event_date,
-            type,
-            gross_amount,
-            platform_fee,
-            net_amount,
-            status,
-            appointment_id,
-            provider_payment_id,
-            instructors (
-              profiles ( full_name )
-            ),
-            appointments (
-              id,
-              group_id,
-              provider_payment_id,
-              date,
-              start_time,
-              end_time,
-              status
-            )
-          `)
-          .eq('student_id', userId)
-          .in('status', ['completed'])
-          .in('type', ['lesson_payment', 'tip', 'refund'])
-          .order('event_date', { ascending: false });
-
-        if (transError) throw transError;
-
-        // 2. Fetch Appointments (Active and Completed)
-        const { data: apptData, error: apptError } = await supabase
-          .from('appointments')
-          .select(`
-            id,
-            date,
-            start_time,
-            end_time,
-            status,
-            price,
-            instructors (
-              profiles ( full_name )
-            )
-          `)
-          .eq('student_id', userId)
-          .in('status', ['confirmed', 'completed', 'pending', 'pending_approval', 'scheduled', 'reserved'])
-          .order('date', { ascending: false });
-
-        if (apptError) throw apptError;
-
-        const typedTrans = (transData || []).map((t: any) => {
-          const instructorObj = Array.isArray(t.instructors) ? t.instructors[0] : t.instructors;
-          return {
-            ...t,
-            instructorName: instructorObj?.profiles?.full_name || 'Sistema',
-            appointments: Array.isArray(t.appointments) ? t.appointments[0] : t.appointments
-          };
-        }) as Transaction[];
-
-        const typedAppts = (apptData || []).map((a: any) => ({
-          ...a,
-          instructorName: a.instructors?.profiles?.full_name || 'Instrutor'
-        })) as any[];
-
-        // --- Process Financial Summary ---
-        let totalSpent = 0;
-        typedTrans.forEach(t => {
-          // Include captured and completed
-          if (['completed'].includes(t.status) && (t.type === 'lesson_payment' || t.type === 'tip')) {
-            totalSpent += t.gross_amount;
+        const response = await fetch(`/api/student-finance?action=all&studentId=${session.user.id}`, {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`
           }
         });
 
-        // --- Process Appointment Stats ---
-        let done = 0;
-        let scheduled = 0;
-        typedAppts.forEach(a => {
-          if (a.status === 'completed') {
-            done++;
-          } else {
-            // Check if it's future using date and start_time
-            const [hours, minutes] = a.start_time.split(':').map(Number);
-            const [y, m, d] = a.date.split('-').map(Number);
-            const apptStartDate = new Date(y, m - 1, d, hours, minutes);
-            const isFuture = apptStartDate > now;
-            
-            if (isFuture) {
-              scheduled++;
-            }
-          }
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || 'Erro ao carregar dados financeiros.');
+        }
+
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Erro ao carregar dados financeiros.');
+        }
+
+        const { summary: sumDto, history: histDto } = data;
+
+        setSummary({
+          totalSpent: sumDto.totalSpentCents || 0,
+          classesDone: sumDto.classesDone || 0,
+          classesScheduled: sumDto.classesScheduled || 0,
         });
 
-        // --- Build History with Grouping ---
-        const lessonPaymentsToGroup: Transaction[] = [];
-        const nonGroupedItems: HistoryItem[] = [];
-
-        typedTrans.forEach(t => {
-          const logicalDate = t.event_date || t.created_at;
-          if (t.type === 'lesson_payment') {
-            const groupId = t.appointments?.group_id;
-            const providerPaymentId = t.provider_payment_id || t.appointments?.provider_payment_id;
-
-            if (groupId || providerPaymentId) {
-              lessonPaymentsToGroup.push(t);
-            } else {
-              nonGroupedItems.push({
-                id: t.id,
-                timestamp: logicalDate,
-                sortDate: logicalDate,
-                type: 'lesson',
-                isFinancial: true,
-                amount: t.gross_amount,
-                grossAmount: t.gross_amount,
-                platformFee: t.platform_fee,
-                netAmount: t.net_amount,
-                status: t.status,
-                instructorName: t.instructorName
-              });
-            }
-          } else {
-            nonGroupedItems.push({
-              id: t.id,
-              timestamp: logicalDate,
-              sortDate: logicalDate,
-              type: t.type === 'tip' ? 'tip' : 'refund',
-              isFinancial: true,
-              amount: t.gross_amount,
-              grossAmount: t.gross_amount,
-              platformFee: t.platform_fee,
-              netAmount: t.net_amount,
-              status: t.status,
-              instructorName: t.instructorName
-            });
-          }
-        });
-
-        const groupMap = new Map<string, Transaction[]>();
-        lessonPaymentsToGroup.forEach(t => {
-          const groupKey = t.appointments?.group_id || t.provider_payment_id || t.appointments?.provider_payment_id || '';
-          if (groupKey) {
-            if (!groupMap.has(groupKey)) {
-              groupMap.set(groupKey, []);
-            }
-            groupMap.get(groupKey)!.push(t);
-          }
-        });
-
-        const comboHistoryItems: HistoryItem[] = [];
-
-        groupMap.forEach((transactionsInGroup, groupKey) => {
-          if (transactionsInGroup.length === 1) {
-            const t = transactionsInGroup[0];
-            const logicalDate = t.event_date || t.created_at;
-            nonGroupedItems.push({
-              id: t.id,
-              timestamp: logicalDate,
-              sortDate: logicalDate,
-              type: 'lesson',
-              isFinancial: true,
-              amount: t.gross_amount,
-              grossAmount: t.gross_amount,
-              platformFee: t.platform_fee,
-              netAmount: t.net_amount,
-              status: t.status,
-              instructorName: t.instructorName
-            });
-          } else {
-            const sortedGroup = [...transactionsInGroup].sort(
-              (a, b) => new Date(b.event_date || b.created_at).getTime() - new Date(a.event_date || a.created_at).getTime()
-            );
-
-            const latestTrans = sortedGroup[0];
-            const logicalDate = latestTrans.event_date || latestTrans.created_at;
-
-            let totalGross = 0;
-            let totalFee = 0;
-            let totalNet = 0;
-
-            sortedGroup.forEach(t => {
-              totalGross += t.gross_amount || 0;
-              totalFee += t.platform_fee || 0;
-              totalNet += t.net_amount || 0;
-            });
-
-            const subLessons = sortedGroup.map(t => ({
-              id: t.id,
-              date: t.appointments?.date || t.event_date || t.created_at,
-              startTime: t.appointments?.start_time || '',
-              endTime: t.appointments?.end_time || '',
-              netAmount: t.net_amount
-            })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-            comboHistoryItems.push({
-              id: `combo_${groupKey}`,
-              timestamp: logicalDate,
-              sortDate: logicalDate,
-              type: 'combo',
-              isFinancial: true,
-              amount: totalGross,
-              grossAmount: totalGross,
-              platformFee: totalFee,
-              netAmount: totalNet,
-              status: latestTrans.status,
-              instructorName: latestTrans.instructorName,
-              isCombo: true,
-              lessonCount: sortedGroup.length,
-              lessons: subLessons,
-              groupId: latestTrans.appointments?.group_id || groupKey
-            });
-          }
-        });
-
-        const items: HistoryItem[] = [...nonGroupedItems, ...comboHistoryItems].sort(
-          (a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime()
-        );
+        const items: HistoryItem[] = (histDto || []).map((h: any) => ({
+          id: h.id,
+          timestamp: h.createdAt || h.dueDate,
+          sortDate: h.createdAt || h.dueDate,
+          type: h.isCombo ? 'combo' : 'lesson',
+          isFinancial: true,
+          amount: h.grossAmountCents, // GROSS AMOUNT paid by student (e.g. 10149 = R$ 101,49)
+          grossAmount: h.grossAmountCents,
+          platformFee: h.feeAmountCents,
+          netAmount: h.lessonPriceCents,
+          status: h.status,
+          instructorName: h.instructorName,
+          appointmentDate: h.appointmentDate,
+          appointmentTime: h.appointmentTime,
+          isCombo: h.isCombo,
+          lessonCount: h.lessonCount,
+          lessons: h.lessons,
+          groupId: h.groupId
+        }));
 
         setHistoryItems(items);
-        setSummary({
-          totalSpent,
-          classesDone: done,
-          classesScheduled: scheduled
-        });
-
       } catch (err: any) {
         console.error('Error loading finance:', err);
         setError(err.message || 'Erro ao carregar dados financeiros.');
