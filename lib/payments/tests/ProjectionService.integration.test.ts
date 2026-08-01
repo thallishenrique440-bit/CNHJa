@@ -82,6 +82,22 @@ function createIntegrationMockSupabase() {
           }
           return createQueryChain(tableName);
         },
+        update: (payload: any) => ({
+          eq: (f1: string, v1: any) => ({
+            eq: (f2: string, v2: any) => ({
+              select: () => ({
+                maybeSingle: async () => {
+                  const idx = store.findIndex((item: any) => item[f1] === v1 && item[f2] === v2);
+                  if (idx >= 0) {
+                    store[idx] = { ...store[idx], ...payload };
+                    return { data: { ...store[idx] }, error: null };
+                  }
+                  return { data: null, error: null };
+                }
+              })
+            })
+          })
+        }),
         upsert: (payload: any) => ({
           select: () => ({
             single: async () => {
