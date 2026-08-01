@@ -216,15 +216,22 @@ export class AsaasProvider implements IPaymentProvider {
       console.error('=====================================================');
 
       let errorsList: string = 'Unknown Asaas API error';
+      let firstErrorCode: string | undefined = undefined;
       try {
-        const errorJson = JSON.parse(errorText) as { errors?: Array<{ description: string }> };
+        const errorJson = JSON.parse(errorText) as { errors?: Array<{ code?: string; description: string }> };
         if (errorJson.errors && errorJson.errors.length > 0) {
           errorsList = errorJson.errors.map(err => err.description).join(', ');
+          firstErrorCode = errorJson.errors[0]?.code;
         }
       } catch {
         errorsList = errorText;
       }
-      throw new Error(`Asaas API error [${response.status}]: ${errorsList}`);
+      const err = new Error(`Asaas API error [${response.status}]: ${errorsList}`) as Error & { code?: string; rawError?: string };
+      if (firstErrorCode) {
+        err.code = firstErrorCode;
+      }
+      err.rawError = errorText;
+      throw err;
     }
 
     const responseClone = response.clone();

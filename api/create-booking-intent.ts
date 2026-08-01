@@ -11,6 +11,112 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/**
+ * Checks if an error is a recognized Asaas invalid_customer error
+ */
+function isInvalidCustomerError(err: any): boolean {
+  if (!err) return false;
+  if (err.code === 'invalid_customer') return true;
+  const msg = String(err.message || err.rawError || err || '').toLowerCase();
+  return msg.includes('invalid_customer') || msg.includes('cliente removido') || msg.includes('cliente foi removido');
+}
+
+interface RecoverCustomerParams {
+  paymentProvider: any;
+  supabase: any;
+  providerName: string;
+  secureStudentId: string;
+  oldCustomerProviderId: string;
+  userEmail: string;
+  fullName: string;
+  phone: string;
+  cpf: string;
+  originalError: any;
+}
+
+/**
+ * Encapsulated private function to recover an invalid Asaas Customer:
+ * 1. Re-creates Customer on provider using user details
+ * 2. Validates new providerCustomerId
+ * 3. Updates profiles.provider_customer_id in Supabase
+ * Returns new providerCustomerId on success or throws originalError on failure.
+ */
+async function recoverInvalidCustomer(params: RecoverCustomerParams): Promise<string> {
+  const {
+    paymentProvider,
+    supabase,
+    providerName,
+    secureStudentId,
+    oldCustomerProviderId,
+    userEmail,
+    fullName,
+    phone,
+    cpf,
+    originalError,
+  } = params;
+
+  console.warn(`[ASAAS CUSTOMER RECOVERY] Detected invalid_customer error on payment creation. Initiating controlled recovery.
+- providerName: ${providerName}
+- userId: ${secureStudentId}
+- oldProviderCustomerId: ${oldCustomerProviderId}
+- moment: ${new Date().toISOString()}
+- originalError: ${originalError?.message || originalError}`);
+
+  // PASSO 1: Re-create Customer on provider using identical student data
+  let newCustomerResponse;
+  try {
+    newCustomerResponse = await paymentProvider.createCustomer({
+      email: userEmail || '',
+      name: fullName || userEmail || 'Aluno',
+      phone: phone.replace(/\D/g, ''),
+      cpfCnpj: cpf.replace(/\D/g, ''),
+    });
+    console.log(`[ASAAS CUSTOMER RECOVERY] Customer re-created successfully on ${providerName}:
+- userId: ${secureStudentId}
+- oldProviderCustomerId: ${oldCustomerProviderId}
+- newProviderCustomerId: ${newCustomerResponse?.providerCustomerId}
+- recreationResult: SUCCESS`);
+  } catch (recreateError: any) {
+    console.error(`[ASAAS CUSTOMER RECOVERY] Re-creation of Customer failed on ${providerName}:
+- userId: ${secureStudentId}
+- oldProviderCustomerId: ${oldCustomerProviderId}
+- recreationResult: FAILED
+- error: ${recreateError?.message || recreateError}`);
+    throw originalError; // Abort recovery, preserve original error
+  }
+
+  const newCustomerProviderId = newCustomerResponse?.providerCustomerId;
+  if (!newCustomerProviderId || typeof newCustomerProviderId !== 'string' || newCustomerProviderId.trim() === '') {
+    console.error(`[ASAAS CUSTOMER RECOVERY] Re-created Customer ID is invalid or empty:
+- userId: ${secureStudentId}
+- receivedId: ${newCustomerProviderId}`);
+    throw originalError;
+  }
+
+  // PASSO 2: Update profiles.provider_customer_id ONLY after success
+  const { error: updateProfileError } = await supabase
+    .from('profiles')
+    .update({ provider_customer_id: newCustomerProviderId })
+    .eq('id', secureStudentId);
+
+  if (updateProfileError) {
+    console.error(`[ASAAS CUSTOMER RECOVERY] Failed to update profiles.provider_customer_id in database:
+- userId: ${secureStudentId}
+- newProviderCustomerId: ${newCustomerProviderId}
+- dbUpdateResult: FAILED
+- error: ${updateProfileError.message}`);
+    throw originalError;
+  }
+
+  console.log(`[ASAAS CUSTOMER RECOVERY] Updated profiles.provider_customer_id in DB:
+- userId: ${secureStudentId}
+- oldProviderCustomerId: ${oldCustomerProviderId}
+- newProviderCustomerId: ${newCustomerProviderId}
+- dbUpdateResult: SUCCESS`);
+
+  return newCustomerProviderId;
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -455,36 +561,78 @@ providerInstance=${paymentProvider.getProviderName()}`);
     const requestOrigin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : 'https://autoescolabrasil.com');
     const returnUrl = `${requestOrigin}/#/student/lessons`;
 
-    try {
-      paymentResponse = await paymentProvider.createPayment({
-        amount: totalPriceWithFee,
-        description: `Agendamento - Código da reserva ${groupId}`,
-        customerProviderId: customerProviderId,
-        externalReferenceId: groupId,
-        returnUrl: returnUrl,
-        billingAddress: {
-          postalCode: '01001-000',
-          address: 'Praca da Se',
-          addressNumber: '1',
-          city: 'Sao Paulo',
-          state: 'SP',
-        },
-        billingType: paymentMethod, // e.g., 'PIX' or 'CREDIT_CARD'
-        installmentCount: installmentCount, // e.g., 1 to 12
-        splitRules: [
-          {
-            walletId: instructor.provider_wallet_id || undefined,
-            fixedValue: finalPrice - applicationFeeAmount,
-          }
-        ],
-        metadata: {
-          lesson_price: finalPrice,
-          processing_fee: processingFee,
-          gateway: 'asaas',
-          installments: installmentCount || 1,
-          payment_method: paymentMethod === 'CREDIT_CARD' ? 'credit_card' : 'pix'
+    const paymentDTO = {
+      amount: totalPriceWithFee,
+      description: `Agendamento - Código da reserva ${groupId}`,
+      customerProviderId: customerProviderId,
+      externalReferenceId: groupId,
+      returnUrl: returnUrl,
+      billingAddress: {
+        postalCode: '01001-000',
+        address: 'Praca da Se',
+        addressNumber: '1',
+        city: 'Sao Paulo',
+        state: 'SP',
+      },
+      billingType: paymentMethod, // e.g., 'PIX' or 'CREDIT_CARD'
+      installmentCount: installmentCount, // e.g., 1 to 12
+      splitRules: [
+        {
+          walletId: instructor.provider_wallet_id || undefined,
+          fixedValue: finalPrice - applicationFeeAmount,
         }
-      });
+      ],
+      metadata: {
+        lesson_price: finalPrice,
+        processing_fee: processingFee,
+        gateway: 'asaas',
+        installments: installmentCount || 1,
+        payment_method: paymentMethod === 'CREDIT_CARD' ? 'credit_card' : 'pix'
+      }
+    };
+
+    try {
+      try {
+        paymentResponse = await paymentProvider.createPayment(paymentDTO);
+      } catch (firstPaymentError: any) {
+        if (!isInvalidCustomerError(firstPaymentError)) {
+          throw firstPaymentError;
+        }
+
+        const newCustomerProviderId = await recoverInvalidCustomer({
+          paymentProvider,
+          supabase,
+          providerName,
+          secureStudentId,
+          oldCustomerProviderId: customerProviderId,
+          userEmail: user.email || '',
+          fullName: profile.full_name || user.email || 'Aluno',
+          phone: profile.phone,
+          cpf: profile.cpf,
+          originalError: firstPaymentError,
+        });
+
+        const retryPaymentDTO = {
+          ...paymentDTO,
+          customerProviderId: newCustomerProviderId,
+        };
+
+        try {
+          paymentResponse = await paymentProvider.createPayment(retryPaymentDTO);
+          console.log(`[ASAAS CUSTOMER RECOVERY] Payment retry successful with new Customer ID:
+- userId: ${secureStudentId}
+- newProviderCustomerId: ${newCustomerProviderId}
+- providerPaymentId: ${paymentResponse.providerPaymentId}
+- retryResult: SUCCESS`);
+        } catch (retryError: any) {
+          console.error(`[ASAAS CUSTOMER RECOVERY] Payment retry failed:
+- userId: ${secureStudentId}
+- newProviderCustomerId: ${newCustomerProviderId}
+- retryResult: FAILED
+- error: ${retryError.message}`);
+          throw retryError;
+        }
+      }
 
       console.log(`[PAYMENT_DIAGNOSTIC]
 paymentResponse.providerName=${paymentResponse.providerName}
