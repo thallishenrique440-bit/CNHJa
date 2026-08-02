@@ -1013,9 +1013,6 @@ export const InstructorFinance: React.FC = () => {
                               {expandedId === item.id && (
                                   <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 animate-fade-in">
                                       <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                                          <div className="text-gray-400">Último recebimento:</div>
-                                          <div className="text-gray-700 font-medium text-right">{displayDate}</div>
-                                          
                                           {item.isFinancial && item.grossAmount !== undefined && (
                                               <>
                                                   <div className="text-gray-400">Valor Bruto:</div>
