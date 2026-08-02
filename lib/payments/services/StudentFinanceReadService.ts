@@ -179,7 +179,7 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
     // 1. Fetch payment installments as SSOT
     const { data: installments, error: instError } = await supabaseClient
       .from('payment_installments')
-      .select('id, provider_payment_id, group_id, appointment_id, instructor_id, gross_amount, fee_amount, platform_fee, net_amount, status, due_date, payment_date, payment_method, created_at')
+      .select('id, provider_payment_id, group_id, appointment_id, instructor_id, gross_amount, fee_amount, platform_fee, net_amount, status, due_date, payment_date, created_at')
       .eq('student_id', studentId)
       .order('created_at', { ascending: false });
 
