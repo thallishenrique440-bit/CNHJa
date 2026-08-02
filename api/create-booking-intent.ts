@@ -6,6 +6,8 @@ import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
 
+const MAX_INSTALLMENTS = 4;
+
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -165,6 +167,13 @@ export default async function handler(req: any, res: any) {
   // Validation for limits
   if (lessons.length > 20) {
     return res.status(400).json({ error: 'Limite máximo de 20 aulas por agendamento excedido.' });
+  }
+
+  if (installmentCount !== undefined && installmentCount !== null) {
+    const parsedCount = Number(installmentCount);
+    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > MAX_INSTALLMENTS) {
+      return res.status(400).json({ error: `O número máximo de parcelas permitido é ${MAX_INSTALLMENTS}.` });
+    }
   }
 
   try {

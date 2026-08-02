@@ -15,6 +15,8 @@ import { PAYMENT_ERRORS } from '../../src/constants/paymentErrors';
 import { CheckoutLauncher } from '../../lib/payments/CheckoutLauncher';
 
 // Define Interface for the State matches DB structure
+const MAX_INSTALLMENTS = 4;
+
 interface DiscountRule {
   id: string;
   min_lessons: number;
@@ -2254,7 +2256,7 @@ export const StudentInstructorProfile: React.FC = () => {
                   onChange={(e) => setSelectedInstallmentCount(Number(e.target.value))}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all cursor-pointer appearance-none text-sm font-medium"
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((count) => {
+                  {Array.from({ length: MAX_INSTALLMENTS }, (_, i) => i + 1).map((count) => {
                     const key = `credit_${count}x_fee`;
                     const percentage = activeSettings[key] !== undefined ? Number(activeSettings[key]) : 3.99;
                     const fee = Math.round(totalPrice * (percentage / 100));

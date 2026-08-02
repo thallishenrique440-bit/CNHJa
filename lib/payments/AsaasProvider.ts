@@ -1,4 +1,6 @@
 import { IPaymentProvider } from './IPaymentProvider.js';
+
+const MAX_INSTALLMENTS = 4;
 import {
   CreateCustomerDTO,
   CustomerResponseDTO,
@@ -350,6 +352,10 @@ export class AsaasProvider implements IPaymentProvider {
       description: dto.description,
       externalReference: dto.externalReferenceId,
     };
+
+    if (dto.installmentCount && dto.installmentCount > MAX_INSTALLMENTS) {
+      throw new Error(`O parcelamento não pode exceder ${MAX_INSTALLMENTS} vezes.`);
+    }
 
     if (paymentPayload.billingType === 'CREDIT_CARD') {
       paymentPayload.creditCardHolderInfo = creditCardHolderInfo;
