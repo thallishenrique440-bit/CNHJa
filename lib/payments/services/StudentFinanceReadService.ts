@@ -179,7 +179,7 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
     // 1. Fetch payment installments as SSOT
     const { data: installments, error: instError } = await supabaseClient
       .from('payment_installments')
-      .select('id, provider_payment_id, group_id, appointment_id, instructor_id, gross_amount, fee_amount, platform_fee, net_amount, status, due_date, payment_date, created_at')
+      .select('id, provider_payment_id, group_id, appointment_id, instructor_id, gross_amount, fee_amount, platform_fee, net_amount, status, due_date, payment_date, created_at, total_installments, installment_number')
       .eq('student_id', studentId)
       .order('created_at', { ascending: false });
 
@@ -237,14 +237,86 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
       }
     });
 
-    const historyItems: StudentHistoryItemDTO[] = installments.map((inst: any) => {
-      let matchingAppts: any[] = [];
-      if (inst.provider_payment_id && appointmentsMap.has(inst.provider_payment_id)) {
-        matchingAppts = appointmentsMap.get(inst.provider_payment_id)!;
-      } else if (inst.group_id && appointmentsMap.has(inst.group_id)) {
-        matchingAppts = appointmentsMap.get(inst.group_id)!;
-      } else if (inst.appointment_id && appointmentsMap.has(inst.appointment_id)) {
-        matchingAppts = appointmentsMap.get(inst.appointment_id)!;
+    // 3. Group installments into purchases (by group_id, provider_payment_id, or id)
+    const installmentGroups = new Map<string, any[]>();
+    (installments || []).forEach((inst: any) => {
+      const groupKey = inst.group_id || inst.provider_payment_id || inst.id;
+      if (!installmentGroups.has(groupKey)) {
+        installmentGroups.set(groupKey, []);
+      }
+      installmentGroups.get(groupKey)!.push(inst);
+    });
+
+    const historyItems: StudentHistoryItemDTO[] = Array.from(installmentGroups.entries()).map(([groupKey, groupInsts]) => {
+      // Sort group installments by installment_number
+      groupInsts.sort((a, b) => (a.installment_number || 1) - (b.installment_number || 1));
+      const firstInst = groupInsts[0];
+
+      let grossAmountCents = 0;
+      let feeAmountCents = 0;
+      let receivedInstallments = 0;
+      const totalInstallments = firstInst.total_installments || groupInsts.length;
+
+      let latestDateMs = 0;
+      let latestPaymentDateStr: string | undefined = undefined;
+
+      let hasRefunded = false;
+      let hasFailed = false;
+      let hasReceivedOrConfirmed = false;
+
+      groupInsts.forEach((inst: any) => {
+        grossAmountCents += inst.gross_amount || 0;
+        feeAmountCents += inst.fee_amount || 0;
+
+        const rawStatus = (inst.status || '').toUpperCase();
+        if (['RECEIVED', 'CONFIRMED', 'PAID'].includes(rawStatus)) {
+          receivedInstallments++;
+          hasReceivedOrConfirmed = true;
+        } else if (['REFUNDED'].includes(rawStatus)) {
+          hasRefunded = true;
+        } else if (['FAILED', 'CANCELLED'].includes(rawStatus)) {
+          hasFailed = true;
+        }
+
+        const dateCandidate = inst.payment_date || inst.created_at || inst.due_date;
+        if (dateCandidate) {
+          const t = new Date(dateCandidate).getTime();
+          if (t > latestDateMs) {
+            latestDateMs = t;
+            latestPaymentDateStr = dateCandidate;
+          }
+        }
+      });
+
+      const lessonPriceCents = grossAmountCents - feeAmountCents;
+
+      // Consolidate UI status for the overall purchase
+      let uiStatus = 'pending';
+      if (receivedInstallments >= totalInstallments && totalInstallments > 0) {
+        uiStatus = 'completed';
+      } else if (hasReceivedOrConfirmed) {
+        uiStatus = 'completed';
+      } else if (hasRefunded) {
+        uiStatus = 'refunded';
+      } else if (hasFailed) {
+        uiStatus = 'failed';
+      }
+
+      // Collect matching appointments across installments in group
+      const matchingAppts: any[] = [];
+      groupInsts.forEach((inst: any) => {
+        if (inst.provider_payment_id && appointmentsMap.has(inst.provider_payment_id)) {
+          matchingAppts.push(...appointmentsMap.get(inst.provider_payment_id)!);
+        }
+        if (inst.group_id && appointmentsMap.has(inst.group_id)) {
+          matchingAppts.push(...appointmentsMap.get(inst.group_id)!);
+        }
+        if (inst.appointment_id && appointmentsMap.has(inst.appointment_id)) {
+          matchingAppts.push(...appointmentsMap.get(inst.appointment_id)!);
+        }
+      });
+      if (appointmentsMap.has(groupKey)) {
+        matchingAppts.push(...appointmentsMap.get(groupKey)!);
       }
 
       const uniqueAppts = Array.from(
@@ -257,22 +329,6 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
       const firstAppt = uniqueAppts[0];
       const instructorName = firstAppt?.instructorName || 'Instrutor';
 
-      const grossAmountCents = inst.gross_amount || 0;
-      const feeAmountCents = inst.fee_amount || 0;
-      const lessonPriceCents = grossAmountCents - feeAmountCents;
-
-      let uiStatus = 'completed';
-      const rawStatus = (inst.status || '').toUpperCase();
-      if (['RECEIVED', 'CONFIRMED'].includes(rawStatus)) {
-        uiStatus = 'completed';
-      } else if (['PENDING', 'AUTHORIZED', 'OVERDUE'].includes(rawStatus)) {
-        uiStatus = 'pending';
-      } else if (['REFUNDED'].includes(rawStatus)) {
-        uiStatus = 'refunded';
-      } else if (['FAILED', 'CANCELLED'].includes(rawStatus)) {
-        uiStatus = 'failed';
-      }
-
       const lessons: StudentLessonDTO[] = uniqueAppts.map(a => ({
         id: a.id,
         date: a.date,
@@ -281,18 +337,20 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
         status: a.status
       }));
 
+      const createdAtStr = firstInst.created_at || latestPaymentDateStr || firstInst.due_date;
+
       return {
-        id: inst.id,
-        providerPaymentId: inst.provider_payment_id,
-        groupId: inst.group_id || firstAppt?.group_id,
-        appointmentId: inst.appointment_id || firstAppt?.id,
+        id: firstInst.id,
+        providerPaymentId: firstInst.provider_payment_id,
+        groupId: groupKey,
+        appointmentId: firstInst.appointment_id || firstAppt?.id,
         instructorName,
         grossAmountCents,
         feeAmountCents,
         lessonPriceCents,
-        paymentMethod: inst.payment_method || 'asaas',
-        dueDate: inst.due_date,
-        paymentDate: inst.payment_date || undefined,
+        paymentMethod: 'asaas',
+        dueDate: firstInst.due_date,
+        paymentDate: latestPaymentDateStr,
         status: uiStatus,
         combo: isCombo,
         isCombo,
@@ -300,9 +358,14 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
         lessons,
         appointmentDate: firstAppt?.date,
         appointmentTime: firstAppt?.start_time,
-        createdAt: inst.created_at || inst.payment_date || inst.due_date
+        createdAt: createdAtStr,
+        receivedInstallments,
+        totalInstallments,
+        latestPaymentDate: latestPaymentDateStr
       };
     });
+
+    historyItems.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     return historyItems;
   }

@@ -32,6 +32,9 @@ interface HistoryItem {
     netAmount?: number;
   }[];
   groupId?: string;
+  receivedInstallments?: number;
+  totalInstallments?: number;
+  latestPaymentDate?: string;
 }
 
 interface FinanceSummary {
@@ -131,10 +134,10 @@ export const StudentFinance: React.FC = () => {
         const items: HistoryItem[] = (histDto || []).map((h: any) => ({
           id: h.id,
           timestamp: h.createdAt || h.dueDate,
-          sortDate: h.createdAt || h.dueDate,
+          sortDate: h.latestPaymentDate || h.createdAt || h.dueDate,
           type: h.isCombo ? 'combo' : 'lesson',
           isFinancial: true,
-          amount: h.grossAmountCents, // GROSS AMOUNT paid by student (e.g. 10149 = R$ 101,49)
+          amount: h.grossAmountCents, // GROSS AMOUNT paid by student for the purchase
           grossAmount: h.grossAmountCents,
           platformFee: h.feeAmountCents,
           netAmount: h.lessonPriceCents,
@@ -145,8 +148,13 @@ export const StudentFinance: React.FC = () => {
           isCombo: h.isCombo,
           lessonCount: h.lessonCount,
           lessons: h.lessons,
-          groupId: h.groupId
+          groupId: h.groupId,
+          receivedInstallments: h.receivedInstallments,
+          totalInstallments: h.totalInstallments,
+          latestPaymentDate: h.latestPaymentDate
         }));
+
+        items.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
 
         setHistoryItems(items);
       } catch (err: any) {
@@ -247,6 +255,10 @@ export const StudentFinance: React.FC = () => {
           ) : (
             <div className="space-y-3">
               {historyItems.map((item) => {
+                const totalInst = item.totalInstallments || 1;
+                const recInst = item.receivedInstallments || 0;
+                const installmentText = totalInst > 1 ? `${recInst} de ${totalInst} parcelas pagas` : 'À vista';
+
                 if (item.isCombo) {
                   const displayDesc = `Combo • ${item.lessonCount} aulas`;
                   const isExpanded = expandedId === item.id;
@@ -266,7 +278,10 @@ export const StudentFinance: React.FC = () => {
                             <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
                               {item.instructorName}
                             </p>
-                            <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(item.sortDate)}</p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{installmentText}</p>
+                            {item.latestPaymentDate && (
+                              <p className="text-[10px] text-gray-400">Último pagamento: {formatDate(item.latestPaymentDate)}</p>
+                            )}
                           </div>
                         </div>
                         <div className="text-right">
@@ -280,9 +295,15 @@ export const StudentFinance: React.FC = () => {
                               </span>
                             )}
                             {item.status === 'completed' && (
-                              <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
-                                Concluído
-                              </span>
+                              recInst < totalInst ? (
+                                <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
+                                  Em andamento
+                                </span>
+                              ) : (
+                                <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
+                                  Concluído
+                                </span>
+                              )
                             )}
                             {item.status === 'failed' && (
                               <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
@@ -313,8 +334,11 @@ export const StudentFinance: React.FC = () => {
                           </div>
 
                           <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                            <div className="text-gray-400">Valor Pago Total:</div>
+                            <div className="text-gray-400">Valor Total da Compra:</div>
                             <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.amount || 0))}</div>
+
+                            <div className="text-gray-400">Parcelamento:</div>
+                            <div className="text-gray-700 font-medium text-right">{installmentText}</div>
 
                             <div className="text-gray-400">ID da Compra:</div>
                             <div className="text-gray-500 text-right font-mono">{(item.groupId || item.id).replace('combo_', '').slice(0, 12)}...</div>
@@ -356,12 +380,12 @@ export const StudentFinance: React.FC = () => {
                             <span className="text-gray-400"> • {formatAppointmentDate(item.appointmentDate, item.appointmentTime)}</span>
                           )}
                         </p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">{installmentText}</p>
                         {!item.isFinancial && isLesson && (
                             <p className={`text-[9px] font-bold uppercase mt-1 ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
                                 {item.isPast ? 'Realizada' : 'Agendada'}
                             </p>
                         )}
-                        <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(item.sortDate)}</p>
                       </div>
                     </div>
                     <div className="text-right">
@@ -379,9 +403,15 @@ export const StudentFinance: React.FC = () => {
                           </span>
                       )}
                       {item.isFinancial && item.status === 'completed' && (
-                          <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
+                          recInst < totalInst ? (
+                            <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
+                              Em andamento
+                            </span>
+                          ) : (
+                            <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
                               Concluído
-                          </span>
+                            </span>
+                          )
                       )}
                     </div>
                   </div>

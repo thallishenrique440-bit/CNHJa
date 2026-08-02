@@ -68,6 +68,9 @@ export interface StudentHistoryItemDTO {
   appointmentDate?: string;
   appointmentTime?: string;
   createdAt: string;
+  receivedInstallments?: number;
+  totalInstallments?: number;
+  latestPaymentDate?: string;
 }
 
 export interface StudentFinanceDataDTO {
