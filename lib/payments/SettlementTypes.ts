@@ -29,6 +29,10 @@ export interface SettlementWarning {
 
 // Input DTO for Settlement Processing
 export interface ProcessSettlementInput {
+  origin?: 'LESSON' | 'TIP';
+  studentId?: string | null;
+  instructorId?: string | null;
+  appointmentId?: string | null;
   installmentId?: string;
   providerPaymentId: string;
   installmentNumber?: number | null;
@@ -60,7 +64,7 @@ export interface SettlementCalculationResult {
 // Database record interface for payment_settlements
 export interface PaymentSettlementRecord {
   id: string;
-  installment_id: string;
+  installment_id: string | null;
   provider_payment_id: string;
   provider_settlement_id: string | null;
   settlement_type: SettlementType;
@@ -78,7 +82,7 @@ export interface SettlementProcessResult {
   outcome: SettlementOutcome;
   settlementId?: string;
   transactionId?: string;
-  installmentId?: string;
+  installmentId?: string | null;
   settlementType: SettlementType;
   settlementKey: string;
   grossAmount: number;

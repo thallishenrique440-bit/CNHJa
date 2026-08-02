@@ -109,26 +109,37 @@ export class SettlementService {
         };
       }
 
-      // 2. Fetch corresponding installment
-      const installment = await SettlementRepository.findInstallment(
-        supabase,
-        input.providerPaymentId,
-        installmentNumber
-      );
+      // 2. Fetch corresponding installment (or resolve entities for TIP origin)
+      let installment: any = null;
+      let studentId: string | null = null;
+      let instructorId: string | null = null;
 
-      if (!installment) {
-        throw new InstallmentForSettlementNotFoundError(
+      if (input.origin === 'TIP') {
+        studentId = input.studentId || null;
+        instructorId = input.instructorId || null;
+      } else {
+        installment = await SettlementRepository.findInstallment(
+          supabase,
           input.providerPaymentId,
           installmentNumber
         );
+
+        if (!installment) {
+          throw new InstallmentForSettlementNotFoundError(
+            input.providerPaymentId,
+            installmentNumber
+          );
+        }
+        studentId = installment.student_id;
+        instructorId = installment.instructor_id;
       }
 
       // 3. Calculate monetary values & release dates using pure calculator
       const calcResult = SettlementCalculator.calculate({
         ...input,
-        grossAmount: input.grossAmount || installment.gross_amount,
-        platformFee: input.platformFee !== undefined ? input.platformFee : installment.platform_fee,
-        netAmount: input.netAmount !== undefined ? input.netAmount : installment.net_amount
+        grossAmount: input.grossAmount || (installment ? installment.gross_amount : 0),
+        platformFee: input.platformFee !== undefined ? input.platformFee : (installment ? installment.platform_fee : 0),
+        netAmount: input.netAmount !== undefined ? input.netAmount : (installment ? installment.net_amount : 0)
       });
 
       if (calcResult.netAmount === 0) {
@@ -141,23 +152,24 @@ export class SettlementService {
       // 4. Create settlement record in payment_settlements
       const settlementRecord = await SettlementRepository.createSettlementRecord(
         supabase,
-        installment.id,
+        installment ? installment.id : null,
         input,
         calcResult
       );
 
-      // 5. Create financial transaction in transactions table
+      // 5. Create/update financial transaction in transactions table
       const transactionId = await SettlementRepository.createFinancialTransaction(
         supabase,
         {
-          studentId: installment.student_id,
-          instructorId: installment.instructor_id,
+          studentId,
+          instructorId,
           settlementId: settlementRecord.id,
-          installmentId: installment.id,
+          installmentId: installment ? installment.id : null,
           providerPaymentId: input.providerPaymentId,
           settlementType: input.settlementType,
           calcResult,
-          eventLedgerId: input.eventLedgerId
+          eventLedgerId: input.eventLedgerId,
+          origin: input.origin
         }
       );
 
@@ -175,9 +187,9 @@ export class SettlementService {
             eventType: sType,
             settlementId: settlementRecord.id,
             providerPaymentId: input.providerPaymentId,
-            installmentId: installment.id,
-            instructorId: installment.instructor_id,
-            studentId: installment.student_id,
+            installmentId: installment ? installment.id : undefined,
+            instructorId: instructorId || undefined,
+            studentId: studentId || undefined,
             grossAmount: calcResult.grossAmount,
             netAmount: calcResult.netAmount,
             platformFee: calcResult.platformFee,
@@ -196,7 +208,7 @@ export class SettlementService {
         outcome: SettlementOutcome.SETTLEMENT_EXECUTED,
         settlementId: settlementRecord.id,
         transactionId: transactionId || undefined,
-        installmentId: installment.id,
+        installmentId: installment ? installment.id : undefined,
         settlementType: input.settlementType,
         settlementKey,
         grossAmount: calcResult.grossAmount,

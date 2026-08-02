@@ -586,6 +586,31 @@ export default async function handler(req: Request, res: Response) {
 
         console.log(`✅ [ASAAS WEBHOOK] Caixinha transação ${transactionId} marcada como completed com sucesso!`);
 
+        // Forward tip payment to official SettlementService
+        try {
+          await SettlementService.processSettlement(
+            {
+              origin: 'TIP',
+              providerPaymentId: currentPaymentId,
+              settlementType: SettlementType.PAYMENT,
+              grossAmount: grossAmountCents,
+              netAmount: netAmountCents,
+              feeAmount: asaasFeeCents,
+              platformFee: 0,
+              instructorAmount: netAmountCents,
+              studentId: tx.student_id,
+              instructorId: tx.instructor_id,
+              appointmentId: appointmentId,
+              settledAt: new Date().toISOString(),
+              eventLedgerId: ledgerId
+            },
+            supabaseAdmin
+          );
+          console.log(`✅ [ASAAS WEBHOOK] Caixinha settlement processado com sucesso no SettlementService!`);
+        } catch (settleErr) {
+          console.error(`⚠️ [ASAAS WEBHOOK] Erro ao processar settlement da caixinha no SettlementService:`, settleErr);
+        }
+
         // Send a beautiful notification to the instructor
         const amountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
         const amountFormatted = (amountCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });

@@ -78,7 +78,7 @@ export class SettlementRepository {
    */
   public static async createSettlementRecord(
     supabase: SupabaseClient,
-    installmentId: string,
+    installmentId: string | null,
     input: ProcessSettlementInput,
     calcResult: SettlementCalculationResult
   ): Promise<PaymentSettlementRecord> {
@@ -118,13 +118,43 @@ export class SettlementRepository {
       studentId: string | null;
       instructorId: string | null;
       settlementId: string;
-      installmentId: string;
+      installmentId: string | null;
       providerPaymentId: string;
       settlementType: SettlementType;
       calcResult: SettlementCalculationResult;
       eventLedgerId?: string | null;
+      origin?: 'LESSON' | 'TIP';
     }
   ) {
+    if (params.origin === 'TIP') {
+      // Find existing tip transaction by provider_payment_id
+      const { data: existingTip } = await supabase
+        .from('transactions')
+        .select('id, metadata')
+        .eq('provider_payment_id', params.providerPaymentId)
+        .maybeSingle();
+
+      if (existingTip) {
+        const meta = existingTip.metadata && typeof existingTip.metadata === 'object' ? existingTip.metadata : {};
+        await supabase
+          .from('transactions')
+          .update({
+            metadata: {
+              ...meta,
+              settlement_id: params.settlementId,
+              settlement_key: params.calcResult.settlementKey,
+              fee_amount: params.calcResult.feeAmount,
+              instructor_amount: params.calcResult.instructorAmount,
+              settled_at: params.calcResult.settledAt,
+              release_date: params.calcResult.releaseDate
+            }
+          })
+          .eq('id', existingTip.id);
+
+        return existingTip.id;
+      }
+    }
+
     let txType: 'settlement_credit' | 'settlement_refund' | 'settlement_chargeback' = 'settlement_credit';
     let description = `Liquidação de pagamento (${params.providerPaymentId})`;
 
