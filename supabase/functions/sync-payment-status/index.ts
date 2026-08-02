@@ -171,21 +171,25 @@ Deno.serve(async (req) => {
             .select('id')
             .single();
 
-          const settlementId = paymentData?.id || paymentId;
-          await supabaseAdmin
-            .from('payment_settlements')
-            .upsert({
-              installment_id: instData?.id || null,
-              provider_payment_id: paymentId,
-              provider_settlement_id: settlementId,
-              settlement_type: 'PAYMENT',
-              gross_amount: grossVal,
-              net_amount: netVal,
-              fee_amount: 0,
-              platform_fee: platformFeeVal,
-              instructor_amount: instructorAmount,
-              settled_at: payDate,
-            }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
+          if (['RECEIVED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
+            const settlementId = paymentData?.id || paymentId;
+            await supabaseAdmin
+              .from('payment_settlements')
+              .upsert({
+                installment_id: instData?.id || null,
+                provider_payment_id: paymentId,
+                provider_settlement_id: settlementId,
+                settlement_type: 'PAYMENT',
+                gross_amount: grossVal,
+                net_amount: netVal,
+                fee_amount: 0,
+                platform_fee: platformFeeVal,
+                instructor_amount: instructorAmount,
+                settled_at: payDate,
+              }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
+          } else {
+            console.log(`ℹ️ [Sync job] Skipping payment_settlements upsert for asaasStatus: ${asaasStatus} (settlement recorded only on RECEIVED / RECEIVED_IN_CASH).`);
+          }
         } catch (instSyncErr) {
           console.error('⚠️ [Sync job] Error syncing installment/settlement:', instSyncErr);
         }
