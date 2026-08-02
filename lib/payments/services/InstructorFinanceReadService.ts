@@ -215,6 +215,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             id,
             instructor_id,
             student_id,
+            group_id,
+            installment_number,
+            total_installments,
             due_date,
             payment_date,
             status,
@@ -237,7 +240,26 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       const { data, error } = await query;
 
       if (!error && data && data.length > 0) {
-        return data.map((item: any) => {
+        const groupsMap = new Map<string, {
+          id: string;
+          providerPaymentId: string;
+          installmentId: string;
+          studentId: string;
+          studentName?: string;
+          grossAmountCents: number;
+          netAmountCents: number;
+          platformFeeCents: number;
+          feeAmountCents: number;
+          commissionCnhJaCents: number;
+          status: string;
+          dueDate: string;
+          settledAt: string;
+          groupId?: string;
+          totalInstallments?: number;
+          settlementsCount: number;
+        }>();
+
+        for (const item of data) {
           const inst = item.payment_installments as any;
           const profileObj = Array.isArray(inst?.profiles) ? inst?.profiles[0] : inst?.profiles;
           const studentName = profileObj?.full_name || undefined;
@@ -254,22 +276,72 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           if (item.settlement_type === 'REFUND') status = 'REFUNDED';
           if (item.settlement_type === 'CHARGEBACK') status = 'CHARGEBACK';
 
-          return {
-            id: item.id,
-            providerPaymentId: item.provider_payment_id,
-            installmentId: item.installment_id || inst?.id || item.id,
-            studentId: inst?.student_id,
-            studentName,
-            grossAmountCents: grossCents,
-            netAmountCents: netCents,
-            platformFeeCents: feeCents,
-            feeAmountCents: gatewayFeeCents,
-            commissionCnhJaCents,
-            status,
-            dueDate: inst?.due_date || item.settled_at || item.created_at,
-            settledAt: item.settled_at || item.created_at
-          };
-        });
+          const groupKey = inst?.group_id || item.provider_payment_id || item.installment_id || item.id;
+          const itemSettledAt = item.settled_at || item.created_at;
+
+          if (!groupsMap.has(groupKey)) {
+            groupsMap.set(groupKey, {
+              id: item.id,
+              providerPaymentId: item.provider_payment_id,
+              installmentId: item.installment_id || inst?.id || item.id,
+              studentId: inst?.student_id,
+              studentName,
+              grossAmountCents: grossCents,
+              netAmountCents: netCents,
+              platformFeeCents: feeCents,
+              feeAmountCents: gatewayFeeCents,
+              commissionCnhJaCents,
+              status,
+              dueDate: inst?.due_date || itemSettledAt,
+              settledAt: itemSettledAt,
+              groupId: inst?.group_id || undefined,
+              totalInstallments: inst?.total_installments || 1,
+              settlementsCount: 1
+            });
+          } else {
+            const existing = groupsMap.get(groupKey)!;
+            existing.grossAmountCents += grossCents;
+            existing.netAmountCents += netCents;
+            existing.platformFeeCents += feeCents;
+            existing.feeAmountCents += gatewayFeeCents;
+            existing.commissionCnhJaCents += commissionCnhJaCents;
+            existing.settlementsCount += 1;
+
+            if (status === 'CHARGEBACK') {
+              existing.status = 'CHARGEBACK';
+            } else if (status === 'REFUNDED' && existing.status !== 'CHARGEBACK') {
+              existing.status = 'REFUNDED';
+            }
+
+            if (new Date(itemSettledAt) > new Date(existing.settledAt)) {
+              existing.settledAt = itemSettledAt;
+            }
+          }
+        }
+
+        const aggregated: InstructorStatementEntryDTO[] = Array.from(groupsMap.values()).map(g => ({
+          id: g.id,
+          providerPaymentId: g.providerPaymentId,
+          installmentId: g.installmentId,
+          studentId: g.studentId,
+          studentName: g.studentName,
+          grossAmountCents: g.grossAmountCents,
+          netAmountCents: g.netAmountCents,
+          platformFeeCents: g.platformFeeCents,
+          feeAmountCents: g.feeAmountCents,
+          commissionCnhJaCents: g.commissionCnhJaCents,
+          status: g.status,
+          dueDate: g.dueDate,
+          settledAt: g.settledAt,
+          groupId: g.groupId,
+          installmentNumber: g.settlementsCount,
+          totalInstallments: g.totalInstallments,
+          settlementsCount: g.settlementsCount,
+          receivedInstallments: g.settlementsCount,
+          lastSettlementDate: g.settledAt
+        }));
+
+        return aggregated.sort((a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime());
       }
     }
 

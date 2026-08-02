@@ -43,6 +43,9 @@ interface HistoryItem {
     netAmount?: number;
   }[];
   groupId?: string;
+  receivedInstallments?: number;
+  totalInstallments?: number;
+  lastSettlementDate?: string;
 }
 
 // Updated Status Types for Asaas Dashboard Integration
@@ -352,7 +355,7 @@ export const InstructorFinance: React.FC = () => {
             if (statementData?.statement && Array.isArray(statementData.statement)) {
               const items: HistoryItem[] = statementData.statement.map((entry: any) => {
                 const isRefund = entry.status === 'REFUNDED' || entry.status === 'CHARGEBACK';
-                const sortDate = entry.settledAt || entry.dueDate || new Date().toISOString();
+                const sortDate = entry.lastSettlementDate || entry.settledAt || entry.dueDate || new Date().toISOString();
                 return {
                   id: entry.id,
                   timestamp: sortDate,
@@ -367,7 +370,11 @@ export const InstructorFinance: React.FC = () => {
                   netAmount: entry.netAmountCents,
                   status: (entry.status || '').toLowerCase(),
                   studentName: entry.studentName || 'Aluno',
-                  providerPayoutId: undefined
+                  providerPayoutId: undefined,
+                  groupId: entry.groupId,
+                  receivedInstallments: entry.receivedInstallments ?? entry.settlementsCount ?? 1,
+                  totalInstallments: entry.totalInstallments ?? 1,
+                  lastSettlementDate: sortDate
                 };
               });
               setHistoryItems(items);
@@ -944,19 +951,32 @@ export const InstructorFinance: React.FC = () => {
                       const studentName = item.studentName;
                       const displayDesc = `${label} - ${studentName}`;
   
+                      const totalInst = item.totalInstallments || 1;
+                      const recInst = item.receivedInstallments || 1;
+                      const isMultiInstallment = totalInst > 1;
+
                       // Visual indicators
                       const getIndicatorColor = () => {
                           if (isRefund) return 'border-red-500';
                           if (isTip) return 'border-amber-400';
                           return 'border-green-500';
                       };
-  
+
                       const getIcon = () => {
                           if (isRefund) return '↩️';
                           if (isTip) return '🎁';
                           return '✅';
                       };
-  
+
+                      const formatFullDate = (isoStr?: string) => {
+                          if (!isoStr) return '';
+                          const d = new Date(isoStr);
+                          if (isNaN(d.getTime())) return isoStr;
+                          return d.toLocaleDateString('pt-BR');
+                      };
+
+                      const displayDate = formatFullDate(item.lastSettlementDate || item.sortDate);
+
                       return (
                           <div 
                               key={item.id} 
@@ -965,43 +985,36 @@ export const InstructorFinance: React.FC = () => {
                           >
                               <div className="flex justify-between items-center w-full">
                                   <div className="flex flex-col space-y-1">
-                                      <div className="flex items-center gap-2">
-                                          <span className="text-xs text-gray-400 font-medium">{formatDate(item.sortDate)}</span>
-                                          <span className="text-[10px] text-gray-300">•</span>
-                                          <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">{getIcon()} {label}</span>
-                                      </div>
-                                      <span className="text-sm font-semibold text-gray-800">
-                                          {studentName}
+                                      <span className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                                          <span>{getIcon()}</span>
+                                          <span>{studentName}</span>
+                                      </span>
+                                      <span className="text-xs text-gray-500 font-medium">
+                                          {isMultiInstallment ? `${recInst} de ${totalInst} parcelas recebidas` : 'À vista'}
                                       </span>
                                   </div>
                                   <div className="text-right">
-                                      <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
+                                      <span className="text-[10px] text-gray-400 font-medium block">Recebido:</span>
+                                      <span className={`block font-bold text-base ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
                                           {item.netAmount !== undefined ? (
                                               <>
-                                                  {isRefund ? '-' : '+'} {formatCurrency(Math.abs(item.netAmount))}
+                                                  {isRefund ? '-' : ''} {formatCurrency(Math.abs(item.netAmount))}
                                               </>
                                           ) : (
                                               '—'
                                           )}
                                       </span>
-                                      <span className="text-[10px] text-gray-400">
-                                          {item.status === 'pending' && 'Pendente'}
-                                          {item.status === 'completed' && (
-                                              item.providerPayoutId 
-                                                  ? 'Transferido' 
-                                                  : <span className="text-green-600 font-bold">Concluído</span>
-                                          )}
-                                          {item.status === 'failed' && 'Falha'}
-                                          {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
+                                      <span className="text-[10px] text-gray-400 block mt-0.5">
+                                          Último recebimento: {displayDate}
                                       </span>
                                   </div>
                               </div>
-  
+
                               {expandedId === item.id && (
                                   <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 animate-fade-in">
                                       <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                                          <div className="text-gray-400">Horário:</div>
-                                          <div className="text-gray-700 font-medium text-right">{formatTime(item.sortDate)}</div>
+                                          <div className="text-gray-400">Último recebimento:</div>
+                                          <div className="text-gray-700 font-medium text-right">{displayDate}</div>
                                           
                                           {item.isFinancial && item.grossAmount !== undefined && (
                                               <>
@@ -1015,11 +1028,11 @@ export const InstructorFinance: React.FC = () => {
                                                       </>
                                                   )}
                                                   
-                                                  <div className="text-gray-400 font-bold">Valor Líquido:</div>
+                                                  <div className="text-gray-400 font-bold">Valor Líquido Recebido:</div>
                                                   <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
                                               </>
                                           )}
-  
+
                                           <div className="text-gray-400">ID:</div>
                                           <div className="text-gray-500 text-right font-mono">{item.id.slice(0, 12)}...</div>
                                       </div>

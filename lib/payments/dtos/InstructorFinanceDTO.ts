@@ -37,6 +37,12 @@ export interface InstructorStatementEntryDTO {
   status: string; // PENDING | CONFIRMED | RECEIVED | OVERDUE | REFUNDED | CHARGEBACK | CANCELLED
   dueDate: string;
   settledAt?: string;
+  groupId?: string;
+  installmentNumber?: number;
+  totalInstallments?: number;
+  settlementsCount?: number;
+  receivedInstallments?: number;
+  lastSettlementDate?: string;
 }
 
 export interface InstructorCashFlowDTO {
