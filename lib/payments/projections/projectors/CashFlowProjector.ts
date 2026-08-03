@@ -57,6 +57,16 @@ export class CashFlowProjector {
           .maybeSingle();
         if (apt?.instructor_id) {
           instructorId = apt.instructor_id;
+        } else {
+          const { data: tx } = await supabase
+            .from('transactions')
+            .select('instructor_id')
+            .eq('provider_payment_id', payload.providerPaymentId)
+            .limit(1)
+            .maybeSingle();
+          if (tx?.instructor_id) {
+            instructorId = tx.instructor_id;
+          }
         }
       }
     }

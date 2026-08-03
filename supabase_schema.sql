@@ -730,6 +730,9 @@ CREATE TABLE IF NOT EXISTS public.payment_installments (
 CREATE TABLE IF NOT EXISTS public.payment_settlements (
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   installment_id UUID REFERENCES public.payment_installments(id) ON DELETE CASCADE,
+  instructor_id UUID REFERENCES public.instructors(id) ON DELETE SET NULL,
+  student_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  appointment_id UUID REFERENCES public.appointments(id) ON DELETE SET NULL,
   provider_payment_id TEXT NOT NULL,
   provider_settlement_id TEXT,
   settlement_type TEXT NOT NULL DEFAULT 'PAYMENT' CHECK (settlement_type IN ('PAYMENT', 'REFUND', 'CHARGEBACK')),
@@ -751,6 +754,9 @@ CREATE INDEX IF NOT EXISTS idx_payment_installments_appointment_id ON public.pay
 CREATE INDEX IF NOT EXISTS idx_payment_installments_transaction_id ON public.payment_installments (transaction_id);
 
 CREATE INDEX IF NOT EXISTS idx_payment_settlements_installment_id ON public.payment_settlements (installment_id);
+CREATE INDEX IF NOT EXISTS idx_payment_settlements_instructor_id ON public.payment_settlements (instructor_id);
+CREATE INDEX IF NOT EXISTS idx_payment_settlements_student_id ON public.payment_settlements (student_id);
+CREATE INDEX IF NOT EXISTS idx_payment_settlements_appointment_id ON public.payment_settlements (appointment_id);
 CREATE INDEX IF NOT EXISTS idx_payment_settlements_provider_payment_id ON public.payment_settlements (provider_payment_id);
 CREATE INDEX IF NOT EXISTS idx_payment_settlements_settled_at ON public.payment_settlements (settled_at);
 
@@ -764,6 +770,8 @@ USING (auth.uid() = student_id OR auth.uid() = instructor_id);
 CREATE POLICY "Users can view their own payment settlements"
 ON public.payment_settlements FOR SELECT
 USING (
+  auth.uid() = instructor_id OR 
+  auth.uid() = student_id OR
   EXISTS (
     SELECT 1 FROM public.payment_installments pi 
     WHERE pi.id = payment_settlements.installment_id 

@@ -65,6 +65,9 @@ export interface SettlementCalculationResult {
 export interface PaymentSettlementRecord {
   id: string;
   installment_id: string | null;
+  instructor_id?: string | null;
+  student_id?: string | null;
+  appointment_id?: string | null;
   provider_payment_id: string;
   provider_settlement_id: string | null;
   settlement_type: SettlementType;
@@ -83,6 +86,9 @@ export interface SettlementProcessResult {
   settlementId?: string;
   transactionId?: string;
   installmentId?: string | null;
+  instructorId?: string | null;
+  studentId?: string | null;
+  appointmentId?: string | null;
   settlementType: SettlementType;
   settlementKey: string;
   grossAmount: number;

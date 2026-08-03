@@ -74,16 +74,55 @@ export class SettlementRepository {
   }
 
   /**
+   * Fetches transaction by provider_payment_id to resolve participant snapshot (e.g. for TIP origin)
+   */
+  public static async findTipTransaction(
+    supabase: SupabaseClient,
+    providerPaymentId: string
+  ) {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('id, student_id, instructor_id, appointment_id, metadata')
+      .eq('provider_payment_id', providerPaymentId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn(`⚠️ [SettlementRepository] Error fetching transaction for ${providerPaymentId}:`, error);
+      return null;
+    }
+
+    return data;
+  }
+
+  /**
    * Creates a settlement record in payment_settlements
    */
   public static async createSettlementRecord(
     supabase: SupabaseClient,
     installmentId: string | null,
     input: ProcessSettlementInput,
-    calcResult: SettlementCalculationResult
+    calcResult: SettlementCalculationResult,
+    entityIds?: {
+      instructorId?: string | null;
+      studentId?: string | null;
+      appointmentId?: string | null;
+    }
   ): Promise<PaymentSettlementRecord> {
+    const instructorId = entityIds?.instructorId !== undefined
+      ? entityIds.instructorId
+      : (input.instructorId || null);
+    const studentId = entityIds?.studentId !== undefined
+      ? entityIds.studentId
+      : (input.studentId || null);
+    const appointmentId = entityIds?.appointmentId !== undefined
+      ? entityIds.appointmentId
+      : (input.appointmentId || null);
+
     const insertPayload = {
       installment_id: installmentId,
+      instructor_id: instructorId,
+      student_id: studentId,
+      appointment_id: appointmentId,
       provider_payment_id: input.providerPaymentId,
       provider_settlement_id: input.providerSettlementId || null,
       settlement_type: input.settlementType,

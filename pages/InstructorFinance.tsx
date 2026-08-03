@@ -354,13 +354,14 @@ export const InstructorFinance: React.FC = () => {
             const statementData = await statementRes.json();
             if (statementData?.statement && Array.isArray(statementData.statement)) {
               const items: HistoryItem[] = statementData.statement.map((entry: any) => {
+                const isTip = entry.isTip || entry.installmentId === null || entry.status === 'TIP';
                 const isRefund = entry.status === 'REFUNDED' || entry.status === 'CHARGEBACK';
                 const sortDate = entry.lastSettlementDate || entry.settledAt || entry.dueDate || new Date().toISOString();
                 return {
                   id: entry.id,
                   timestamp: sortDate,
                   sortDate: sortDate,
-                  type: isRefund ? 'refund' : 'lesson',
+                  type: isTip ? 'tip' : isRefund ? 'refund' : 'lesson',
                   isFinancial: true,
                   amount: entry.netAmountCents,
                   grossAmount: entry.grossAmountCents,

@@ -273,6 +273,184 @@ export default async function handler(req: Request, res: Response) {
 
     // Invoke PaymentStateService (Etapa 5) & SettlementService (Etapa 6)
     if (paymentId && event.toUpperCase().startsWith('PAYMENT_')) {
+      const externalRef = payload.payment?.externalReference || '';
+      const isTip = externalRef.startsWith('tip:');
+
+      if (isTip) {
+        console.log(`[ASAAS WEBHOOK] Processando confirmação de caixinha: ${externalRef}`);
+        const parts = externalRef.split(':');
+        const appointmentId = parts[1] || null;
+        const transactionId = parts[2] || null;
+
+        if (!appointmentId || !transactionId) {
+          console.error(`❌ [ASAAS WEBHOOK] Caixinha com referência inválida: ${externalRef}`);
+          await finalizeLedger('FAILED', 'Invalid tip externalReference format');
+          return res.status(400).json({ error: 'Invalid tip externalReference format' });
+        }
+
+        // Fetch transaction to ensure it exists and prevent duplicates
+        const { data: tx, error: fetchTxError } = await supabaseAdmin
+          .from('transactions')
+          .select('id, status, amount, student_id, instructor_id, metadata')
+          .eq('id', transactionId)
+          .maybeSingle();
+
+        if (fetchTxError) {
+          console.error(`❌ [ASAAS WEBHOOK] Error fetching transaction ${transactionId}:`, fetchTxError.message);
+          await finalizeLedger('FAILED', fetchTxError.message);
+          return res.status(500).json({ error: 'Database error fetching transaction' });
+        }
+
+        if (!tx) {
+          console.error(`❌ [ASAAS WEBHOOK] Nenhuma transação provisória encontrada com ID ${transactionId}.`);
+          await finalizeLedger('FAILED', 'Provisional transaction not found');
+          return res.status(404).json({ error: 'Provisional transaction not found' });
+        }
+
+        if (tx.status === 'completed') {
+          console.log(`ℹ️ [ASAAS WEBHOOK] Caixinha transação ${transactionId} já está concluída (idempotente).`);
+          await finalizeLedger('PROCESSED');
+          return res.status(200).json({
+            success: true,
+            message: 'Caixinha already completed (idempotent)',
+            event,
+            timestamp
+          });
+        }
+
+        const grossAmountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
+        const netValue = payload.payment?.netValue;
+        const netAmountCents = netValue !== undefined ? Math.round(netValue * 100) : grossAmountCents;
+        const asaasFeeCents = grossAmountCents - netAmountCents;
+
+        const existingMetadata = tx.metadata && typeof tx.metadata === 'object' ? tx.metadata : {};
+        const updatedMetadata = {
+          ...existingMetadata,
+          asaas_payment_id: paymentId,
+          asaas_fee_cents: asaasFeeCents,
+          payment_type: 'PIX_TIP'
+        };
+
+        console.log('[AUDIT TX]', {
+          transactionId,
+          txId: tx.id,
+          providerPaymentId: paymentId,
+          status: tx.status,
+          externalReference: externalRef
+        });
+
+        // Update the transaction status to 'completed'
+        const updateTxResponse = await supabaseAdmin
+          .from('transactions')
+          .update({
+            status: 'completed',
+            provider_payment_id: paymentId,
+            event_date: new Date().toISOString(),
+            net_amount: netAmountCents,
+            platform_fee: 0,
+            metadata: updatedMetadata
+          })
+          .eq('id', transactionId)
+          .select();
+
+        console.log('[AUDIT UPDATE TRANSACTIONS]', {
+          transactionId,
+          response: updateTxResponse
+        });
+
+        console.log('[AUDIT UPDATE RESULT]', {
+          affectedRows: updateTxResponse.data?.length ?? 0,
+          returnedIds: updateTxResponse.data?.map((r: any) => r.id),
+          error: updateTxResponse.error
+        });
+
+        const updateTxError = updateTxResponse.error;
+
+        if (updateTxError) {
+          console.error(`❌ [ASAAS WEBHOOK] Error completing tip transaction ${transactionId}:`, updateTxError.message);
+          await finalizeLedger('FAILED', updateTxError.message);
+          return res.status(500).json({ error: 'Database error completing transaction' });
+        }
+
+        console.log(`✅ [ASAAS WEBHOOK] Caixinha transação ${transactionId} marcada como completed com sucesso!`);
+
+        // Forward tip payment to official SettlementService
+        try {
+          await SettlementService.processSettlement(
+            {
+              origin: 'TIP',
+              providerPaymentId: paymentId,
+              settlementType: SettlementType.PAYMENT,
+              grossAmount: grossAmountCents,
+              netAmount: netAmountCents,
+              feeAmount: asaasFeeCents,
+              platformFee: 0,
+              instructorAmount: netAmountCents,
+              studentId: tx.student_id,
+              instructorId: tx.instructor_id,
+              appointmentId: appointmentId,
+              settledAt: new Date().toISOString(),
+              eventLedgerId: ledgerId
+            },
+            supabaseAdmin
+          );
+          console.log(`✅ [ASAAS WEBHOOK] Caixinha settlement processado com sucesso no SettlementService!`);
+        } catch (settleErr) {
+          console.error(`⚠️ [ASAAS WEBHOOK] Erro ao processar settlement da caixinha no SettlementService:`, settleErr);
+        }
+
+        // Send a beautiful notification to the instructor
+        const amountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
+        const amountFormatted = (amountCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        const instructorId = tx.instructor_id;
+
+        if (instructorId) {
+          try {
+            // 1. Idempotency Check using notification_logs
+            const { error: logError } = await supabaseAdmin
+              .from('notification_logs')
+              .insert({
+                appointment_id: appointmentId,
+                status: 'tip',
+                target_user_id: instructorId
+              });
+
+            if (logError) {
+              if (logError.code === '23505') {
+                console.log(`ℹ️ [ASAAS WEBHOOK] Notificação de caixinha já enviada para o appointment ${appointmentId} (idempotente via notification_logs).`);
+                await finalizeLedger('PROCESSED');
+                return res.status(200).json({
+                  success: true,
+                  message: 'Tip notification already processed (idempotency)',
+                  event,
+                  timestamp
+                });
+              }
+              throw logError;
+            }
+
+            // 2. Insert In-App Notification and auto-trigger Push via NotificationService
+            await NotificationService.sendTip({
+              instructorId,
+              amountFormatted,
+              appointmentId
+            });
+            console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha processada via NotificationService para o instrutor ${instructorId}`);
+
+          } catch (notifErr) {
+            console.error(`⚠️ [ASAAS WEBHOOK] Error processing tip notification & push:`, notifErr);
+          }
+        }
+
+        await finalizeLedger('PROCESSED');
+        return res.status(200).json({
+          success: true,
+          message: 'Caixinha payment confirmed and processed successfully',
+          event,
+          timestamp
+        });
+      }
+
       const instNumber = payload.payment?.installmentNumber || 1;
 
       // STRICT HARDENING: Check presence of Official Contract (payment_installments)
@@ -504,163 +682,6 @@ export default async function handler(req: Request, res: Response) {
         console.error('❌ Asaas Webhook: Payment ID missing for payment event.');
         await finalizeLedger('FAILED', 'Missing paymentId');
         return res.status(400).json({ error: 'Missing paymentId' });
-      }
-
-      // Check if this is a caixinha (tip) payment
-      const externalRef = payload.payment?.externalReference || groupId || '';
-      const isTip = externalRef.startsWith('tip:');
-
-      if (isTip) {
-        console.log(`[ASAAS WEBHOOK] Processando confirmação de caixinha: ${externalRef}`);
-        const parts = externalRef.split(':');
-        const appointmentId = parts[1] || null;
-        const transactionId = parts[2] || null;
-
-        if (!appointmentId || !transactionId) {
-          console.error(`❌ [ASAAS WEBHOOK] Caixinha com referência inválida: ${externalRef}`);
-          await finalizeLedger('FAILED', 'Invalid tip externalReference format');
-          return res.status(400).json({ error: 'Invalid tip externalReference format' });
-        }
-
-        // Fetch transaction to ensure it exists and prevent duplicates
-        const { data: tx, error: fetchTxError } = await supabaseAdmin
-          .from('transactions')
-          .select('id, status, amount, student_id, instructor_id, metadata')
-          .eq('id', transactionId)
-          .maybeSingle();
-
-        if (fetchTxError) {
-          console.error(`❌ [ASAAS WEBHOOK] Error fetching transaction ${transactionId}:`, fetchTxError.message);
-          await finalizeLedger('FAILED', fetchTxError.message);
-          return res.status(500).json({ error: 'Database error fetching transaction' });
-        }
-
-        if (!tx) {
-          console.error(`❌ [ASAAS WEBHOOK] Nenhuma transação provisória encontrada com ID ${transactionId}.`);
-          await finalizeLedger('FAILED', 'Provisional transaction not found');
-          return res.status(404).json({ error: 'Provisional transaction not found' });
-        }
-
-        if (tx.status === 'completed') {
-          console.log(`ℹ️ [ASAAS WEBHOOK] Caixinha transação ${transactionId} já está concluída (idempotente).`);
-          await finalizeLedger('PROCESSED');
-          return res.status(200).json({
-            success: true,
-            message: 'Caixinha already completed (idempotent)',
-            event,
-            timestamp
-          });
-        }
-
-        const grossAmountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
-        const netValue = payload.payment?.netValue;
-        const netAmountCents = netValue !== undefined ? Math.round(netValue * 100) : grossAmountCents;
-        const asaasFeeCents = grossAmountCents - netAmountCents;
-
-        const existingMetadata = tx.metadata && typeof tx.metadata === 'object' ? tx.metadata : {};
-        const updatedMetadata = {
-          ...existingMetadata,
-          asaas_payment_id: currentPaymentId,
-          asaas_fee_cents: asaasFeeCents,
-          payment_type: 'PIX_TIP'
-        };
-
-        // Update the transaction status to 'completed'
-        const { error: updateTxError } = await supabaseAdmin
-          .from('transactions')
-          .update({
-            status: 'completed',
-            provider_payment_id: currentPaymentId,
-            event_date: new Date().toISOString(),
-            net_amount: netAmountCents,
-            platform_fee: 0,
-            metadata: updatedMetadata
-          })
-          .eq('id', transactionId);
-
-        if (updateTxError) {
-          console.error(`❌ [ASAAS WEBHOOK] Error completing tip transaction ${transactionId}:`, updateTxError.message);
-          await finalizeLedger('FAILED', updateTxError.message);
-          return res.status(500).json({ error: 'Database error completing transaction' });
-        }
-
-        console.log(`✅ [ASAAS WEBHOOK] Caixinha transação ${transactionId} marcada como completed com sucesso!`);
-
-        // Forward tip payment to official SettlementService
-        try {
-          await SettlementService.processSettlement(
-            {
-              origin: 'TIP',
-              providerPaymentId: currentPaymentId,
-              settlementType: SettlementType.PAYMENT,
-              grossAmount: grossAmountCents,
-              netAmount: netAmountCents,
-              feeAmount: asaasFeeCents,
-              platformFee: 0,
-              instructorAmount: netAmountCents,
-              studentId: tx.student_id,
-              instructorId: tx.instructor_id,
-              appointmentId: appointmentId,
-              settledAt: new Date().toISOString(),
-              eventLedgerId: ledgerId
-            },
-            supabaseAdmin
-          );
-          console.log(`✅ [ASAAS WEBHOOK] Caixinha settlement processado com sucesso no SettlementService!`);
-        } catch (settleErr) {
-          console.error(`⚠️ [ASAAS WEBHOOK] Erro ao processar settlement da caixinha no SettlementService:`, settleErr);
-        }
-
-        // Send a beautiful notification to the instructor
-        const amountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
-        const amountFormatted = (amountCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-        const instructorId = tx.instructor_id;
-
-        if (instructorId) {
-          try {
-            // 1. Idempotency Check using notification_logs
-            const { error: logError } = await supabaseAdmin
-              .from('notification_logs')
-              .insert({
-                appointment_id: appointmentId,
-                status: 'tip',
-                target_user_id: instructorId
-              });
-
-            if (logError) {
-              if (logError.code === '23505') {
-                console.log(`ℹ️ [ASAAS WEBHOOK] Notificação de caixinha já enviada para o appointment ${appointmentId} (idempotente via notification_logs).`);
-                await finalizeLedger('PROCESSED');
-                return res.status(200).json({
-                  success: true,
-                  message: 'Tip notification already processed (idempotency)',
-                  event,
-                  timestamp
-                });
-              }
-              throw logError;
-            }
-
-            // 2. Insert In-App Notification and auto-trigger Push via NotificationService
-            await NotificationService.sendTip({
-              instructorId,
-              amountFormatted,
-              appointmentId
-            });
-            console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha processada via NotificationService para o instrutor ${instructorId}`);
-
-          } catch (notifErr) {
-            console.error(`⚠️ [ASAAS WEBHOOK] Error processing tip notification & push:`, notifErr);
-          }
-        }
-
-        await finalizeLedger('PROCESSED');
-        return res.status(200).json({
-          success: true,
-          message: 'Caixinha payment confirmed and processed successfully',
-          event,
-          timestamp
-        });
       }
 
       // Fallback search to find groupId if not present/sent in externalReference

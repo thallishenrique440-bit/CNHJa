@@ -176,14 +176,70 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
     supabaseClient: SupabaseClient,
     studentId: string
   ): Promise<StudentHistoryItemDTO[]> {
-    // 1. Fetch payment installments as SSOT
-    const { data: installments, error: instError } = await supabaseClient
+    // 1. Fetch payment installments as SSOT for lessons
+    const { data: installments } = await supabaseClient
       .from('payment_installments')
       .select('id, provider_payment_id, group_id, appointment_id, instructor_id, gross_amount, fee_amount, platform_fee, net_amount, status, due_date, payment_date, created_at, total_installments, installment_number')
       .eq('student_id', studentId)
       .order('created_at', { ascending: false });
 
-    if (instError || !installments || installments.length === 0) {
+    // 2. Fetch tip settlements directly from payment_settlements (where installment_id IS NULL and student_id = studentId)
+    let tipHistoryItems: StudentHistoryItemDTO[] = [];
+    const { data: tipSettlements } = await supabaseClient
+      .from('payment_settlements')
+      .select(`
+        id,
+        provider_payment_id,
+        gross_amount,
+        fee_amount,
+        net_amount,
+        settled_at,
+        created_at,
+        instructor_id,
+        instructors:instructor_id (
+          profiles ( full_name )
+        )
+      `)
+      .eq('student_id', studentId)
+      .is('installment_id', null);
+
+    if (tipSettlements && tipSettlements.length > 0) {
+      tipHistoryItems = tipSettlements.map((ts: any) => {
+        const instObj = Array.isArray(ts.instructors) ? ts.instructors[0] : ts.instructors;
+        const profileObj = Array.isArray(instObj?.profiles) ? instObj?.profiles[0] : instObj?.profiles;
+        const instructorName = profileObj?.full_name || 'Instrutor';
+
+        const settledAtStr = ts.settled_at || ts.created_at || new Date().toISOString();
+        const gross = ts.gross_amount || 0;
+        const fee = ts.fee_amount || 0;
+        return {
+          id: ts.id,
+          providerPaymentId: ts.provider_payment_id,
+          groupId: ts.provider_payment_id,
+          appointmentId: undefined,
+          instructorName,
+          grossAmountCents: gross,
+          feeAmountCents: fee,
+          lessonPriceCents: gross - fee,
+          paymentMethod: 'pix',
+          dueDate: settledAtStr,
+          paymentDate: settledAtStr,
+          status: 'completed',
+          combo: false,
+          isCombo: false,
+          lessonCount: 0,
+          lessons: [],
+          appointmentDate: undefined,
+          appointmentTime: undefined,
+          createdAt: settledAtStr,
+          receivedInstallments: 1,
+          totalInstallments: 1,
+          latestPaymentDate: settledAtStr
+        };
+      });
+    }
+
+    if ((!installments || installments.length === 0) && tipHistoryItems.length === 0) {
       return [];
     }
 
@@ -365,9 +421,10 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
       };
     });
 
-    historyItems.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const allHistoryItems = [...historyItems, ...tipHistoryItems];
+    allHistoryItems.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    return historyItems;
+    return allHistoryItems;
   }
 
   /**

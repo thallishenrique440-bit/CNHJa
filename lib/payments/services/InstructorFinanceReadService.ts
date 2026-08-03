@@ -105,27 +105,29 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     const periodStart = new Date(Date.UTC(currentYear, currentMonth - 1, 1, 0, 0, 0, 0)).toISOString();
     const periodEnd = new Date(Date.UTC(currentYear, currentMonth, 1, 0, 0, 0, 0)).toISOString();
 
-    const { data, error } = await supabaseClient
+    // Fetch all settlements (lessons, tips, refunds, chargebacks) directly from payment_settlements SSOT
+    const { data } = await supabaseClient
       .from('payment_settlements')
       .select(`
         id,
+        installment_id,
+        appointment_id,
         settlement_type,
         gross_amount,
         net_amount,
         platform_fee,
         instructor_amount,
         settled_at,
-        payment_installments!inner (
+        payment_installments (
           instructor_id,
-          appointment_id,
-          transaction_id
+          appointment_id
         )
       `)
-      .eq('payment_installments.instructor_id', instructorId)
+      .or(`instructor_id.eq.${instructorId},payment_installments.instructor_id.eq.${instructorId}`)
       .gte('settled_at', periodStart)
       .lt('settled_at', periodEnd);
 
-    if (error || !data || data.length === 0) {
+    if (!data || data.length === 0) {
       return {
         instructorId,
         year: currentYear,
@@ -162,7 +164,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       monthlyPlatformFeeCents += fee;
 
       const inst = item.payment_installments as any;
-      const isLesson = Boolean(inst && inst.appointment_id);
+      const isLesson = Boolean(item.appointment_id || (inst && inst.appointment_id) || item.installment_id);
       if (isLesson) {
         monthlyLessonNetCents += net;
       } else {
@@ -202,6 +204,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         .select(`
           id,
           installment_id,
+          instructor_id,
+          student_id,
+          appointment_id,
           provider_payment_id,
           settlement_type,
           gross_amount,
@@ -211,7 +216,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           instructor_amount,
           settled_at,
           created_at,
-          payment_installments!inner (
+          payment_installments (
             id,
             instructor_id,
             student_id,
@@ -222,9 +227,10 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             payment_date,
             status,
             profiles ( full_name )
-          )
+          ),
+          student_profile:profiles!payment_settlements_student_id_fkey ( full_name )
         `)
-        .eq('payment_installments.instructor_id', instructorId)
+        .or(`instructor_id.eq.${instructorId},payment_installments.instructor_id.eq.${instructorId}`)
         .order('settled_at', { ascending: false });
 
       if (options?.status) {
@@ -257,12 +263,16 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           groupId?: string;
           totalInstallments?: number;
           settlementsCount: number;
+          isTip?: boolean;
         }>();
 
         for (const item of data) {
           const inst = item.payment_installments as any;
-          const profileObj = Array.isArray(inst?.profiles) ? inst?.profiles[0] : inst?.profiles;
-          const studentName = profileObj?.full_name || undefined;
+          const instProfile = Array.isArray(inst?.profiles) ? inst?.profiles[0] : inst?.profiles;
+          const directProfile = Array.isArray((item as any).student_profile) ? (item as any).student_profile[0] : (item as any).student_profile;
+          const studentName = instProfile?.full_name || directProfile?.full_name || undefined;
+
+          const isTip = !item.installment_id;
 
           const isRefundOrChargeback = item.settlement_type === 'REFUND' || item.settlement_type === 'CHARGEBACK';
           const multiplier = isRefundOrChargeback ? -1 : 1;
@@ -275,6 +285,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           let status = inst?.status || 'RECEIVED';
           if (item.settlement_type === 'REFUND') status = 'REFUNDED';
           if (item.settlement_type === 'CHARGEBACK') status = 'CHARGEBACK';
+          if (isTip) status = 'RECEIVED';
 
           const groupKey = inst?.group_id || item.provider_payment_id || item.installment_id || item.id;
           const itemSettledAt = item.settled_at || item.created_at;
@@ -284,7 +295,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
               id: item.id,
               providerPaymentId: item.provider_payment_id,
               installmentId: item.installment_id || inst?.id || item.id,
-              studentId: inst?.student_id,
+              studentId: item.student_id || inst?.student_id,
               studentName,
               grossAmountCents: grossCents,
               netAmountCents: netCents,
@@ -296,7 +307,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
               settledAt: itemSettledAt,
               groupId: inst?.group_id || undefined,
               totalInstallments: inst?.total_installments || 1,
-              settlementsCount: 1
+              settlementsCount: 1,
+              isTip
             });
           } else {
             const existing = groupsMap.get(groupKey)!;
@@ -330,7 +342,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           platformFeeCents: g.platformFeeCents,
           feeAmountCents: g.feeAmountCents,
           commissionCnhJaCents: g.commissionCnhJaCents,
-          status: g.status,
+          status: g.isTip ? 'TIP' : g.status,
           dueDate: g.dueDate,
           settledAt: g.settledAt,
           groupId: g.groupId,
@@ -338,7 +350,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           totalInstallments: g.totalInstallments,
           settlementsCount: g.settlementsCount,
           receivedInstallments: g.settlementsCount,
-          lastSettlementDate: g.settledAt
+          lastSettlementDate: g.settledAt,
+          isTip: g.isTip
         }));
 
         return aggregated.sort((a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime());

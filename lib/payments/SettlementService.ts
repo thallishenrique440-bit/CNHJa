@@ -97,6 +97,9 @@ export class SettlementService {
           outcome: SettlementOutcome.NO_OP_DUPLICATE,
           settlementId: existingSettlement.id,
           installmentId: existingSettlement.installment_id,
+          instructorId: existingSettlement.instructor_id || null,
+          studentId: existingSettlement.student_id || null,
+          appointmentId: existingSettlement.appointment_id || null,
           settlementType: input.settlementType,
           settlementKey,
           grossAmount: existingSettlement.gross_amount,
@@ -111,12 +114,22 @@ export class SettlementService {
 
       // 2. Fetch corresponding installment (or resolve entities for TIP origin)
       let installment: any = null;
-      let studentId: string | null = null;
-      let instructorId: string | null = null;
+      let studentId: string | null = input.studentId || null;
+      let instructorId: string | null = input.instructorId || null;
+      let appointmentId: string | null = input.appointmentId || null;
 
       if (input.origin === 'TIP') {
-        studentId = input.studentId || null;
-        instructorId = input.instructorId || null;
+        if (!studentId || !instructorId) {
+          const tipTx = await SettlementRepository.findTipTransaction(
+            supabase,
+            input.providerPaymentId
+          );
+          if (tipTx) {
+            studentId = studentId || tipTx.student_id || null;
+            instructorId = instructorId || tipTx.instructor_id || null;
+            appointmentId = appointmentId || tipTx.appointment_id || null;
+          }
+        }
       } else {
         installment = await SettlementRepository.findInstallment(
           supabase,
@@ -130,8 +143,9 @@ export class SettlementService {
             installmentNumber
           );
         }
-        studentId = installment.student_id;
-        instructorId = installment.instructor_id;
+        studentId = installment.student_id || studentId;
+        instructorId = installment.instructor_id || instructorId;
+        appointmentId = installment.appointment_id || appointmentId;
       }
 
       // 3. Calculate monetary values & release dates using pure calculator
@@ -149,12 +163,17 @@ export class SettlementService {
         });
       }
 
-      // 4. Create settlement record in payment_settlements
+      // 4. Create settlement record in payment_settlements with immutable historical participant snapshot
       const settlementRecord = await SettlementRepository.createSettlementRecord(
         supabase,
         installment ? installment.id : null,
         input,
-        calcResult
+        calcResult,
+        {
+          instructorId,
+          studentId,
+          appointmentId
+        }
       );
 
       // 5. Create/update financial transaction in transactions table
@@ -209,6 +228,9 @@ export class SettlementService {
         settlementId: settlementRecord.id,
         transactionId: transactionId || undefined,
         installmentId: installment ? installment.id : undefined,
+        instructorId: instructorId || undefined,
+        studentId: studentId || undefined,
+        appointmentId: appointmentId || undefined,
         settlementType: input.settlementType,
         settlementKey,
         grossAmount: calcResult.grossAmount,
