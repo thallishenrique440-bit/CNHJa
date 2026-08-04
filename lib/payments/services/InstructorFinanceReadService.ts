@@ -88,7 +88,6 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       updatedAt: proj.updatedAt
     };
   }
-
   /**
    * Reads monthly financial metrics directly from payment_settlements (SSOT).
    */
@@ -123,7 +122,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           appointment_id
         )
       `)
-      .or(`instructor_id.eq.${instructorId},payment_installments.instructor_id.eq.${instructorId}`)
+      .eq('instructor_id', instructorId)
       .gte('settled_at', periodStart)
       .lt('settled_at', periodEnd);
 
@@ -198,167 +197,203 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     options?: { limit?: number; offset?: number; status?: string }
   ): Promise<InstructorStatementEntryDTO[]> {
     const settlementsTable = supabaseClient.from('payment_settlements');
+    let settlementsData: any[] = [];
     
     if (settlementsTable && typeof settlementsTable.select === 'function') {
-      let query = settlementsTable
-        .select(`
-          id,
-          installment_id,
-          instructor_id,
-          student_id,
-          appointment_id,
-          provider_payment_id,
-          settlement_type,
-          gross_amount,
-          net_amount,
-          platform_fee,
-          fee_amount,
-          instructor_amount,
-          settled_at,
-          created_at,
-          payment_installments (
+      try {
+        let query = settlementsTable
+          .select(`
             id,
+            installment_id,
             instructor_id,
             student_id,
-            group_id,
-            installment_number,
-            total_installments,
-            due_date,
-            payment_date,
-            status,
-            profiles ( full_name )
-          ),
-          student_profile:profiles!payment_settlements_student_id_fkey ( full_name )
-        `)
-        .or(`instructor_id.eq.${instructorId},payment_installments.instructor_id.eq.${instructorId}`)
-        .order('settled_at', { ascending: false });
-
-      if (options?.status) {
-        query = query.eq('payment_installments.status', options.status);
-      }
-      if (options?.limit) {
-        query = query.limit(options.limit);
-      }
-      if (options?.offset) {
-        query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
-      }
-
-      const { data, error } = await query;
-
-      if (!error && data && data.length > 0) {
-        const groupsMap = new Map<string, {
-          id: string;
-          providerPaymentId: string;
-          installmentId: string;
-          studentId: string;
-          studentName?: string;
-          grossAmountCents: number;
-          netAmountCents: number;
-          platformFeeCents: number;
-          feeAmountCents: number;
-          commissionCnhJaCents: number;
-          status: string;
-          dueDate: string;
-          settledAt: string;
-          groupId?: string;
-          totalInstallments?: number;
-          settlementsCount: number;
-          isTip?: boolean;
-        }>();
-
-        for (const item of data) {
-          const inst = item.payment_installments as any;
-          const instProfile = Array.isArray(inst?.profiles) ? inst?.profiles[0] : inst?.profiles;
-          const directProfile = Array.isArray((item as any).student_profile) ? (item as any).student_profile[0] : (item as any).student_profile;
-          const studentName = instProfile?.full_name || directProfile?.full_name || undefined;
-
-          const isTip = !item.installment_id;
-
-          const isRefundOrChargeback = item.settlement_type === 'REFUND' || item.settlement_type === 'CHARGEBACK';
-          const multiplier = isRefundOrChargeback ? -1 : 1;
-          const netCents = (item.net_amount !== undefined ? item.net_amount : (item.instructor_amount || 0)) * multiplier;
-          const grossCents = (item.gross_amount || 0) * multiplier;
-          const feeCents = (item.platform_fee || 0) * multiplier;
-          const gatewayFeeCents = (item.fee_amount || 0) * multiplier;
-          const commissionCnhJaCents = this.calculateCommissionCnhJa(feeCents, gatewayFeeCents);
-
-          let status = inst?.status || 'RECEIVED';
-          if (item.settlement_type === 'REFUND') status = 'REFUNDED';
-          if (item.settlement_type === 'CHARGEBACK') status = 'CHARGEBACK';
-          if (isTip) status = 'RECEIVED';
-
-          const groupKey = inst?.group_id || item.provider_payment_id || item.installment_id || item.id;
-          const itemSettledAt = item.settled_at || item.created_at;
-
-          if (!groupsMap.has(groupKey)) {
-            groupsMap.set(groupKey, {
-              id: item.id,
-              providerPaymentId: item.provider_payment_id,
-              installmentId: item.installment_id || inst?.id || item.id,
-              studentId: item.student_id || inst?.student_id,
-              studentName,
-              grossAmountCents: grossCents,
-              netAmountCents: netCents,
-              platformFeeCents: feeCents,
-              feeAmountCents: gatewayFeeCents,
-              commissionCnhJaCents,
+            appointment_id,
+            provider_payment_id,
+            settlement_type,
+            gross_amount,
+            net_amount,
+            platform_fee,
+            fee_amount,
+            instructor_amount,
+            settled_at,
+            created_at,
+            payment_installments (
+              id,
+              instructor_id,
+              student_id,
+              group_id,
+              installment_number,
+              total_installments,
+              due_date,
+              payment_date,
               status,
-              dueDate: inst?.due_date || itemSettledAt,
-              settledAt: itemSettledAt,
-              groupId: inst?.group_id || undefined,
-              totalInstallments: inst?.total_installments || 1,
-              settlementsCount: 1,
-              isTip
-            });
-          } else {
-            const existing = groupsMap.get(groupKey)!;
-            existing.grossAmountCents += grossCents;
-            existing.netAmountCents += netCents;
-            existing.platformFeeCents += feeCents;
-            existing.feeAmountCents += gatewayFeeCents;
-            existing.commissionCnhJaCents += commissionCnhJaCents;
-            existing.settlementsCount += 1;
+              profiles ( full_name )
+            )
+          `)
+          .eq('instructor_id', instructorId)
+          .order('settled_at', { ascending: false });
 
-            if (status === 'CHARGEBACK') {
-              existing.status = 'CHARGEBACK';
-            } else if (status === 'REFUNDED' && existing.status !== 'CHARGEBACK') {
-              existing.status = 'REFUNDED';
-            }
-
-            if (new Date(itemSettledAt) > new Date(existing.settledAt)) {
-              existing.settledAt = itemSettledAt;
-            }
-          }
+        if (options?.limit) {
+          query = query.limit(options.limit);
+        }
+        if (options?.offset) {
+          query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
         }
 
-        const aggregated: InstructorStatementEntryDTO[] = Array.from(groupsMap.values()).map(g => ({
-          id: g.id,
-          providerPaymentId: g.providerPaymentId,
-          installmentId: g.installmentId,
-          studentId: g.studentId,
-          studentName: g.studentName,
-          grossAmountCents: g.grossAmountCents,
-          netAmountCents: g.netAmountCents,
-          platformFeeCents: g.platformFeeCents,
-          feeAmountCents: g.feeAmountCents,
-          commissionCnhJaCents: g.commissionCnhJaCents,
-          status: g.isTip ? 'TIP' : g.status,
-          dueDate: g.dueDate,
-          settledAt: g.settledAt,
-          groupId: g.groupId,
-          installmentNumber: g.settlementsCount,
-          totalInstallments: g.totalInstallments,
-          settlementsCount: g.settlementsCount,
-          receivedInstallments: g.settlementsCount,
-          lastSettlementDate: g.settledAt,
-          isTip: g.isTip
-        }));
-
-        return aggregated.sort((a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime());
+        const { data, error } = await query;
+        if (!error && data && data.length > 0) {
+          settlementsData = data;
+        }
+      } catch {
+        // Fallback below if query throws
       }
     }
 
-    // Fallback if payment_settlements query yields no records or fails (e.g. mock test environments)
+    if (settlementsData.length > 0) {
+      // Enrich missing student names for direct settlements (e.g. tips)
+      const missingStudentIds = Array.from(
+        new Set(
+          settlementsData
+            .filter((s: any) => !s.payment_installments?.profiles && s.student_id)
+            .map((s: any) => s.student_id)
+        )
+      );
+
+      const studentNamesMap = new Map<string, string>();
+      if (missingStudentIds.length > 0) {
+        try {
+          const { data: profs } = await supabaseClient
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', missingStudentIds);
+          if (profs) {
+            for (const p of profs) {
+              if (p.id && p.full_name) {
+                studentNamesMap.set(p.id, p.full_name);
+              }
+            }
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+
+      const groupsMap = new Map<string, {
+        id: string;
+        providerPaymentId: string;
+        installmentId: string;
+        studentId: string;
+        studentName?: string;
+        grossAmountCents: number;
+        netAmountCents: number;
+        platformFeeCents: number;
+        feeAmountCents: number;
+        commissionCnhJaCents: number;
+        status: string;
+        dueDate: string;
+        settledAt: string;
+        groupId?: string;
+        totalInstallments?: number;
+        settlementsCount: number;
+        isTip?: boolean;
+      }>();
+
+      for (const item of settlementsData) {
+        const inst = item.payment_installments as any;
+        const instProfile = Array.isArray(inst?.profiles) ? inst?.profiles[0] : inst?.profiles;
+        const studentName = instProfile?.full_name || (item.student_id ? studentNamesMap.get(item.student_id) : undefined);
+
+        const isTip = !item.installment_id;
+
+        const isRefundOrChargeback = item.settlement_type === 'REFUND' || item.settlement_type === 'CHARGEBACK';
+        const multiplier = isRefundOrChargeback ? -1 : 1;
+        const netCents = (item.net_amount !== undefined ? item.net_amount : (item.instructor_amount || 0)) * multiplier;
+        const grossCents = (item.gross_amount || 0) * multiplier;
+        const feeCents = (item.platform_fee || 0) * multiplier;
+        const gatewayFeeCents = (item.fee_amount || 0) * multiplier;
+        const commissionCnhJaCents = this.calculateCommissionCnhJa(feeCents, gatewayFeeCents);
+
+        let status = inst?.status || 'RECEIVED';
+        if (item.settlement_type === 'REFUND') status = 'REFUNDED';
+        if (item.settlement_type === 'CHARGEBACK') status = 'CHARGEBACK';
+        if (isTip) status = 'TIP';
+
+        // TIPs have unique groupKey so they are NEVER merged. Lessons group by group_id or provider_payment_id.
+        const groupKey = isTip ? `tip_${item.id}` : (inst?.group_id || item.provider_payment_id || item.installment_id || item.id);
+        const itemSettledAt = item.settled_at || item.created_at;
+
+        if (!groupsMap.has(groupKey)) {
+          groupsMap.set(groupKey, {
+            id: item.id,
+            providerPaymentId: item.provider_payment_id || inst?.provider_payment_id || item.id,
+            installmentId: item.installment_id || inst?.id || item.id,
+            studentId: item.student_id || inst?.student_id,
+            studentName,
+            grossAmountCents: grossCents,
+            netAmountCents: netCents,
+            platformFeeCents: feeCents,
+            feeAmountCents: gatewayFeeCents,
+            commissionCnhJaCents,
+            status,
+            dueDate: inst?.due_date || itemSettledAt,
+            settledAt: itemSettledAt,
+            groupId: inst?.group_id || undefined,
+            totalInstallments: inst?.total_installments || 1,
+            settlementsCount: 1,
+            isTip
+          });
+        } else {
+          const existing = groupsMap.get(groupKey)!;
+          existing.grossAmountCents += grossCents;
+          existing.netAmountCents += netCents;
+          existing.platformFeeCents += feeCents;
+          existing.feeAmountCents += gatewayFeeCents;
+          existing.commissionCnhJaCents += commissionCnhJaCents;
+          existing.settlementsCount += 1;
+
+          if (status === 'CHARGEBACK') {
+            existing.status = 'CHARGEBACK';
+          } else if (status === 'REFUNDED' && existing.status !== 'CHARGEBACK') {
+            existing.status = 'REFUNDED';
+          }
+
+          if (new Date(itemSettledAt).getTime() > new Date(existing.settledAt).getTime()) {
+            existing.settledAt = itemSettledAt;
+          }
+        }
+      }
+
+      let aggregated: InstructorStatementEntryDTO[] = Array.from(groupsMap.values()).map(g => ({
+        id: g.id,
+        providerPaymentId: g.providerPaymentId,
+        installmentId: g.installmentId,
+        studentId: g.studentId,
+        studentName: g.studentName,
+        grossAmountCents: g.grossAmountCents,
+        netAmountCents: g.netAmountCents,
+        platformFeeCents: g.platformFeeCents,
+        feeAmountCents: g.feeAmountCents,
+        commissionCnhJaCents: g.commissionCnhJaCents,
+        status: g.isTip ? 'TIP' : g.status,
+        dueDate: g.dueDate,
+        settledAt: g.settledAt,
+        groupId: g.groupId,
+        installmentNumber: g.settlementsCount,
+        totalInstallments: g.totalInstallments,
+        settlementsCount: g.settlementsCount,
+        receivedInstallments: g.settlementsCount,
+        lastSettlementDate: g.settledAt,
+        isTip: g.isTip
+      }));
+
+      if (options?.status) {
+        aggregated = aggregated.filter(e => e.status === options.status);
+      }
+
+      return aggregated.sort((a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime());
+    }
+
+    // Fallback if payment_settlements query yields no records or fails (e.g. mock test environments or pre-settlement states)
     const installmentsTable = supabaseClient.from('payment_installments');
     if (!installmentsTable || typeof installmentsTable.select !== 'function') {
       return [];
