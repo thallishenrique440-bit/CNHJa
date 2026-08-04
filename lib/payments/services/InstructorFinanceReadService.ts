@@ -162,8 +162,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       monthlyNetCents += net;
       monthlyPlatformFeeCents += fee;
 
-      const inst = item.payment_installments as any;
-      const isLesson = Boolean(item.appointment_id || (inst && inst.appointment_id) || item.installment_id);
+      const isLesson = Boolean(item.installment_id);
       if (isLesson) {
         monthlyLessonNetCents += net;
       } else {

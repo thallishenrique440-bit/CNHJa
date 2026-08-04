@@ -41,6 +41,7 @@ async function runMonthlyMetricsUnitTests() {
                   data: [
                     {
                       id: 'set_1',
+                      installment_id: 'inst_1',
                       settlement_type: 'PAYMENT',
                       gross_amount: 10000,
                       net_amount: 9000,
@@ -48,6 +49,7 @@ async function runMonthlyMetricsUnitTests() {
                       instructor_amount: 9000,
                       settled_at: '2026-07-10T12:00:00Z',
                       payment_installments: {
+                        id: 'inst_1',
                         instructor_id: 'inst_777',
                         appointment_id: 'app_101',
                         transaction_id: 'tx_1'
@@ -55,20 +57,18 @@ async function runMonthlyMetricsUnitTests() {
                     },
                     {
                       id: 'set_2',
+                      installment_id: null,
                       settlement_type: 'PAYMENT',
                       gross_amount: 2000,
                       net_amount: 2000,
                       platform_fee: 0,
                       instructor_amount: 2000,
                       settled_at: '2026-07-15T14:00:00Z',
-                      payment_installments: {
-                        instructor_id: 'inst_777',
-                        appointment_id: null,
-                        transaction_id: 'tx_2'
-                      }
+                      payment_installments: null
                     },
                     {
                       id: 'set_3',
+                      installment_id: 'inst_1',
                       settlement_type: 'REFUND',
                       gross_amount: 1000,
                       net_amount: 900,
@@ -76,6 +76,7 @@ async function runMonthlyMetricsUnitTests() {
                       instructor_amount: 900,
                       settled_at: '2026-07-20T10:00:00Z',
                       payment_installments: {
+                        id: 'inst_1',
                         instructor_id: 'inst_777',
                         appointment_id: 'app_101',
                         transaction_id: 'tx_1'

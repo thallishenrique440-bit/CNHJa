@@ -555,6 +555,16 @@ export default async function handler(req: Request, res: Response) {
         // PAYMENT_CONFIRMED keeps split in AWAITING_CREDIT and money is not credited yet, so settlement is NOT executed on CONFIRMED.
         if (stateResult.outcome === TransitionOutcome.TRANSITION_EXECUTED) {
           if (stateResult.newState === 'RECEIVED') {
+            const payment = payload.payment;
+            const feeAmount =
+              payment?.value !== undefined && payment?.netValue !== undefined
+                ? Math.max(
+                      0,
+                      Math.round(payment.value * 100) -
+                      Math.round(payment.netValue * 100)
+                  )
+                : (payment?.feeValue !== undefined ? Math.round(payment.feeValue * 100) : undefined);
+
             const settleRes = await SettlementService.processSettlement({
               providerPaymentId: paymentId,
               installmentNumber: instNumber,
@@ -563,7 +573,7 @@ export default async function handler(req: Request, res: Response) {
               grossAmount: grossCents,
               netAmount: netCents,
               platformFee: platformFeeCents,
-              feeAmount: payload.payment?.feeValue ? Math.round(payload.payment.feeValue * 100) : undefined,
+              feeAmount,
               paymentMethod: payload.payment?.billingType,
               settledAt: payload.payment?.paymentDate || payload.payment?.clientPaymentDate || timestamp,
               eventLedgerId: ledgerId,
