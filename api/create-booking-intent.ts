@@ -404,19 +404,21 @@ providerInstance=${paymentProvider.getProviderName()}`);
       // Specific Time Check (Date + Time)
       // Canonical UTC start time for lesson
       const startTimeUtc = lesson.start_time_utc || new Date(`${lesson.date}T${lesson.startTime}:00-03:00`).toISOString();
-      const expiresAt = new Date(new Date(startTimeUtc).getTime() - 30 * 60 * 1000).toISOString();
+      const startTimeMs = new Date(startTimeUtc).getTime();
+      const nowMs = now.getTime();
 
-      if (now.getTime() >= new Date(expiresAt).getTime()) {
+      // HARDENING 2: Revalidação final - se a aula já foi iniciada
+      if (nowMs >= startTimeMs) {
         return res.status(400).json({ 
-          error: 'Não é possível solicitar aulas com menos de 30 minutos de antecedência.' 
+          error: 'Esta aula já foi iniciada.' 
         });
       }
 
-      const lessonDateTime = new Date(startTimeUtc);
-      const diffMs = lessonDateTime.getTime() - now.getTime();
-      const diffMinutes = diffMs / (1000 * 60);
+      // Single Source of Truth para a janela crítica dos últimos 30 minutos antes do início da aula
+      const isInsideWarningWindow = nowMs >= (startTimeMs - 30 * 60 * 1000);
 
-      if (diffMinutes <= 20 && !ignoreTooClose) {
+      // CENÁRIO 2: Compra com menos de 30 minutos de antecedência (e ignoreTooClose == false)
+      if (isInsideWarningWindow && !ignoreTooClose) {
         return res.status(409).json({ 
           errorCode: 'TOO_CLOSE',
           error: 'Horário muito próximo para agendamento automático.' 
@@ -504,11 +506,16 @@ providerInstance=${paymentProvider.getProviderName()}`);
     let allocatedSum = 0;
     const appointmentsToInsert = lessons.map((lesson: any, index: number) => {
       const startTimeUtc = lesson.start_time_utc || new Date(`${lesson.date}T${lesson.startTime}:00-03:00`).toISOString();
-      const expiresAt = new Date(new Date(startTimeUtc).getTime() - 30 * 60 * 1000).toISOString();
-      const lessonDateTime = new Date(startTimeUtc);
-      const diffMs = lessonDateTime.getTime() - now.getTime();
-      const diffMinutes = diffMs / (1000 * 60);
-      const isLastMinute = diffMinutes <= 20;
+      const startTimeMs = new Date(startTimeUtc).getTime();
+      const isInsideWarningWindow = now.getTime() >= (startTimeMs - 30 * 60 * 1000);
+
+      // HARDENING 1: A flag ignoreTooClose é a fonte canônica para determinar a expiração
+      // Se ignoreTooClose == true -> expires_at = start_time_utc
+      // Se ignoreTooClose == false -> expires_at = start_time_utc - 30 minutos
+      const expiresAt = ignoreTooClose
+        ? startTimeUtc
+        : new Date(startTimeMs - 30 * 60 * 1000).toISOString();
+      const isLastMinute = isInsideWarningWindow || Boolean(ignoreTooClose);
 
       const origPrice = lesson.price || 0;
       let discountedLessonPrice = 0;
