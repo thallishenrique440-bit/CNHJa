@@ -318,6 +318,34 @@ export default async function handler(req: Request, res: Response) {
           });
         }
 
+        const isReceivedEvent = ['PAYMENT_RECEIVED', 'PAYMENT_DUNNING_RECEIVED'].includes(event.toUpperCase());
+
+        if (!isReceivedEvent) {
+          console.log(`ℹ️ [ASAAS WEBHOOK] Caixinha transação ${transactionId} evento ${event} registrado como pendente (aguardando PAYMENT_RECEIVED).`);
+          const existingMetadata = tx.metadata && typeof tx.metadata === 'object' ? tx.metadata : {};
+          const updatedMetadata = {
+            ...existingMetadata,
+            asaas_payment_id: paymentId,
+            payment_type: 'PIX_TIP'
+          };
+
+          await supabaseAdmin
+            .from('transactions')
+            .update({
+              provider_payment_id: paymentId,
+              metadata: updatedMetadata
+            })
+            .eq('id', transactionId);
+
+          await finalizeLedger('PROCESSED');
+          return res.status(200).json({
+            success: true,
+            message: `Caixinha payment event ${event} registered as pending`,
+            event,
+            timestamp
+          });
+        }
+
         const grossAmountCents = tx.amount || Math.round((payload.payment?.value || 0) * 100);
         const netValue = payload.payment?.netValue;
         const netAmountCents = netValue !== undefined ? Math.round(netValue * 100) : grossAmountCents;
