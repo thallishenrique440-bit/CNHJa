@@ -991,7 +991,9 @@ export const InstructorFinance: React.FC = () => {
                                           <span>{studentName}</span>
                                       </span>
                                       <span className="text-xs text-gray-500 font-medium">
-                                          {isMultiInstallment ? `${recInst} de ${totalInst} parcelas recebidas` : 'À vista'}
+                                          {(isRefund || item.status === 'refunded' || item.status === 'partially_refunded')
+                                              ? (isMultiInstallment ? `${recInst} de ${totalInst} parcelas reembolsadas` : 'Reembolso integral')
+                                              : (isMultiInstallment ? `${recInst} de ${totalInst} parcelas recebidas` : 'À vista')}
                                       </span>
                                   </div>
                                   <div className="text-right">

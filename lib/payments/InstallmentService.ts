@@ -263,7 +263,7 @@ export class InstallmentService {
     // Fetch existing installments for this group_id or provider_payment_id
     let query = supabase
       .from('payment_installments')
-      .select('id, installment_number, gross_amount, platform_fee, instructor_amount');
+      .select('id, installment_number, gross_amount, platform_fee, instructor_amount, instructor_id, student_id');
 
     if (dto.groupId) {
       query = query.eq('group_id', dto.groupId);
@@ -306,6 +306,36 @@ export class InstallmentService {
             instructor_amount: -Math.abs(inst.instructor_amount),
             settled_at: refundDate,
           }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
+
+        // Dispatch REFUND_CREATED event to ProjectionDispatcher (Official Wave 2 Trigger)
+        try {
+          const gross = Math.abs(inst.gross_amount);
+          const platformFee = Math.abs(inst.platform_fee || 0);
+          const net = Math.abs(inst.instructor_amount || (gross - platformFee));
+          const instructorId = inst.instructor_id;
+
+          await ProjectionDispatcher.dispatch(
+            supabase,
+            {
+              eventType: ProjectionSourceEventType.REFUND_CREATED,
+              settlementId: settlementId,
+              eventId: `refund_${dto.providerPaymentId}_${inst.installment_number}`,
+              providerPaymentId: dto.providerPaymentId,
+              installmentId: inst.id,
+              instructorId: instructorId || undefined,
+              studentId: inst.student_id || undefined,
+              grossAmount: gross,
+              netAmount: net,
+              platformFee: platformFee,
+              feeAmount: 0,
+              instructorAmount: net,
+              settlementType: 'REFUND',
+              settledAt: refundDate
+            }
+          );
+        } catch (projErr) {
+          console.warn('⚠️ [InstallmentService] Failed to dispatch REFUND_CREATED event:', projErr);
+        }
       }
       console.log(`✅ [InstallmentService] Successfully recorded refund settlement for payment ${dto.providerPaymentId}`);
     } else {

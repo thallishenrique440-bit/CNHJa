@@ -163,7 +163,47 @@ export class InstructorProjector {
           payload.eventType === ProjectionSourceEventType.SETTLEMENT_REFUND
         ) {
           record.total_refunds += net;
-          record.settled_available = Math.max(0, record.settled_available - net);
+
+          // Check if a prior settlement (PAYMENT or CREDIT) was recorded in payment_settlements table (SSOT)
+          let hasPriorPaymentSettlement = false;
+          if (payload.providerPaymentId) {
+            let query = supabase
+              .from('payment_settlements')
+              .select('id, settlement_type, net_amount')
+              .eq('provider_payment_id', payload.providerPaymentId)
+              .in('settlement_type', ['PAYMENT', 'CREDIT']);
+
+            if (payload.installmentId) {
+              query = query.eq('installment_id', payload.installmentId);
+            }
+
+            const { data: priorSettlement } = await query.limit(1).maybeSingle();
+
+            if (priorSettlement) {
+              hasPriorPaymentSettlement = true;
+            }
+          }
+
+          if (hasPriorPaymentSettlement) {
+            // POST-SETTLEMENT REFUND:
+            // Payment was already settled (which previously moved funds from future_receivables to pending_release / settled_available).
+            // Deduct from pending_release / settled_available. Do NOT alter future_receivables (already deducted during settlement).
+            if (record.pending_release > 0) {
+              const pendingDeduction = Math.min(record.pending_release, net);
+              record.pending_release -= pendingDeduction;
+              const remainingNet = net - pendingDeduction;
+              if (remainingNet > 0) {
+                record.settled_available = Math.max(0, record.settled_available - remainingNet);
+              }
+            } else {
+              record.settled_available = Math.max(0, record.settled_available - net);
+            }
+          } else {
+            // PRE-SETTLEMENT REFUND:
+            // Payment was NOT settled prior to refund. The funds were still residing in future_receivables.
+            // Deduct exclusively from future_receivables. Do NOT alter pending_release or settled_available (funds were never settled).
+            record.future_receivables = Math.max(0, record.future_receivables - net);
+          }
         } else if (
           payload.eventType === ProjectionSourceEventType.CHARGEBACK_CREATED ||
           payload.eventType === ProjectionSourceEventType.SETTLEMENT_CHARGEBACK

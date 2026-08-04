@@ -338,7 +338,7 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             settledAt: itemSettledAt,
             groupId: inst?.group_id || undefined,
             totalInstallments: inst?.total_installments || 1,
-            settlementsCount: 1,
+            settlementsCount: isRefundOrChargeback ? 0 : 1,
             isTip
           });
         } else {
@@ -348,7 +348,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           existing.platformFeeCents += feeCents;
           existing.feeAmountCents += gatewayFeeCents;
           existing.commissionCnhJaCents += commissionCnhJaCents;
-          existing.settlementsCount += 1;
+          if (!isRefundOrChargeback) {
+            existing.settlementsCount += 1;
+          }
 
           if (status === 'CHARGEBACK') {
             existing.status = 'CHARGEBACK';

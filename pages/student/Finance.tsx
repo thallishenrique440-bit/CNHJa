@@ -261,7 +261,10 @@ export const StudentFinance: React.FC = () => {
               {historyItems.map((item) => {
                 const totalInst = item.totalInstallments || 1;
                 const recInst = item.receivedInstallments || 0;
-                const installmentText = totalInst > 1 ? `${recInst} de ${totalInst} parcelas pagas` : 'À vista';
+                const isRefunded = item.status === 'refunded' || item.status === 'partially_refunded' || item.type === 'refund';
+                const installmentText = isRefunded
+                  ? (totalInst > 1 ? `${recInst} de ${totalInst} parcelas reembolsadas` : 'Reembolso integral')
+                  : (totalInst > 1 ? `${recInst} de ${totalInst} parcelas pagas` : 'À vista');
 
                 if (item.isCombo) {
                   const displayDesc = `Combo • ${item.lessonCount} aulas`;
