@@ -402,18 +402,21 @@ providerInstance=${paymentProvider.getProviderName()}`);
       }
 
       // Specific Time Check (Date + Time)
-      // Prevent booking if the lesson time has already passed or is within 2 minutes
-      // Assume lesson time is in America/Sao_Paulo (UTC-3)
-      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
-      
+      // Canonical UTC start time for lesson
+      const startTimeUtc = lesson.start_time_utc || new Date(`${lesson.date}T${lesson.startTime}:00-03:00`).toISOString();
+      const expiresAt = new Date(new Date(startTimeUtc).getTime() - 30 * 60 * 1000).toISOString();
+
+      if (now.getTime() >= new Date(expiresAt).getTime()) {
+        return res.status(400).json({ 
+          error: 'Não é possível solicitar aulas com menos de 30 minutos de antecedência.' 
+        });
+      }
+
+      const lessonDateTime = new Date(startTimeUtc);
       const diffMs = lessonDateTime.getTime() - now.getTime();
       const diffMinutes = diffMs / (1000 * 60);
 
-      if (diffMinutes <= 2) {
-        return res.status(400).json({ 
-          error: 'Um ou mais horários selecionados já passaram.' 
-        });
-      } else if (diffMinutes <= 20 && !ignoreTooClose) {
+      if (diffMinutes <= 20 && !ignoreTooClose) {
         return res.status(409).json({ 
           errorCode: 'TOO_CLOSE',
           error: 'Horário muito próximo para agendamento automático.' 
@@ -456,8 +459,6 @@ providerInstance=${paymentProvider.getProviderName()}`);
 
     // Create group_id
     const groupId = uuidv4();
-    
-    const expiresAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
 
     // 3.5 Double check availability for ALL lessons in the batch
     for (const lesson of lessons) {
@@ -502,9 +503,9 @@ providerInstance=${paymentProvider.getProviderName()}`);
     // 4. Create appointments in DB (awaiting_payment) with proportional discount allocation
     let allocatedSum = 0;
     const appointmentsToInsert = lessons.map((lesson: any, index: number) => {
-      // Check if it's last minute (within 20 mins)
-      const lessonDateTime = new Date(`${lesson.date}T${lesson.startTime}:00-03:00`);
-      const startTimeUtc = lessonDateTime.toISOString();
+      const startTimeUtc = lesson.start_time_utc || new Date(`${lesson.date}T${lesson.startTime}:00-03:00`).toISOString();
+      const expiresAt = new Date(new Date(startTimeUtc).getTime() - 30 * 60 * 1000).toISOString();
+      const lessonDateTime = new Date(startTimeUtc);
       const diffMs = lessonDateTime.getTime() - now.getTime();
       const diffMinutes = diffMs / (1000 * 60);
       const isLastMinute = diffMinutes <= 20;

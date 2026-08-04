@@ -1019,10 +1019,17 @@ export const InstructorFinance: React.FC = () => {
                                                   <div className="text-gray-400">Valor Bruto:</div>
                                                   <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
                                                   
-                                                  {item.type === 'lesson' && item.platformFee !== undefined && item.platformFee > 0 && (
+                                                  {isLesson && item.platformFee !== undefined && item.platformFee > 0 && (
                                                       <>
                                                           <div className="text-gray-400">Comissão CNHJá:</div>
                                                           <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.commissionCnhJaCents || 0))}</div>
+                                                      </>
+                                                  )}
+
+                                                  {isTip && (
+                                                      <>
+                                                          <div className="text-gray-400">Taxa Asaas:</div>
+                                                          <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.feeAmount || 0))}</div>
                                                       </>
                                                   )}
                                                   

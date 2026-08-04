@@ -92,11 +92,12 @@ export const StudentFinance: React.FC = () => {
 
   const getLabel = (type: string) => {
     switch (type) {
-      case 'lesson_payment': return 'Pagamento de Aula';
-      case 'tip': return 'Caixinha';
+      case 'lesson_payment':
+      case 'lesson': return '🚗 Aula';
+      case 'tip': return '🎁 Caixinha';
       case 'refund': return 'Reembolso';
       case 'platform_fee': return 'Taxa de Serviço';
-      default: return 'Transação';
+      default: return '🚗 Aula';
     }
   };
 
@@ -131,28 +132,31 @@ export const StudentFinance: React.FC = () => {
           classesScheduled: sumDto.classesScheduled || 0,
         });
 
-        const items: HistoryItem[] = (histDto || []).map((h: any) => ({
-          id: h.id,
-          timestamp: h.createdAt || h.dueDate,
-          sortDate: h.latestPaymentDate || h.createdAt || h.dueDate,
-          type: h.isCombo ? 'combo' : 'lesson',
-          isFinancial: true,
-          amount: h.grossAmountCents, // GROSS AMOUNT paid by student for the purchase
-          grossAmount: h.grossAmountCents,
-          platformFee: h.feeAmountCents,
-          netAmount: h.lessonPriceCents,
-          status: h.status,
-          instructorName: h.instructorName,
-          appointmentDate: h.appointmentDate,
-          appointmentTime: h.appointmentTime,
-          isCombo: h.isCombo,
-          lessonCount: h.lessonCount,
-          lessons: h.lessons,
-          groupId: h.groupId,
-          receivedInstallments: h.receivedInstallments,
-          totalInstallments: h.totalInstallments,
-          latestPaymentDate: h.latestPaymentDate
-        }));
+        const items: HistoryItem[] = (histDto || []).map((h: any) => {
+          const isTip = Boolean(h.groupId?.startsWith('tip_') || h.lessonCount === 0);
+          return {
+            id: h.id,
+            timestamp: h.createdAt || h.dueDate,
+            sortDate: h.latestPaymentDate || h.createdAt || h.dueDate,
+            type: isTip ? 'tip' : h.isCombo ? 'combo' : 'lesson',
+            isFinancial: true,
+            amount: h.grossAmountCents, // GROSS AMOUNT paid by student for the purchase
+            grossAmount: h.grossAmountCents,
+            platformFee: h.feeAmountCents,
+            netAmount: h.lessonPriceCents,
+            status: h.status,
+            instructorName: h.instructorName,
+            appointmentDate: h.appointmentDate,
+            appointmentTime: h.appointmentTime,
+            isCombo: h.isCombo,
+            lessonCount: h.lessonCount,
+            lessons: h.lessons,
+            groupId: h.groupId,
+            receivedInstallments: h.receivedInstallments,
+            totalInstallments: h.totalInstallments,
+            latestPaymentDate: h.latestPaymentDate
+          };
+        });
 
         items.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
 
@@ -380,7 +384,9 @@ export const StudentFinance: React.FC = () => {
                             <span className="text-gray-400"> • {formatAppointmentDate(item.appointmentDate, item.appointmentTime)}</span>
                           )}
                         </p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{installmentText}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          {isTip ? 'Obrigado pelo reconhecimento ❤️' : installmentText}
+                        </p>
                         {!item.isFinancial && isLesson && (
                             <p className={`text-[9px] font-bold uppercase mt-1 ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
                                 {item.isPast ? 'Realizada' : 'Agendada'}

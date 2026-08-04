@@ -63,10 +63,12 @@ export const Welcome: React.FC = () => {
         <div className="pt-2 flex justify-center">
           <button 
             onClick={() => navigate('/login', { state: { from: location.state?.from } })}
-            className="group flex items-center text-sm font-medium text-gray-500 hover:text-blue-600 transition-colors px-4 py-2"
+            className="group inline-flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
           >
-            Já tem uma conta? 
-            <span className="ml-1 text-blue-600 underline-offset-4 group-hover:underline font-bold">Entrar</span>
+            <span>Já possui uma conta?</span>
+            <span className="rounded-full border border-blue-200 bg-white text-blue-600 font-semibold px-3 py-1 text-sm group-hover:bg-blue-50 group-hover:border-blue-300 transition-colors duration-200">
+              Entrar
+            </span>
           </button>
         </div>
         

@@ -8,14 +8,14 @@ select cron.unschedule(jobid)
 from cron.job
 where jobname = 'check-expired-bookings-job';
 
--- Schedule the job to run every 5 minutes
+-- Schedule the job to run every 1 minute
 -- IMPORTANT: 
 -- 1. Replace <PROJECT_REF> with your Supabase Project ID (found in Project Settings)
 -- 2. Replace <SUPABASE_ANON_KEY> with your Anon Public Key (found in API Settings)
 select
   cron.schedule(
     'check-expired-bookings-job',
-    '*/5 * * * *',
+    '* * * * *',
     $$
     select
       net.http_post(
