@@ -5,6 +5,7 @@ import { AGENDA_SLOTS } from '../lib/slots.js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
+import { NotificationService } from '../lib/NotificationService.js';
 
 const MAX_INSTALLMENTS = 4;
 
@@ -698,6 +699,24 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
       } catch (instError: any) {
         console.error('⚠️ [InstallmentService] Error recording initial schedule:', instError);
         throw instError;
+      }
+
+      // 6c. Dispatch Notification for Booking Request (Hardened)
+      try {
+        if (appointments && appointments.length > 0 && groupId && instructorId) {
+          const studentName = profile?.full_name || user?.email || 'Aluno';
+          const comboCount = Array.isArray(lessons) && lessons.length > 0 ? lessons.length : appointments.length;
+
+          await NotificationService.sendBookingRequest({
+            instructorId,
+            studentName,
+            comboCount,
+            groupId
+          });
+          console.log(`✅ [CREATE_BOOKING_INTENT] Notification dispatched for booking request (groupId: ${groupId}, instructorId: ${instructorId}, comboCount: ${comboCount})`);
+        }
+      } catch (notifErr: any) {
+        console.error('⚠️ [CREATE_BOOKING_INTENT] Non-blocking error dispatching booking request notification:', notifErr?.message || notifErr);
       }
 
     } catch (paymentError: any) {

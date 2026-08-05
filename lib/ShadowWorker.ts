@@ -77,7 +77,7 @@ function logWorker(event: LogEvent, cycleId?: number, payload?: Record<string, u
  */
 export async function initializeWorkerClient(): Promise<{ workerMode: WorkerMode; batchSize: number } | null> {
   // Configured mode checking: 'disabled' | 'shadow' | 'active'
-  const rawMode = process.env.WORKER_MODE || (process.env.ENABLE_SHADOW_WORKER === 'true' ? 'shadow' : 'disabled');
+  const rawMode = process.env.WORKER_MODE || (process.env.ENABLE_SHADOW_WORKER === 'false' ? 'disabled' : 'active');
   const workerMode = rawMode.toLowerCase() as WorkerMode;
 
   if (workerMode === 'disabled') {
@@ -214,6 +214,8 @@ export async function executeWorkerCycle() {
           created_at: string;
         }>;
 
+        console.log(`[ShadowWorker] ShadowWorker processando fila (${claimedJobs.length} jobs)`);
+
         for (const job of claimedJobs) {
           logWorker('CLAIMED_JOB', currentCycleId, {
             notification_id: job.notification_id,
@@ -331,6 +333,7 @@ export async function executeWorkerCycle() {
           batchProcessingDurationMs
         });
       } else {
+        console.log('[ShadowWorker] ShadowWorker aguardando novos jobs');
         logWorker('NO_PENDING_JOBS', currentCycleId);
         logWorker('CLAIM_FINISHED', currentCycleId, { 
           count: 0,
@@ -379,9 +382,15 @@ export async function executeWorkerCycle() {
  * Starts the read-only Shadow Worker for validating queue infrastructure and observability.
  */
 export async function startShadowWorker() {
+  if (isRunning) {
+    console.log('[ShadowWorker] ShadowWorker já está em execução (instância ativa). Inicialização duplicada ignorada.');
+    return;
+  }
+
   const init = await initializeWorkerClient();
   if (!init) return;
 
+  console.log(`[ShadowWorker] ShadowWorker iniciado (Modo: ${init.workerMode})`);
   logWorker('WORKER_STARTED', undefined, { mode: init.workerMode });
 
   isRunning = true;

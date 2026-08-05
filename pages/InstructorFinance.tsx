@@ -10,6 +10,7 @@ import { invokeSecureFunction } from '../lib/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { toTitleCase } from '../lib/stringUtils';
+import { formatFinanceItemPresentation } from '../lib/formatters/financePresentationFormatter';
 
 // --- Types ---
 interface HistoryItem {
@@ -919,7 +920,7 @@ export const InstructorFinance: React.FC = () => {
                                           </div>
 
                                           <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                                              <div className="text-gray-400">Valor Bruto Total:</div>
+                                              <div className="text-gray-400">Valor da aula:</div>
                                               <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount || 0))}</div>
                                               
                                               {item.platformFee !== undefined && item.platformFee > 0 && (
@@ -929,7 +930,7 @@ export const InstructorFinance: React.FC = () => {
                                                   </>
                                               )}
                                               
-                                              <div className="text-gray-400 font-bold">Valor Líquido Total:</div>
+                                              <div className="text-gray-400 font-bold">Você recebeu:</div>
                                               <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
 
                                               <div className="text-gray-400">ID da Compra:</div>
@@ -978,6 +979,14 @@ export const InstructorFinance: React.FC = () => {
 
                       const displayDate = formatFullDate(item.lastSettlementDate || item.sortDate);
 
+                      const presentation = formatFinanceItemPresentation({
+                          status: item.status,
+                          type: item.type,
+                          totalInstallments: item.totalInstallments,
+                          receivedInstallments: item.receivedInstallments,
+                          dateFormatted: displayDate,
+                      });
+
                       return (
                           <div 
                               key={item.id} 
@@ -991,9 +1000,7 @@ export const InstructorFinance: React.FC = () => {
                                           <span>{studentName}</span>
                                       </span>
                                       <span className="text-xs text-gray-500 font-medium">
-                                          {(isRefund || item.status === 'refunded' || item.status === 'partially_refunded')
-                                              ? (isMultiInstallment ? `${recInst} de ${totalInst} parcelas reembolsadas` : 'Reembolso integral')
-                                              : (isMultiInstallment ? `${recInst} de ${totalInst} parcelas recebidas` : 'À vista')}
+                                          {presentation.statusBadge}
                                       </span>
                                   </div>
                                   <div className="text-right">
@@ -1008,7 +1015,7 @@ export const InstructorFinance: React.FC = () => {
                                           )}
                                       </span>
                                       <span className="text-[10px] text-gray-400 block mt-0.5">
-                                          Último recebimento: {displayDate}
+                                          {presentation.formattedDateLine}
                                       </span>
                                   </div>
                               </div>
@@ -1018,7 +1025,7 @@ export const InstructorFinance: React.FC = () => {
                                       <div className="grid grid-cols-2 gap-y-2 text-[11px]">
                                           {item.isFinancial && item.grossAmount !== undefined && (
                                               <>
-                                                  <div className="text-gray-400">Valor Bruto:</div>
+                                                  <div className="text-gray-400">Valor da aula:</div>
                                                   <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
                                                   
                                                   {isLesson && item.platformFee !== undefined && item.platformFee > 0 && (
@@ -1027,15 +1034,8 @@ export const InstructorFinance: React.FC = () => {
                                                           <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.commissionCnhJaCents || 0))}</div>
                                                       </>
                                                   )}
-
-                                                  {isTip && (
-                                                      <>
-                                                          <div className="text-gray-400">Taxa Asaas:</div>
-                                                          <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.feeAmount || 0))}</div>
-                                                      </>
-                                                  )}
                                                   
-                                                  <div className="text-gray-400 font-bold">Valor Líquido Recebido:</div>
+                                                  <div className="text-gray-400 font-bold">Você recebeu:</div>
                                                   <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
                                               </>
                                           )}
