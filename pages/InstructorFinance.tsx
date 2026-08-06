@@ -181,7 +181,28 @@ export const InstructorFinance: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   
   // Data State
+  const TARGET_APPOINTMENT_ID = '3b948e9e-defe-4908-8fb0-dd49271ad6e1';
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+
+  useEffect(() => {
+    console.group('[Finance Runtime] historyItems updated');
+    console.log('historyItems.length', historyItems.length);
+    console.table(
+      historyItems.map((item, index) => ({
+        index,
+        id: item.id,
+        type: item.type,
+        student: item.studentName
+      }))
+    );
+    const targetInHistory = historyItems.find((item: any) => item.id === TARGET_APPOINTMENT_ID || item.id?.includes(TARGET_APPOINTMENT_ID));
+    if (targetInHistory) {
+      console.log('🎯 [TARGET FOUND in historyItems]:', targetInHistory);
+    } else {
+      console.log('❌ [TARGET NOT FOUND in historyItems]');
+    }
+    console.groupEnd();
+  }, [historyItems]);
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [isInfoExpanded, setIsInfoExpanded] = useState(false);
   
@@ -397,6 +418,30 @@ export const InstructorFinance: React.FC = () => {
           });
           if (statementRes.ok) {
             const statementData = await statementRes.json();
+            
+            console.group('[Finance Runtime] Statement Response');
+            console.log('statement.length', statementData.statement?.length);
+            console.table(
+              statementData.statement?.map((x: any, index: number) => ({
+                index,
+                id: x.id,
+                appointmentId: x.appointmentId,
+                settlementId: x.settlementId,
+                type: x.type,
+                status: x.status,
+                student: x.studentName,
+                settledAt: x.settledAt,
+                netAmount: x.netAmountCents
+              }))
+            );
+            const targetInStatement = statementData.statement?.find((x: any) => x.appointmentId === TARGET_APPOINTMENT_ID || x.id === TARGET_APPOINTMENT_ID);
+            if (targetInStatement) {
+              console.log('🎯 [TARGET FOUND in statementResponse]:', targetInStatement);
+            } else {
+              console.log('❌ [TARGET NOT FOUND in statementResponse]');
+            }
+            console.groupEnd();
+
             if (currentRequestId !== latestRequestIdRef.current) {
               console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
               return;
@@ -428,6 +473,28 @@ export const InstructorFinance: React.FC = () => {
                   lastSettlementDate: sortDate
                 };
               });
+
+              console.group('[Finance Runtime] History Items');
+              console.log('items.length', items.length);
+              console.table(
+                items.map((item, index) => ({
+                  index,
+                  id: item.id,
+                  type: item.type,
+                  student: item.studentName,
+                  amount: item.amount,
+                  status: item.status,
+                  timestamp: item.timestamp
+                }))
+              );
+              const targetInItems = items.find((item: any) => item.id === TARGET_APPOINTMENT_ID || item.id?.includes(TARGET_APPOINTMENT_ID));
+              if (targetInItems) {
+                console.log('🎯 [TARGET FOUND in items]:', targetInItems);
+              } else {
+                console.log('❌ [TARGET NOT FOUND in items]');
+              }
+              console.groupEnd();
+
               setHistoryItems(items);
             } else {
               if (currentRequestId !== latestRequestIdRef.current) {
@@ -704,6 +771,25 @@ export const InstructorFinance: React.FC = () => {
 
   const visibleItems = showAllHistory ? historyItems : historyItems.slice(0, 5);
 
+  console.group('[Finance Runtime] visibleItems');
+  console.log('showAllHistory', showAllHistory);
+  console.log('visibleItems.length', visibleItems.length);
+  console.table(
+    visibleItems.map((item, index) => ({
+      index,
+      id: item.id,
+      type: item.type,
+      student: item.studentName
+    }))
+  );
+  const targetInVisible = visibleItems.find((item: any) => item.id === TARGET_APPOINTMENT_ID || item.id?.includes(TARGET_APPOINTMENT_ID));
+  if (targetInVisible) {
+    console.log('🎯 [TARGET FOUND in visibleItems]:', targetInVisible);
+  } else {
+    console.log('❌ [TARGET NOT FOUND in visibleItems]');
+  }
+  console.groupEnd();
+
   return (
     <div className="min-h-screen bg-gray-50 pb-24 sm:max-w-md sm:mx-auto relative flex flex-col">
       
@@ -937,6 +1023,15 @@ export const InstructorFinance: React.FC = () => {
             <div className="space-y-4">
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 overflow-hidden">
                   {visibleItems.map((item) => {
+                      console.log(
+                          '[Finance Runtime] Rendering Card',
+                          item.id,
+                          item.type,
+                          item.studentName
+                      );
+                      if (item.id === TARGET_APPOINTMENT_ID || item.id?.includes(TARGET_APPOINTMENT_ID)) {
+                          console.log('🎯 [TARGET RENDERING CARD]:', item);
+                      }
                       if (item.isCombo) {
                           const displayDesc = `Pacote • ${item.lessonCount} aulas`;
                           return (
