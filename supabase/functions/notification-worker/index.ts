@@ -16,18 +16,18 @@ async function logSecretTelemetry(authHeader: string | null, cronSecret: string)
   const hashActual = Array.from(new Uint8Array(hashBufferActual)).map(b => b.toString(16).padStart(2, '0')).join('');
   const hashExpected = Array.from(new Uint8Array(hashBufferExpected)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-  let firstMismatchIdx = -1;
-  let actualMismatchChar = null;
-  let expectedMismatchChar = null;
+  let firstMismatchIndex = -1;
+  let actualMismatchCharacter: Record<string, unknown> | string | null = null;
+  let expectedMismatchCharacter: Record<string, unknown> | string | null = null;
   const maxLen = Math.max(actualHeader.length, expectedHeader.length);
 
   for (let i = 0; i < maxLen; i++) {
     const a = actualHeader[i];
     const e = expectedHeader[i];
     if (a !== e) {
-      firstMismatchIdx = i;
-      actualMismatchChar = a ? { char: a === ' ' ? 'SPACE' : a === '\r' ? 'CR' : a === '\n' ? 'LF' : a === '\t' ? 'TAB' : a, code: a.charCodeAt(0) } : 'END_OF_STRING';
-      expectedMismatchChar = e ? { char: e === ' ' ? 'SPACE' : e === '\r' ? 'CR' : e === '\n' ? 'LF' : e === '\t' ? 'TAB' : e, code: e.charCodeAt(0) } : 'END_OF_STRING';
+      firstMismatchIndex = i;
+      actualMismatchCharacter = a ? { char: a === ' ' ? 'SPACE' : a === '\r' ? 'CR' : a === '\n' ? 'LF' : a === '\t' ? 'TAB' : a, code: a.charCodeAt(0) } : 'END_OF_STRING';
+      expectedMismatchCharacter = e ? { char: e === ' ' ? 'SPACE' : e === '\r' ? 'CR' : e === '\n' ? 'LF' : e === '\t' ? 'TAB' : e, code: e.charCodeAt(0) } : 'END_OF_STRING';
       break;
     }
   }
@@ -37,6 +37,8 @@ async function logSecretTelemetry(authHeader: string | null, cronSecret: string)
     return `${str.slice(0, 4)}...${str.slice(-4)}`;
   };
 
+  const hasBOM = (str: string) => str.charCodeAt(0) === 0xFEFF || str.includes('\uFEFF');
+
   const telemetry = {
     actualHeaderLength: actualHeader.length,
     expectedHeaderLength: expectedHeader.length,
@@ -44,17 +46,26 @@ async function logSecretTelemetry(authHeader: string | null, cronSecret: string)
     expectedHeaderMasked: mask(expectedHeader),
     actualHashSha256: hashActual,
     expectedHashSha256: hashExpected,
+    exactMatch: actualHeader === expectedHeader,
+    trimmedMatch: actualHeader.trim() === expectedHeader.trim(),
+    caseInsensitiveMatch: actualHeader.toLowerCase() === expectedHeader.toLowerCase(),
     hasBearerPrefix: actualHeader.startsWith('Bearer '),
     hasLowerBearerPrefix: actualHeader.toLowerCase().startsWith('bearer '),
     actualHasCR: actualHeader.includes('\r'),
     actualHasLF: actualHeader.includes('\n'),
+    actualHasTAB: actualHeader.includes('\t'),
+    actualHasSpace: actualHeader.includes(' '),
     actualHasQuotes: actualHeader.includes('"') || actualHeader.includes("'"),
+    actualHasBOM: hasBOM(actualHeader),
     secretHasCR: cronSecret.includes('\r'),
     secretHasLF: cronSecret.includes('\n'),
+    secretHasTAB: cronSecret.includes('\t'),
+    secretHasSpace: cronSecret.includes(' '),
     secretHasQuotes: cronSecret.includes('"') || cronSecret.includes("'"),
-    firstMismatchIdx,
-    actualMismatchChar,
-    expectedMismatchChar,
+    secretHasBOM: hasBOM(cronSecret),
+    firstMismatchIndex,
+    actualMismatchCharacter,
+    expectedMismatchCharacter,
   };
 
   console.error("🔍 [TELEMETRY_DIAGNOSTIC]", JSON.stringify(telemetry, null, 2));

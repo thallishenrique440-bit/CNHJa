@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { InstructorBottomNav } from '../components/InstructorBottomNav';
 import { AsaasPartnerSeal } from '../components/AsaasPartnerSeal';
 import { Button } from '../components/Button';
@@ -175,6 +175,10 @@ export const InstructorFinance: React.FC = () => {
   const { session, signOut, refreshProfile } = useAuth();
   const { addToast } = useToast();
   const [loading, setLoading] = useState(true);
+
+  // Concurrency and cancellation refs
+  const latestRequestIdRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
   
   // Data State
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
@@ -275,6 +279,20 @@ export const InstructorFinance: React.FC = () => {
 
   const loadData = async () => {
     if (!session?.user) return;
+
+    // Cancel previous in-flight request if any
+    abortControllerRef.current?.abort();
+
+    // Create new AbortController for current request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // Increment request counter and capture current ID
+    latestRequestIdRef.current++;
+    const currentRequestId = latestRequestIdRef.current;
+
+    console.log(`[InstructorFinance] Request started requestId=${currentRequestId}`);
+
     try {
         setLoading(true);
         const userId = session.user.id;
@@ -287,6 +305,11 @@ export const InstructorFinance: React.FC = () => {
             .single();
 
         if (instructorError) throw instructorError;
+
+        if (currentRequestId !== latestRequestIdRef.current) {
+            console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
+            return;
+        }
 
         if (!instructorData?.provider_account_id) {
             setAsaasStatus('none');
@@ -310,17 +333,27 @@ export const InstructorFinance: React.FC = () => {
           const summaryRes = await fetch(`/api/instructor-finance?action=summary&instructorId=${userId}`, {
             headers: {
               'Authorization': `Bearer ${session.access_token}`
-            }
+            },
+            signal: abortController.signal
           });
           if (summaryRes.ok) {
             const summaryData = await summaryRes.json();
+            if (currentRequestId !== latestRequestIdRef.current) {
+              console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
+              return;
+            }
+            console.log(`[InstructorFinance] Active response requestId=${currentRequestId}`);
             if (summaryData?.summary) {
               const s = summaryData.summary;
               setPendingInstallmentsRevenue(s.futureReceivablesCents || 0);
               setTotalNetSettledCents(s.totalNetSettledCents || 0);
             }
           }
-        } catch (apiErr) {
+        } catch (apiErr: any) {
+          if (apiErr?.name === 'AbortError' || abortController.signal.aborted) {
+            console.log(`[InstructorFinance] Request aborted requestId=${currentRequestId}`);
+            return;
+          }
           console.warn('⚠️ [InstructorFinance] Failed to fetch projection summary from API:', apiErr);
         }
 
@@ -329,10 +362,16 @@ export const InstructorFinance: React.FC = () => {
           const monthlyRes = await fetch(`/api/instructor-finance?action=monthly&instructorId=${userId}`, {
             headers: {
               'Authorization': `Bearer ${session.access_token}`
-            }
+            },
+            signal: abortController.signal
           });
           if (monthlyRes.ok) {
             const monthlyData = await monthlyRes.json();
+            if (currentRequestId !== latestRequestIdRef.current) {
+              console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
+              return;
+            }
+            console.log(`[InstructorFinance] Active response requestId=${currentRequestId}`);
             if (monthlyData?.monthlyMetrics) {
               const m = monthlyData.monthlyMetrics;
               setMonthlyRevenue(m.monthlyNetCents || 0);
@@ -340,7 +379,11 @@ export const InstructorFinance: React.FC = () => {
               setTipMonthRevenue(m.monthlyTipNetCents || 0);
             }
           }
-        } catch (apiErr) {
+        } catch (apiErr: any) {
+          if (apiErr?.name === 'AbortError' || abortController.signal.aborted) {
+            console.log(`[InstructorFinance] Request aborted requestId=${currentRequestId}`);
+            return;
+          }
           console.warn('⚠️ [InstructorFinance] Failed to fetch monthly metrics from API:', apiErr);
         }
 
@@ -349,10 +392,16 @@ export const InstructorFinance: React.FC = () => {
           const statementRes = await fetch(`/api/instructor-finance?action=statement&instructorId=${userId}`, {
             headers: {
               'Authorization': `Bearer ${session.access_token}`
-            }
+            },
+            signal: abortController.signal
           });
           if (statementRes.ok) {
             const statementData = await statementRes.json();
+            if (currentRequestId !== latestRequestIdRef.current) {
+              console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
+              return;
+            }
+            console.log(`[InstructorFinance] Active response requestId=${currentRequestId}`);
             if (statementData?.statement && Array.isArray(statementData.statement)) {
               const items: HistoryItem[] = statementData.statement.map((entry: any) => {
                 const isTip = entry.isTip || entry.installmentId === null || entry.status === 'TIP';
@@ -381,19 +430,38 @@ export const InstructorFinance: React.FC = () => {
               });
               setHistoryItems(items);
             } else {
+              if (currentRequestId !== latestRequestIdRef.current) {
+                console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
+                return;
+              }
               setHistoryItems([]);
             }
           }
-        } catch (apiErr) {
+        } catch (apiErr: any) {
+          if (apiErr?.name === 'AbortError' || abortController.signal.aborted) {
+            console.log(`[InstructorFinance] Request aborted requestId=${currentRequestId}`);
+            return;
+          }
           console.warn('⚠️ [InstructorFinance] Failed to fetch financial statement from API:', apiErr);
-          setHistoryItems([]);
         }
 
-    } catch (err) {
+    } catch (err: any) {
+        if (err?.name === 'AbortError' || abortController.signal.aborted) {
+            console.log(`[InstructorFinance] Request aborted requestId=${currentRequestId}`);
+            return;
+        }
+        if (currentRequestId !== latestRequestIdRef.current) {
+            console.log(`[InstructorFinance] Stale response ignored requestId=${currentRequestId} latest=${latestRequestIdRef.current}`);
+            return;
+        }
         console.error("Error loading finance data:", err);
         addToast("Erro ao carregar dados.", 'error');
     } finally {
-        setLoading(false);
+        if (currentRequestId === latestRequestIdRef.current) {
+            setLoading(false);
+        } else {
+            console.log(`[InstructorFinance] Ignored loading update from stale requestId=${currentRequestId}`);
+        }
     }
   };
 
