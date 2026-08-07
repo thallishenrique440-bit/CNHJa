@@ -11,6 +11,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { toTitleCase } from '../lib/stringUtils';
 import { formatFinanceItemPresentation } from '../lib/formatters/financePresentationFormatter';
+import { InstructorHistoryAdapter } from '../components/finance/adapters/InstructorHistoryAdapter';
+import { HistoryCardBase } from '../components/finance/HistoryCardBase';
 
 // --- Types ---
 interface HistoryItem {
@@ -1021,194 +1023,16 @@ export const InstructorFinance: React.FC = () => {
              </div>
           ) : (
             <div className="space-y-4">
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 overflow-hidden">
+              <div className="space-y-3">
                   {visibleItems.map((item) => {
-                      console.log(
-                          '[Finance Runtime] Rendering Card',
-                          item.id,
-                          item.type,
-                          item.studentName
-                      );
-                      if (item.id === TARGET_APPOINTMENT_ID || item.id?.includes(TARGET_APPOINTMENT_ID)) {
-                          console.log('🎯 [TARGET RENDERING CARD]:', item);
-                      }
-                      if (item.isCombo) {
-                          const displayDesc = `Pacote • ${item.lessonCount} aulas`;
-                          return (
-                              <div 
-                                  key={item.id} 
-                                  onClick={() => toggleExpand(item.id)}
-                                  className="p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer border-l-4 border-green-500"
-                              >
-                                  <div className="flex justify-between items-center w-full">
-                                      <div className="flex flex-col space-y-1">
-                                          <div className="flex items-center gap-2">
-                                              <span className="text-xs text-gray-400 font-medium">{formatDate(item.sortDate)}</span>
-                                              <span className="text-[10px] text-gray-300">•</span>
-                                              <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">✅ {displayDesc}</span>
-                                          </div>
-                                          <span className="text-sm font-semibold text-gray-800">
-                                              {item.studentName}
-                                          </span>
-                                      </div>
-                                      <div className="text-right">
-                                          <span className="block font-bold text-sm text-green-600">
-                                              + {formatCurrency(Math.abs(item.netAmount || 0))}
-                                          </span>
-                                          <span className="text-[10px] text-gray-400">
-                                              {item.status === 'pending' && 'Pendente'}
-                                              {item.status === 'completed' && (
-                                                  item.providerPayoutId 
-                                                      ? 'Transferido' 
-                                                      : <span className="text-green-600 font-bold">Concluído</span>
-                                              )}
-                                              {item.status === 'failed' && 'Falha'}
-                                              {!['pending', 'completed', 'failed'].includes(item.status) && item.status}
-                                          </span>
-                                      </div>
-                                  </div>
-
-                                  {expandedId === item.id && (
-                                      <div className="mt-3 pt-3 border-t border-gray-100 space-y-3 animate-fade-in">
-                                          <div className="text-xs font-semibold text-gray-700">Aulas do Pacote ({item.lessonCount}):</div>
-                                          <div className="space-y-1.5 bg-gray-50 p-2.5 rounded-xl border border-gray-100">
-                                              {item.lessons?.map((lesson, idx) => (
-                                                  <div key={lesson.id} className="flex justify-between text-[11px] text-gray-600">
-                                                      <span>Aula {idx + 1}: {formatDate(lesson.date)}</span>
-                                                      <span className="font-medium text-gray-500">
-                                                          {lesson.startTime ? `${lesson.startTime.slice(0, 5)} - ${lesson.endTime.slice(0, 5)}` : ''}
-                                                      </span>
-                                                  </div>
-                                              ))}
-                                          </div>
-
-                                          <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                                              <div className="text-gray-400">Valor da aula:</div>
-                                              <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount || 0))}</div>
-                                              
-                                              {item.platformFee !== undefined && item.platformFee > 0 && (
-                                                  <>
-                                                      <div className="text-gray-400">Comissão CNHJá:</div>
-                                                      <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.commissionCnhJaCents || 0))}</div>
-                                                  </>
-                                              )}
-                                              
-                                              <div className="text-gray-400 font-bold">Você recebeu:</div>
-                                              <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
-
-                                              <div className="text-gray-400">ID da Compra:</div>
-                                              <div className="text-gray-500 text-right font-mono">{(item.groupId || item.id).replace('combo_', '').slice(0, 12)}...</div>
-                                          </div>
-                                      </div>
-                                  )}
-                              </div>
-                          );
-                      }
-
-                      const isTip = item.type === 'tip';
-                      const isRefund = item.type === 'refund';
-                      const isLesson = item.type === 'lesson';
-                      
-                      let label = 'Aula';
-                      if (isTip) label = 'Caixinha';
-                      if (isRefund) label = 'Reembolso';
-  
-                      const studentName = item.studentName;
-                      const displayDesc = `${label} - ${studentName}`;
-  
-                      const totalInst = item.totalInstallments || 1;
-                      const recInst = item.receivedInstallments || 1;
-                      const isMultiInstallment = totalInst > 1;
-
-                      // Visual indicators
-                      const getIndicatorColor = () => {
-                          if (isRefund) return 'border-red-500';
-                          if (isTip) return 'border-amber-400';
-                          return 'border-green-500';
-                      };
-
-                      const getIcon = () => {
-                          if (isRefund) return '↩️';
-                          if (isTip) return '🎁';
-                          return '✅';
-                      };
-
-                      const formatFullDate = (isoStr?: string) => {
-                          if (!isoStr) return '';
-                          const d = new Date(isoStr);
-                          if (isNaN(d.getTime())) return isoStr;
-                          return d.toLocaleDateString('pt-BR');
-                      };
-
-                      const displayDate = formatFullDate(item.lastSettlementDate || item.sortDate);
-
-                      const presentation = formatFinanceItemPresentation({
-                          status: item.status,
-                          type: item.type,
-                          totalInstallments: item.totalInstallments,
-                          receivedInstallments: item.receivedInstallments,
-                          dateFormatted: displayDate,
-                      });
-
+                      const viewModel = InstructorHistoryAdapter.toViewModel(item);
                       return (
-                          <div 
-                              key={item.id} 
-                              onClick={() => toggleExpand(item.id)}
-                              className={`p-4 flex flex-col hover:bg-gray-50 transition-colors cursor-pointer border-l-4 ${getIndicatorColor()}`}
-                          >
-                              <div className="flex justify-between items-center w-full">
-                                  <div className="flex flex-col space-y-1">
-                                      <span className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
-                                          <span>{getIcon()}</span>
-                                          <span>{studentName}</span>
-                                      </span>
-                                      <span className="text-xs text-gray-500 font-medium">
-                                          {presentation.statusBadge}
-                                      </span>
-                                  </div>
-                                  <div className="text-right">
-                                      <span className="text-[10px] text-gray-400 font-medium block">Recebido:</span>
-                                      <span className={`block font-bold text-base ${isRefund ? 'text-red-600' : 'text-green-600'}`}>
-                                          {item.netAmount !== undefined ? (
-                                              <>
-                                                  {isRefund ? '-' : ''} {formatCurrency(Math.abs(item.netAmount))}
-                                              </>
-                                          ) : (
-                                              '—'
-                                          )}
-                                      </span>
-                                      <span className="text-[10px] text-gray-400 block mt-0.5">
-                                          {presentation.formattedDateLine}
-                                      </span>
-                                  </div>
-                              </div>
-
-                              {expandedId === item.id && (
-                                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 animate-fade-in">
-                                      <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                                          {item.isFinancial && item.grossAmount !== undefined && (
-                                              <>
-                                                  <div className="text-gray-400">Valor da aula:</div>
-                                                  <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.grossAmount))}</div>
-                                                  
-                                                  {isLesson && item.platformFee !== undefined && item.platformFee > 0 && (
-                                                      <>
-                                                          <div className="text-gray-400">Comissão CNHJá:</div>
-                                                          <div className="text-red-500 font-medium text-right">-{formatCurrency(Math.abs(item.commissionCnhJaCents || 0))}</div>
-                                                      </>
-                                                  )}
-                                                  
-                                                  <div className="text-gray-400 font-bold">Você recebeu:</div>
-                                                  <div className="text-green-600 font-bold text-right">{formatCurrency(Math.abs(item.netAmount || 0))}</div>
-                                              </>
-                                          )}
-
-                                          <div className="text-gray-400">ID:</div>
-                                          <div className="text-gray-500 text-right font-mono">{item.id.slice(0, 12)}...</div>
-                                      </div>
-                                  </div>
-                              )}
-                          </div>
+                          <HistoryCardBase
+                              key={viewModel.metadata.id}
+                              item={viewModel}
+                              isExpanded={expandedId === viewModel.metadata.id}
+                              onToggleExpand={toggleExpand}
+                          />
                       );
                   })}
               </div>

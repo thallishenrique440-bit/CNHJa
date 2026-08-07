@@ -3,6 +3,8 @@ import { Shield } from 'lucide-react';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { AsaasPartnerSeal } from '../../components/AsaasPartnerSeal';
 import { useAuth } from '../../contexts/AuthContext';
+import { StudentHistoryAdapter } from '../../components/finance/adapters/StudentHistoryAdapter';
+import { HistoryCardBase } from '../../components/finance/HistoryCardBase';
 
 // --- Types ---
 interface HistoryItem {
@@ -259,171 +261,14 @@ export const StudentFinance: React.FC = () => {
           ) : (
             <div className="space-y-3">
               {historyItems.map((item) => {
-                const totalInst = item.totalInstallments || 1;
-                const recInst = item.receivedInstallments || 0;
-                const isRefunded = item.status === 'refunded' || item.status === 'partially_refunded' || item.type === 'refund';
-                const installmentText = isRefunded
-                  ? (totalInst > 1 ? `${recInst} de ${totalInst} parcelas reembolsadas` : 'Reembolso integral')
-                  : (totalInst > 1 ? `${recInst} de ${totalInst} parcelas pagas` : 'À vista');
-
-                if (item.isCombo) {
-                  const displayDesc = `Combo • ${item.lessonCount} aulas`;
-                  const isExpanded = expandedId === item.id;
-                  return (
-                    <div 
-                      key={item.id} 
-                      onClick={() => toggleExpand(item.id)}
-                      className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-green-500 flex flex-col cursor-pointer transition-all hover:bg-gray-50"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-4">
-                          <div className="w-10 h-10 rounded-full bg-green-50 text-green-600 flex items-center justify-center text-lg">
-                            📦
-                          </div>
-                          <div>
-                            <h3 className="font-semibold text-gray-900 text-sm leading-tight">{displayDesc}</h3>
-                            <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
-                              {item.instructorName}
-                            </p>
-                            <p className="text-[10px] text-gray-400 mt-0.5">{installmentText}</p>
-                            {item.latestPaymentDate && (
-                              <p className="text-[10px] text-gray-400">Último pagamento: {formatDate(item.latestPaymentDate)}</p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <span className="block font-bold text-sm text-gray-900">
-                            {formatCurrency(Math.abs(item.amount))}
-                          </span>
-                          <span className="text-[10px] text-gray-400">
-                            {item.status === 'pending' && (
-                              <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">
-                                Pendente
-                              </span>
-                            )}
-                            {item.status === 'completed' && (
-                              recInst < totalInst ? (
-                                <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
-                                  Em andamento
-                                </span>
-                              ) : (
-                                <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
-                                  Concluído
-                                </span>
-                              )
-                            )}
-                            {item.status === 'failed' && (
-                              <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
-                                Falhou
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Dropdown Indicator */}
-                      <div className="flex items-center justify-center mt-2 text-[10px] text-gray-400 font-medium">
-                        {isExpanded ? '▲ Ocultar aulas' : '▼ Ver aulas'}
-                      </div>
-
-                      {isExpanded && (
-                        <div className="mt-3 pt-3 border-t border-gray-100 space-y-3 animate-fade-in" onClick={(e) => e.stopPropagation()}>
-                          <div className="text-xs font-semibold text-gray-700">Aulas do Combo ({item.lessonCount}):</div>
-                          <div className="space-y-1.5 bg-gray-50 p-2.5 rounded-xl border border-gray-100">
-                            {item.lessons?.map((lesson, idx) => (
-                              <div key={lesson.id} className="flex justify-between text-[11px] text-gray-600">
-                                <span>Aula {idx + 1}: {formatDate(lesson.date)}</span>
-                                <span className="font-medium text-gray-500">
-                                  {lesson.startTime ? `${lesson.startTime.slice(0, 5)} - ${lesson.endTime.slice(0, 5)}` : ''}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                            <div className="text-gray-400">Valor Total da Compra:</div>
-                            <div className="text-gray-700 font-medium text-right">{formatCurrency(Math.abs(item.amount || 0))}</div>
-
-                            <div className="text-gray-400">Parcelamento:</div>
-                            <div className="text-gray-700 font-medium text-right">{installmentText}</div>
-
-                            <div className="text-gray-400">ID da Compra:</div>
-                            <div className="text-gray-500 text-right font-mono">{(item.groupId || item.id).replace('combo_', '').slice(0, 12)}...</div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-
-                const isRefund = item.type === 'refund';
-                const isTip = item.type === 'tip';
-                const isLesson = item.type === 'lesson';
-                const isPending = ['pending', 'processing'].includes(item.status);
-                
-                // Visual indicators
-                const getIndicatorColor = () => {
-                  if (isRefund) return 'border-red-500';
-                  if (isTip) return 'border-amber-400';
-                  if (!item.isFinancial) return 'border-blue-400 border-dashed';
-                  return 'border-green-500';
-                };
-                
+                const viewModel = StudentHistoryAdapter.toViewModel(item);
                 return (
-                  <div key={item.id} className={`bg-white p-4 rounded-2xl shadow-sm border border-gray-100 border-l-4 ${getIndicatorColor()} flex items-center justify-between transition-all hover:bg-gray-50`}>
-                    <div className="flex items-center space-x-4">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${
-                        isRefund ? 'bg-red-50 text-red-600' : 
-                        isTip ? 'bg-yellow-50 text-yellow-600' : 
-                        'bg-blue-50 text-blue-600'
-                      }`}>
-                        {getIcon(item.type)}
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-gray-900 text-sm leading-tight">{getLabel(item.type)}</h3>
-                        <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
-                          {item.instructorName}
-                          {item.appointmentDate && item.appointmentTime && (
-                            <span className="text-gray-400"> • {formatAppointmentDate(item.appointmentDate, item.appointmentTime)}</span>
-                          )}
-                        </p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          {isTip ? 'Obrigado pelo reconhecimento ❤️' : installmentText}
-                        </p>
-                        {!item.isFinancial && isLesson && (
-                            <p className={`text-[9px] font-bold uppercase mt-1 ${item.isPast ? 'text-blue-500' : 'text-orange-500'}`}>
-                                {item.isPast ? 'Realizada' : 'Agendada'}
-                            </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <span className={`block font-bold text-sm ${isRefund ? 'text-red-600' : 'text-gray-900'}`}>
-                        {isRefund ? '-' : ''}{formatCurrency(Math.abs(item.amount))}
-                      </span>
-                      {isPending && (
-                          <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">
-                              Pendente
-                          </span>
-                      )}
-                      {item.status === 'failed' && (
-                          <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
-                              Falhou
-                          </span>
-                      )}
-                      {item.isFinancial && item.status === 'completed' && (
-                          recInst < totalInst ? (
-                            <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
-                              Em andamento
-                            </span>
-                          ) : (
-                            <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
-                              Concluído
-                            </span>
-                          )
-                      )}
-                    </div>
-                  </div>
+                  <HistoryCardBase
+                    key={viewModel.metadata.id}
+                    item={viewModel}
+                    isExpanded={expandedId === viewModel.metadata.id}
+                    onToggleExpand={toggleExpand}
+                  />
                 );
               })}
             </div>
