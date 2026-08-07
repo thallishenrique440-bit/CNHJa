@@ -63,6 +63,24 @@ export class HistoryCardFormatter {
   }
 
   /**
+   * Calculates instructor lesson price excluding buyer-facing gateway fees (Asaas).
+   */
+  public static calculateInstructorLessonGross(
+    grossAmountCents: number,
+    feeAmountCents?: number,
+    platformFeeCents?: number,
+    commissionCnhJaCents?: number
+  ): number {
+    const totalGross = Math.abs(grossAmountCents || 0);
+    const asaasFee = feeAmountCents ?? (
+      platformFeeCents !== undefined && commissionCnhJaCents !== undefined
+        ? Math.max(0, platformFeeCents - commissionCnhJaCents)
+        : 0
+    );
+    return Math.max(0, totalGross - asaasFee);
+  }
+
+  /**
    * Generates standard installment status label.
    */
   public static formatInstallmentText(

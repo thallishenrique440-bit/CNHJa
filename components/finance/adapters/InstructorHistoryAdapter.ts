@@ -76,41 +76,56 @@ export class InstructorHistoryAdapter {
       ? `${isRefund || isChargeback ? '-' : '+ '} ${HistoryCardFormatter.formatCurrency(netVal)}`
       : '—';
 
-    // Badge formatting
-    let statusBadge: HistoryCardViewModel['status']['badge'] = undefined;
-    if (item.status === 'pending') {
-      statusBadge = { label: 'Pendente', variant: 'pending' };
-    } else if (item.status === 'completed') {
-      if (item.providerPayoutId) {
-        statusBadge = { label: 'Transferido', variant: 'transferred' };
-      } else {
-        statusBadge = { label: 'Concluído', variant: 'completed' };
-      }
-    } else if (item.status === 'failed') {
-      statusBadge = { label: 'Falha', variant: 'failed' };
-    } else if (isChargeback) {
-      statusBadge = { label: 'Chargeback', variant: 'failed' };
-    } else if (isRefund) {
-      statusBadge = { label: 'Reembolsado', variant: 'refunded' };
-    }
+    const normalizedStatus = (item.status || '').toLowerCase();
 
-    // Title, Subtitle, Header Intent
-    let title = item.studentName;
-    let subtitle: string | undefined = undefined;
+    // Determine 5 standardized visual states
+    let statusBadge: HistoryCardViewModel['status']['badge'] = undefined;
     let iconEmoji = '✅';
     let headerIntent: FinancialIntent = 'success';
 
-    if (isRefund || isChargeback) {
+    if (isChargeback || isRefund || ['refunded', 'partially_refunded', 'chargeback'].includes(normalizedStatus)) {
+      statusBadge = {
+        label: isChargeback ? 'Chargeback' : 'Reembolsada',
+        variant: 'refunded',
+      };
       iconEmoji = '↩️';
       headerIntent = 'danger';
+    } else if (['pending', 'pending_approval', 'reserved', 'authorized', 'processing'].includes(normalizedStatus)) {
+      statusBadge = {
+        label: 'Aguardando aprovação',
+        variant: 'pending',
+      };
+      iconEmoji = '⏳';
+      headerIntent = 'warning';
+    } else if (['completed', 'confirmed', 'settled', 'received'].includes(normalizedStatus)) {
+      if (item.providerPayoutId) {
+        statusBadge = { label: 'Transferido', variant: 'transferred' };
+      } else {
+        statusBadge = { label: 'Confirmada', variant: 'completed' };
+      }
+      iconEmoji = isTip ? '🎁' : isCombo ? '📦' : '✅';
+      headerIntent = isTip ? 'warning' : 'success';
+    } else if (['rejected', 'failed', 'cancelled'].includes(normalizedStatus)) {
+      statusBadge = { label: 'Recusada', variant: 'failed' };
+      iconEmoji = '❌';
+      headerIntent = 'danger';
+    } else if (['expired', 'overdue'].includes(normalizedStatus)) {
+      statusBadge = { label: 'Expirada', variant: 'neutral' };
+      iconEmoji = '⌛';
+      headerIntent = 'neutral';
+    } else {
+      statusBadge = { label: item.status || 'Pendente', variant: 'neutral' };
+    }
+
+    // Title & Subtitle configuration
+    let title = item.studentName;
+    let subtitle: string | undefined = undefined;
+
+    if (isRefund || isChargeback) {
       subtitle = isChargeback ? 'Chargeback' : 'Repasse estornado';
     } else if (isTip) {
-      iconEmoji = '🎁';
-      headerIntent = 'warning';
       subtitle = 'Você recebeu uma gorjeta';
     } else if (isCombo) {
-      iconEmoji = '📦';
-      headerIntent = 'success';
       subtitle = `Pacote • ${item.lessonCount ?? 0} aulas`;
     }
 
@@ -125,23 +140,27 @@ export class InstructorHistoryAdapter {
     }
 
     // Financial Breakdown Items in EXACT specified order:
-    // 1. Valor da aula / pacote
+    // 1. Valor da aula / pacote (preço da aula definido pelo instrutor, descontando taxa de processamento Asaas paga pelo aluno)
     // 2. Comissão CNHJá
-    // 3. Taxa Asaas (if present)
-    // 4. Você recebeu
-    // 5. ID da Compra / ID
+    // 3. Você recebeu
+    // 4. ID da Compra / ID
     const breakdownItems: HistoryCardBreakdownItem[] = [];
 
-    const grossVal = Math.abs(item.grossAmount || 0);
-    if (grossVal > 0) {
+    const lessonGross = HistoryCardFormatter.calculateInstructorLessonGross(
+      item.grossAmount || 0,
+      item.feeAmount,
+      item.platformFee,
+      item.commissionCnhJaCents
+    );
+
+    if (lessonGross > 0) {
       breakdownItems.push({
         label: isCombo ? 'Valor do pacote:' : 'Valor da aula:',
-        valueFormatted: HistoryCardFormatter.formatCurrency(grossVal),
+        valueFormatted: HistoryCardFormatter.formatCurrency(lessonGross),
       });
     }
 
-    const platformFee = item.platformFee ?? item.feeAmount ?? 0;
-    const commissionCnhJa = item.commissionCnhJaCents ?? platformFee;
+    const commissionCnhJa = item.commissionCnhJaCents ?? item.platformFee ?? 0;
     if (commissionCnhJa > 0 && !isTip) {
       breakdownItems.push({
         label: 'Comissão CNHJá:',
