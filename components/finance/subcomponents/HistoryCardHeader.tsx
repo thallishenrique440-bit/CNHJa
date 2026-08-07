@@ -56,7 +56,7 @@ export const HistoryCardHeader: React.FC<HistoryCardHeaderProps> = ({ header }) 
           {header.title}
         </h3>
         {header.subtitle && (
-          <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
+          <p className="text-xs text-gray-500 mt-0.5 whitespace-pre-line leading-tight">
             {header.subtitle}
           </p>
         )}

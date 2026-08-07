@@ -78,6 +78,66 @@ export class InstructorHistoryAdapter {
 
     const normalizedStatus = (item.status || '').toLowerCase();
 
+    // Specific ViewModel formulation for Caixinha (tip)
+    if (isTip) {
+      const studentName = item.studentName || 'Aluno';
+      const breakdownItems: HistoryCardBreakdownItem[] = [
+        {
+          label: 'Valor recebido:',
+          valueFormatted: HistoryCardFormatter.formatCurrency(netVal),
+          isHighlight: true,
+          isBold: true,
+          intent: 'success',
+        },
+        {
+          label: 'ID:',
+          valueFormatted: HistoryCardFormatter.formatGroupId(item.groupId, item.id),
+          isMono: true,
+        },
+      ];
+
+      return {
+        header: {
+          title: 'Caixinha',
+          subtitle: `${studentName}\nO seu trabalho foi reconhecido ❤️`,
+          iconEmoji: '🎁',
+          intent: 'warning',
+        },
+        amount: {
+          label: 'Recebido:',
+          valueFormatted: primaryAmountFormatted,
+          intent: 'success',
+          isRefund: false,
+        },
+        status: {
+          badge: {
+            label: 'Caixinha',
+            variant: 'pending',
+          },
+          installmentStatusText: presentation.statusBadge,
+        },
+        details: {
+          isExpandable: true,
+          expandToggleTextOpen: '▲ Ocultar detalhes',
+          expandToggleTextClosed: '▼ Ver detalhes',
+          breakdownTitle: undefined,
+          breakdownItems,
+        },
+        lessons: {
+          isCombo: false,
+          lessonCount: undefined,
+          items: undefined,
+        },
+        metadata: {
+          id: item.id,
+          groupId: item.groupId,
+          sortDate: item.sortDate || item.lastSettlementDate || item.createdAt || item.dueDate || new Date().toISOString(),
+          primaryDateLabel: presentation.formattedDateLine,
+          rawItem: item,
+        },
+      };
+    }
+
     // Determine 5 standardized visual states
     let statusBadge: HistoryCardViewModel['status']['badge'] = undefined;
     let iconEmoji = '✅';
