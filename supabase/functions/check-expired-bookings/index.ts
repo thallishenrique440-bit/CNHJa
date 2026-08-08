@@ -1,6 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import { NotificationService } from '../_shared/NotificationService.ts'
-import { asaasFetch } from '../_shared/asaasClient.ts'
+import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -56,7 +55,7 @@ Deno.serve(async (req) => {
 
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, provider_payment_id, status, group_id, provider_name, student_id, instructor_id')
+      .select('id, group_id')
       .in('status', ['pending', 'pending_approval', 'awaiting_payment'])
       .lt('expires_at', now)
 
@@ -76,117 +75,26 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Process each booking
+    // Process each booking via BookingCancellationCore SSOT (deduplicating by group_id if already handled)
+    const processedGroupIds = new Set<string>();
     const results = await Promise.allSettled(expiredBookings.map(async (booking) => {
-      const { id, payment_intent_id, provider_payment_id, group_id, status: currentStatus, student_id, instructor_id } = booking
-      const paymentId = provider_payment_id || payment_intent_id;
-
-      if (!paymentId) {
-        console.error(`⚠️ Booking ${id} has no payment ID.`)
-        if (currentStatus === 'awaiting_payment') {
-          await supabaseAdmin
-            .from('appointments')
-            .update({
-              status: 'expired',
-              payment_status: 'released',
-              cancelled_reason: 'auto_expired',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', id)
-          return { id, status: 'expired_success' }
-        } else {
-          await supabaseAdmin
-            .from('appointments')
-            .update({ status: 'expired', cancelled_reason: 'missing_pi_id' })
-            .eq('id', id)
-          return { id, status: 'skipped_missing_pi' }
+      if (booking.group_id) {
+        if (processedGroupIds.has(booking.group_id)) {
+          return { id: booking.id, status: 'already_processed_in_group' };
         }
+        processedGroupIds.add(booking.group_id);
       }
 
       try {
-        const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || '';
-        const asaasApiUrl = Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+        const res = await BookingCancellationCore.processCancellation({
+          appointmentId: booking.id,
+          reason: 'auto_expired',
+          adminClient: supabaseAdmin
+        });
 
-        if (!asaasApiKey) {
-          console.error(`❌ ASAAS_API_KEY is not defined. Skipping Asaas check for ${id}.`);
-          throw new Error('Missing ASAAS_API_KEY');
-        }
-
-        const url = `${asaasApiUrl}/payments/${paymentId}`;
-        const response = await asaasFetch(url, { method: 'GET' });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          console.error(`❌ Asaas API error for booking ${id}:`, errText);
-          throw new Error(`Asaas fetch failed: ${errText}`);
-        }
-
-        const paymentData = await response.json();
-        const asaasStatus = paymentData?.status?.toUpperCase();
-
-        console.log(`ℹ️ Booking ${id} payment in Asaas status is ${asaasStatus}. Proceeding with expiration/deletion.`);
-        
-        if (currentStatus === 'awaiting_payment') {
-          const { error: updateAptError } = await supabaseAdmin
-            .from('appointments')
-            .update({
-              status: 'expired',
-              payment_status: 'released',
-              cancelled_reason: 'auto_expired',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', id);
-
-          if (updateAptError) throw updateAptError;
-          return { id, status: 'expired_success' };
-        } else {
-          const { error: updateAptError } = await supabaseAdmin
-            .from('appointments')
-            .update({
-              status: 'expired',
-              payment_status: 'released',
-              cancelled_reason: 'auto_expired',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', id);
-
-          if (updateAptError) throw updateAptError;
-
-          // Notify both student and instructor
-          try {
-            let comboCount = 1;
-            if (group_id) {
-              const { count } = await supabaseAdmin
-                .from('appointments')
-                .select('id', { count: 'exact', head: true })
-                .eq('group_id', group_id);
-              if (count) comboCount = count;
-            }
-
-            if (student_id) {
-              await NotificationService.sendBookingExpired({
-                userId: student_id,
-                isInstructor: false,
-                comboCount,
-                groupId: group_id || id
-              });
-            }
-            if (instructor_id) {
-              await NotificationService.sendBookingExpired({
-                userId: instructor_id,
-                isInstructor: true,
-                comboCount,
-                groupId: group_id || id
-              });
-            }
-          } catch (notifErr) {
-            console.error(`⚠️ Error sending expiry notifications for booking ${id}:`, notifErr);
-          }
-
-          return { id, status: 'expired_success' };
-        }
+        return { id: booking.id, status: 'expired_success', result: res };
       } catch (err: any) {
-        console.error(`❌ Error checking Asaas payment for booking ${id}:`, err);
+        console.error(`❌ Error expiring booking ${booking.id} via Core:`, err);
         throw err;
       }
     }))
@@ -220,3 +128,4 @@ Deno.serve(async (req) => {
     })
   }
 })
+
