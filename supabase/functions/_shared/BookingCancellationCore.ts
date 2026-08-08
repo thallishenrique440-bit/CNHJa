@@ -109,7 +109,7 @@ export class BookingCancellationCore {
         }
       }
 
-      const allowedStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved'];
+      const allowedStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved', 'cancelling'];
       if (!allowedStatuses.includes(appointment.status)) {
         throw new Error(`Invalid status change: Cannot cancel appointment with status '${appointment.status}'`);
       }
@@ -150,8 +150,52 @@ export class BookingCancellationCore {
 
       const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
 
+      // 4.5 Atomic State Lock: Atomically claim appointment(s) by updating status to 'cancelling'
+      // This prevents approve-booking from approving the appointment while we process Asaas gateway refund
+      const targetIds = appointmentsToCancel.map((a: any) => a.id);
+
+      const { data: claimedRows, error: claimError } = await adminClient
+        .from('appointments')
+        .update({
+          status: 'cancelling',
+          updated_at: new Date().toISOString()
+        })
+        .in('id', targetIds)
+        .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'reserved', 'cancelling'])
+        .select('id, status');
+
+      if (claimError) {
+        console.error(`❌ [BookingCancellationCore] Error acquiring atomic cancellation lock:`, claimError.message);
+        throw claimError;
+      }
+
+      if (!claimedRows || claimedRows.length === 0) {
+        console.warn(`⚠️ [BookingCancellationCore] Atomic claim failed for appointment ${appointmentId} (group: ${appointment.group_id || 'none'}). Zero rows updated. Race lost to another operation.`);
+        
+        const { data: currentApt } = await adminClient
+          .from('appointments')
+          .select('status')
+          .eq('id', appointmentId)
+          .single();
+
+        return {
+          success: false,
+          alreadyProcessed: true,
+          reason,
+          status: currentApt?.status || 'unknown',
+          paymentStatus: appointment.payment_status || 'released',
+          isPaid: appointment.payment_status === 'refunded',
+          processedCount: 0,
+          groupId: appointment.group_id || appointment.id,
+          message: `Agendamento teve seu estado alterado por outra operação (status atual: ${currentApt?.status}).`
+        };
+      }
+
+      console.log(`🔒 [BookingCancellationCore] Atomically claimed ${claimedRows.length} appointment(s) with status 'cancelling'. Proceeding to Asaas gateway processing.`);
+
       // 5. Asaas Gateway Integration
       let isPaid = false;
+      let isAlreadyRefunded = false;
 
       if (paymentId && asaasApiKey) {
         console.log(`[BookingCancellationCore] Consulting Asaas payment details for ${paymentId} (reason: ${reason})`);
@@ -163,47 +207,101 @@ export class BookingCancellationCore {
           if (paymentRes.ok) {
             const paymentData = await paymentRes.json();
             const installmentId = paymentData.installment;
-            isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
+            const asaasStatus = (paymentData.status || '').toUpperCase();
 
-            console.log(`[BookingCancellationCore] Asaas status: ${paymentData.status}, installment: ${installmentId || 'none'}, isPaid: ${isPaid}`);
+            isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+            isAlreadyRefunded = ['REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
 
-            if (!installmentId) {
-              // Single payment flow
-              if (isPaid) {
-                console.log(`[BookingCancellationCore] Refunding Asaas single payment ${paymentId}`);
-                const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
-                const refundPayload: Record<string, any> = { description: reason };
+            console.log(`[BookingCancellationCore] Asaas status: ${asaasStatus}, installment: ${installmentId || 'none'}, isPaid: ${isPaid}, isAlreadyRefunded: ${isAlreadyRefunded}`);
 
-                const splits = Array.isArray(paymentData.split) ? paymentData.split : [];
-                if (splits.length > 0) {
-                  const splitRefunds = splits
-                    .map((s: any) => {
-                      const item: Record<string, any> = {};
-                      if (s.walletId) item.walletId = s.walletId;
-                      if (s.id) item.id = s.id;
-                      if (s.fixedValue !== undefined && s.fixedValue !== null) item.fixedValue = s.fixedValue;
-                      if (s.percentualValue !== undefined && s.percentualValue !== null) item.percentualValue = s.percentualValue;
-                      return item;
-                    })
-                    .filter((item: any) => item.walletId || item.id);
+            if (isAlreadyRefunded) {
+              console.log(`✅ [BookingCancellationCore] Payment ${paymentId} is ALREADY refunded in Asaas (${asaasStatus}). Skipping Asaas API refund call.`);
+            } else if (isPaid) {
+              // Calculate total refund value in Reais
+              const totalPriceCentavos = appointmentsToCancel.reduce((sum: number, a: any) => sum + (a.price || 0), 0);
+              let refundValue = totalPriceCentavos > 0 
+                ? Number((totalPriceCentavos / 100).toFixed(2)) 
+                : (paymentData.value || 0);
 
-                  if (splitRefunds.length > 0) {
-                    refundPayload.splitRefunds = splitRefunds;
+              let totalPurchaseValue = paymentData.value || 0;
+              let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
+
+              if (installmentId) {
+                console.log(`[BookingCancellationCore] Fetching installment details for ${installmentId}`);
+                try {
+                  const instRes = await asaasFetch(`${asaasApiUrl}/installments/${installmentId}`, { method: 'GET' });
+                  if (instRes.ok) {
+                    const instData = await instRes.json();
+                    if (instData.value && instData.value > 0) totalPurchaseValue = instData.value;
+                    if (Array.isArray(instData.splits) && instData.splits.length > 0) splits = instData.splits;
+                    else if (Array.isArray(instData.split) && instData.split.length > 0) splits = instData.split;
+                  }
+                } catch (instErr: any) {
+                  console.warn(`⚠️ [BookingCancellationCore] Error fetching installment ${installmentId}:`, instErr?.message || instErr);
+                }
+              }
+
+              // Calculate splits matching cancel-booking logic
+              const splitRefunds: Array<{ id: string; value: number }> = [];
+              if (Array.isArray(splits) && splits.length > 0) {
+                for (const s of splits) {
+                  if (!s) continue;
+                  const hasIdAndWallet = !!(s.id && (s.walletId || s.wallet_id));
+                  const isActive = s.status !== 'CANCELED' && s.status !== 'REFUNDED';
+                  if (!hasIdAndWallet || !isActive) continue;
+
+                  let splitRefundValue = 0;
+                  if (s.fixedValue !== undefined && s.fixedValue !== null) {
+                    const ratio = (totalPurchaseValue && totalPurchaseValue > 0) ? (refundValue / totalPurchaseValue) : 1;
+                    splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
+                    splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
+                  } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
+                    splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
+                  }
+
+                  if (splitRefundValue > 0) {
+                    splitRefunds.push({
+                      id: s.id,
+                      value: splitRefundValue
+                    });
                   }
                 }
+              }
 
-                const refundRes = await asaasFetch(refundUrl, {
-                  method: 'POST',
-                  body: JSON.stringify(refundPayload)
-                });
+              const refundPayload: Record<string, any> = {
+                value: refundValue,
+                description: reason === 'instructor_rejected' ? 'Estorno por recusa do instrutor' : 'Estorno por expiração de solicitação'
+              };
+              if (splitRefunds.length > 0) {
+                refundPayload.splitRefunds = splitRefunds;
+              }
 
-                if (!refundRes.ok) {
-                  const errText = await refundRes.text();
+              const refundUrl = installmentId
+                ? `${asaasApiUrl}/installments/${installmentId}/refund`
+                : `${asaasApiUrl}/payments/${paymentId}/refund`;
+
+              console.log(`[BookingCancellationCore] Executing Asaas refund. URL: ${refundUrl}, Payload:`, JSON.stringify(refundPayload));
+
+              const refundRes = await asaasFetch(refundUrl, {
+                method: 'POST',
+                body: JSON.stringify(refundPayload)
+              });
+
+              if (!refundRes.ok) {
+                const errText = await refundRes.text();
+                const errLower = errText.toLowerCase();
+                if (errLower.includes('already_refunded') || errLower.includes('estornada') || errLower.includes('já foi estornado')) {
+                  console.warn(`⚠️ [BookingCancellationCore] Asaas returned already refunded for ${paymentId}: ${errText}. Treating as success.`);
+                } else {
                   console.error(`❌ Asaas refund failed for payment ${paymentId}: ${errText}`);
                   throw new Error(`Asaas refund failed: ${errText}`);
                 }
-                console.log(`✅ Asaas payment ${paymentId} refunded successfully.`);
               } else {
+                console.log(`✅ Asaas payment/installment ${paymentId} refunded successfully.`);
+              }
+            } else {
+              // Pending / Unpaid Flow
+              if (!installmentId) {
                 console.log(`[BookingCancellationCore] Deleting pending Asaas payment ${paymentId}`);
                 const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
                 const cancelRes = await asaasFetch(cancelUrl, { method: 'DELETE' });
@@ -214,20 +312,6 @@ export class BookingCancellationCore {
                 } else {
                   console.log(`✅ Asaas pending payment ${paymentId} cancelled successfully.`);
                 }
-              }
-            } else {
-              // Installment payment flow
-              if (isPaid) {
-                console.log(`[BookingCancellationCore] Refunding Asaas installment ${installmentId}`);
-                const refundUrl = `${asaasApiUrl}/installments/${installmentId}/refund`;
-                const refundRes = await asaasFetch(refundUrl, { method: 'POST' });
-
-                if (!refundRes.ok) {
-                  const errText = await refundRes.text();
-                  console.error(`❌ Asaas installment refund failed for ${installmentId}: ${errText}`);
-                  throw new Error(`Asaas installment refund failed: ${errText}`);
-                }
-                console.log(`✅ Asaas installment ${installmentId} refunded successfully.`);
               } else {
                 console.log(`[BookingCancellationCore] Deleting pending Asaas installment ${installmentId}`);
                 const cancelUrl = `${asaasApiUrl}/installments/${installmentId}`;
@@ -235,10 +319,10 @@ export class BookingCancellationCore {
 
                 if (!cancelRes.ok) {
                   const errText = await cancelRes.text();
-                  console.error(`❌ Asaas installment cancellation failed for ${installmentId}: ${errText}`);
-                  throw new Error(`Asaas installment cancel failed: ${errText}`);
+                  console.warn(`⚠️ Asaas pending installment cancel returned non-OK: ${errText}`);
+                } else {
+                  console.log(`✅ Asaas pending installment ${installmentId} cancelled successfully.`);
                 }
-                console.log(`✅ Asaas installment ${installmentId} cancelled successfully.`);
               }
             }
           } else {
@@ -247,7 +331,7 @@ export class BookingCancellationCore {
           }
         } catch (gatewayErr: any) {
           console.error(`⚠️ Gateway operation warning for payment ${paymentId}:`, gatewayErr?.message || gatewayErr);
-          if (isPaid) throw gatewayErr; // Re-throw if refund failed for paid transaction
+          if (isPaid && !isAlreadyRefunded) throw gatewayErr; // Re-throw if refund failed for paid transaction
         }
       } else if (paymentId) {
         console.warn(`[BookingCancellationCore] Missing Asaas API key. Skipping gateway call for ${paymentId}.`);
@@ -263,7 +347,7 @@ export class BookingCancellationCore {
               status: installmentStatus,
               updated_at: new Date().toISOString()
             })
-            .eq('provider_payment_id', paymentId);
+            .or(`group_id.eq.${appointment.group_id},provider_payment_id.eq.${paymentId}`);
 
           if (piErr) {
             console.warn(`⚠️ Error updating payment_installments for ${paymentId}:`, piErr.message);
@@ -331,8 +415,8 @@ export class BookingCancellationCore {
       }
 
       const updateFilter = appointment.group_id
-        ? adminClient.from('appointments').update(updateData).eq('group_id', appointment.group_id)
-        : adminClient.from('appointments').update(updateData).eq('id', appointment.id);
+        ? adminClient.from('appointments').update(updateData).eq('group_id', appointment.group_id).in('status', ['cancelling', 'pending', 'pending_approval', 'awaiting_payment', 'reserved'])
+        : adminClient.from('appointments').update(updateData).eq('id', appointment.id).in('status', ['cancelling', 'pending', 'pending_approval', 'awaiting_payment', 'reserved']);
 
       const { error: updateError } = await updateFilter;
       if (updateError) {

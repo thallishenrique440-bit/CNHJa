@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, group_id')
-      .in('status', ['pending', 'pending_approval', 'awaiting_payment'])
+      .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'cancelling'])
       .lt('expires_at', now)
 
     if (fetchError) {

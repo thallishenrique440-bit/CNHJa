@@ -7,6 +7,27 @@ const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 )
 
+function calculateApprovalExpiresAt(dateStr?: string, startTimeStr?: string, createdAtStr?: string): string {
+  if (!dateStr || !startTimeStr) {
+    return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  // Construct lesson start time in Brazil timezone (UTC-3)
+  const lessonStart = new Date(`${dateStr}T${startTimeStr}:00-03:00`);
+  const createdAt = createdAtStr ? new Date(createdAtStr) : new Date();
+
+  // 30 minutes before lesson start
+  const thirtyMinBefore = new Date(lessonStart.getTime() - 30 * 60 * 1000);
+
+  // Normal purchase: created > 30 mins before lesson start -> expires at (start - 30m)
+  // Last minute purchase: created <= 30 mins before lesson start -> expires at start time
+  if (createdAt < thirtyMinBefore) {
+    return thirtyMinBefore.toISOString();
+  } else {
+    return lessonStart.toISOString();
+  }
+}
+
 Deno.serve(async (req) => {
   try {
     console.log("🔄 Starting sync-payment-status job...")
@@ -14,7 +35,7 @@ Deno.serve(async (req) => {
     // Find 'reserved' or 'pending_approval' or 'awaiting_payment' or 'cancelling' appointments
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id')
+      .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id, date, start_time, created_at')
       .in('status', ['reserved', 'pending_approval', 'awaiting_payment', 'cancelling'])
 
     if (fetchError) {
@@ -88,10 +109,6 @@ Deno.serve(async (req) => {
 
       if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
         console.log(`✅ Repairing Group ${groupId}: Asaas is paid (${asaasStatus}).`);
-        updates = {
-          status: 'pending_approval',
-          payment_status: 'paid'
-        };
         action = 'repaired_succeeded';
 
         // Notify Instructor (Idempotent)
@@ -128,13 +145,30 @@ Deno.serve(async (req) => {
           }
         }
 
-        const { error: updateError } = await supabaseAdmin
+        // Fetch full appointment details for the group to recalculate expires_at per lesson
+        const { data: groupAptsToUpdate } = await supabaseAdmin
           .from('appointments')
-          .update(updates)
+          .select('id, date, start_time, created_at')
           .eq('group_id', groupId)
           .in('status', ['reserved', 'pending_approval', 'awaiting_payment']);
 
-        if (updateError) throw updateError;
+        const targetApts = (groupAptsToUpdate && groupAptsToUpdate.length > 0) ? groupAptsToUpdate : groupApts;
+
+        for (const apt of targetApts) {
+          const calculatedExpiresAt = calculateApprovalExpiresAt(apt.date, apt.start_time, apt.created_at);
+          const { error: updateError } = await supabaseAdmin
+            .from('appointments')
+            .update({
+              status: 'pending_approval',
+              payment_status: 'paid',
+              expires_at: calculatedExpiresAt,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', apt.id)
+            .in('status', ['reserved', 'pending_approval', 'awaiting_payment']);
+
+          if (updateError) throw updateError;
+        }
 
         // Reconcile payment_installments & payment_settlements
         try {
