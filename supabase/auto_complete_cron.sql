@@ -15,21 +15,11 @@ FROM cron.job
 WHERE jobname = 'auto-complete-lessons-job';
 
 -- 3. Agendar o novo Job
--- IMPORTANTE:
--- <PROJECT_REF>: Substitua pelo ID do seu projeto Supabase (ex: abcdefghijklm)
--- <CRON_SECRET>: Substitua pelo segredo que você definiu na Edge Function
 SELECT
   cron.schedule(
     'auto-complete-lessons-job',
     '*/5 * * * *', -- Executa a cada 5 minutos
-    $$
-    SELECT
-      net.http_post(
-          url:='https://<PROJECT_REF>.supabase.co/functions/v1/auto-complete-lessons',
-          headers:='{"Content-Type": "application/json", "Authorization": "Bearer <CRON_SECRET>"}'::jsonb,
-          body:='{}'::jsonb
-      ) AS request_id;
-    $$
+    $$SELECT public.invoke_edge_function_cron('auto-complete-lessons');$$
   );
 
 -- ==========================================

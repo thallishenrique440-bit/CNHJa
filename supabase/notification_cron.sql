@@ -15,21 +15,11 @@ FROM cron.job
 WHERE jobname = 'notification-worker-job';
 
 -- 3. Agendar o novo Job do Worker de Notificações
--- IMPORTANTE:
--- <PROJECT_REF>: Substitua pelo ID do projeto Supabase (ex: abcdefghijklm)
--- <CRON_SECRET>: Substitua pelo segredo configurado nas variáveis da Edge Function
 SELECT
   cron.schedule(
     'notification-worker-job',
     '* * * * *', -- Executa a cada 1 minuto
-    $$
-    SELECT
-      net.http_post(
-          url:='https://<PROJECT_REF>.supabase.co/functions/v1/notification-worker',
-          headers:='{"Content-Type": "application/json", "Authorization": "Bearer <CRON_SECRET>"}'::jsonb,
-          body:='{}'::jsonb
-      ) AS request_id;
-    $$
+    $$SELECT public.invoke_edge_function_cron('notification-worker');$$
   );
 
 -- ==========================================

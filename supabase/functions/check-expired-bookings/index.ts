@@ -7,6 +7,18 @@ const supabaseAdmin = createClient(
 )
 
 Deno.serve(async (req) => {
+  // Security check: Validate Authorization header
+  const authHeader = req.headers.get('Authorization')
+  const cronSecret = Deno.env.get('CRON_SECRET')
+
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    console.error("❌ Unauthorized: Invalid CRON_SECRET")
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
   try {
     console.log("⏰ Starting check-expired-bookings cron job...")
 

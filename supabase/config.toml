@@ -8,3 +8,13 @@ verify_jwt = false
 
 [functions.send-push-notification]
 verify_jwt = false
+
+[functions.check-expired-bookings]
+verify_jwt = false
+
+[functions.notification-worker]
+verify_jwt = false
+
+[functions.auto-complete-lessons]
+verify_jwt = false
+
