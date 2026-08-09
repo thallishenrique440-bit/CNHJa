@@ -21,7 +21,8 @@ export type AppointmentStatus =
   | 'expired'
   | 'rejected'
   | 'no_show'
-  | 'awaiting_payment';
+  | 'awaiting_payment'
+  | 'cancelling';
 
 export type TransactionType =
   | 'lesson_payment'
