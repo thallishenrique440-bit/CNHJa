@@ -22,40 +22,35 @@ Deno.serve(async (req) => {
   try {
     console.log("⏰ Starting check-expired-bookings cron job...")
 
-    const now = new Date().toISOString()
+    const now = new Date()
+    const nowIso = now.toISOString()
     
-    // Fetch expired bookings for abandoned checkouts
+    // =========================================================================
+    // MODULE A — CHECKOUT NÃO PAGO (Unpaid expired checkouts after 5 min)
     // Target statuses: awaiting_payment, reserved, pending
-    // Strictly exclude: pending_approval (paid awaiting approval), confirmed, scheduled, cancelled, expired, cancelling
-    const { data: expiredBookings, error: fetchError } = await supabaseAdmin
+    // Strictly exclude: pending_approval
+    // =========================================================================
+    console.log("🔍 [Module A] Fetching unpaid expired checkouts (expires_at < now)...")
+    const { data: expiredUnpaidBookings, error: fetchUnpaidError } = await supabaseAdmin
       .from('appointments')
       .select('id, group_id')
       .in('status', ['awaiting_payment', 'reserved', 'pending'])
-      .lt('expires_at', now)
+      .lt('expires_at', nowIso)
 
-    if (fetchError) {
-      console.error("❌ Error fetching expired bookings:", fetchError)
-      throw fetchError
+    if (fetchUnpaidError) {
+      console.error("❌ Error fetching unpaid expired bookings:", fetchUnpaidError)
+      throw fetchUnpaidError
     }
 
-    console.log(`Found ${expiredBookings?.length || 0} expired bookings to process.`)
+    console.log(`[Module A] Found ${expiredUnpaidBookings?.length || 0} unpaid expired bookings.`)
 
-    if (!expiredBookings || expiredBookings.length === 0) {
-      return new Response(JSON.stringify({ 
-        message: 'No expired bookings found.'
-      }), {
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-
-    // Process each booking via BookingCancellationCore SSOT (deduplicating by group_id if already handled)
-    const processedGroupIds = new Set<string>();
-    const results = await Promise.allSettled(expiredBookings.map(async (booking) => {
+    const processedUnpaidGroupIds = new Set<string>();
+    const moduleAResults = await Promise.allSettled((expiredUnpaidBookings || []).map(async (booking) => {
       if (booking.group_id) {
-        if (processedGroupIds.has(booking.group_id)) {
+        if (processedUnpaidGroupIds.has(booking.group_id)) {
           return { id: booking.id, status: 'already_processed_in_group' };
         }
-        processedGroupIds.add(booking.group_id);
+        processedUnpaidGroupIds.add(booking.group_id);
       }
 
       try {
@@ -67,36 +62,101 @@ Deno.serve(async (req) => {
 
         return { id: booking.id, status: 'expired_success', result: res };
       } catch (err: any) {
-        console.error(`❌ Error expiring booking ${booking.id} via Core:`, err);
+        console.error(`❌ [Module A] Error expiring booking ${booking.id} via Core:`, err);
         throw err;
       }
     }))
 
-    // Summary
-    const successCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).status === 'expired_success').length
-    const skippedCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
-    const failCount = results.filter(r => r.status === 'rejected').length
+    const moduleASuccess = moduleAResults.filter(r => r.status === 'fulfilled' && (r.value as any).status === 'expired_success').length
+    const moduleASkipped = moduleAResults.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
+    const moduleAFailed = moduleAResults.filter(r => r.status === 'rejected').length
 
-    console.log(`🏁 Job finished. Success: ${successCount}, Skipped: ${skippedCount}, Failed: ${failCount}`)
+    // =========================================================================
+    // MODULE B — AULA PAGA NÃO ACEITA (Paid pending_approval past start_time)
+    // Target status: pending_approval AND payment_status: paid
+    // Condition: (date + start_time) in America/Sao_Paulo <= NOW()
+    // =========================================================================
+    console.log("🔍 [Module B] Fetching paid pending_approval bookings past start time...")
+    const { data: pendingPaidBookings, error: fetchPaidError } = await supabaseAdmin
+      .from('appointments')
+      .select('id, group_id, date, start_time')
+      .eq('status', 'pending_approval')
+      .eq('payment_status', 'paid')
+
+    if (fetchPaidError) {
+      console.error("❌ Error fetching paid pending_approval bookings:", fetchPaidError)
+      throw fetchPaidError
+    }
+
+    // Filter candidates whose lesson start time in America/Sao_Paulo (UTC-3) has passed
+    const expiredPaidCandidates = (pendingPaidBookings || []).filter(apt => {
+      if (!apt.date || !apt.start_time) return false;
+      const lessonStart = new Date(`${apt.date}T${apt.start_time}:00-03:00`);
+      return lessonStart <= now;
+    });
+
+    console.log(`[Module B] Found ${expiredPaidCandidates.length} paid pending_approval bookings past start time.`)
+
+    const processedPaidGroupIds = new Set<string>();
+    const moduleBResults = await Promise.allSettled(expiredPaidCandidates.map(async (booking) => {
+      if (booking.group_id) {
+        if (processedPaidGroupIds.has(booking.group_id)) {
+          return { id: booking.id, status: 'already_processed_in_group' };
+        }
+        processedPaidGroupIds.add(booking.group_id);
+      }
+
+      try {
+        console.log(`⏰ [Module B] Expiring paid unaccepted lesson ${booking.id} (group: ${booking.group_id || 'none'})...`)
+        const res = await BookingCancellationCore.processCancellation({
+          appointmentId: booking.id,
+          reason: 'auto_expired',
+          adminClient: supabaseAdmin
+        });
+
+        return { id: booking.id, status: 'expired_success', result: res };
+      } catch (err: any) {
+        console.error(`❌ [Module B] Error expiring paid booking ${booking.id} via Core:`, err);
+        throw err;
+      }
+    }))
+
+    const moduleBSuccess = moduleBResults.filter(r => r.status === 'fulfilled' && (r.value as any).status === 'expired_success').length
+    const moduleBSkipped = moduleBResults.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
+    const moduleBFailed = moduleBResults.filter(r => r.status === 'rejected').length
+
+    console.log(`🏁 check-expired-bookings job finished.
+      Module A (Unpaid): Success=${moduleASuccess}, Skipped=${moduleASkipped}, Failed=${moduleAFailed}
+      Module B (Paid): Success=${moduleBSuccess}, Skipped=${moduleBSkipped}, Failed=${moduleBFailed}`)
 
     return new Response(
       JSON.stringify({ 
         message: 'Job completed', 
-        processed: expiredBookings.length,
-        success: successCount,
-        skipped: skippedCount,
-        failed: failCount,
-        results 
+        unpaid_checkout: {
+          processed: expiredUnpaidBookings?.length || 0,
+          success: moduleASuccess,
+          skipped: moduleASkipped,
+          failed: moduleAFailed,
+          results: moduleAResults
+        },
+        paid_pending_approval: {
+          processed: expiredPaidCandidates.length,
+          success: moduleBSuccess,
+          skipped: moduleBSkipped,
+          failed: moduleBFailed,
+          results: moduleBResults
+        }
       }),
       { headers: { 'Content-Type': 'application/json' } }
     )
 
   } catch (error: any) {
-    console.error("🚨 Critical Job Error:", error)
+    console.error("🚨 Critical Job Error in check-expired-bookings:", error)
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 })
+
 

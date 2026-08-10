@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { NotificationService } from '../_shared/NotificationService.ts'
+import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -130,8 +131,22 @@ Deno.serve(async (req) => {
           reason: "start_time_passed"
         }));
 
+        try {
+          console.log(`⏰ [approve-booking] Lesson ${apt.id} start time passed. Delegating auto-expiration to BookingCancellationCore...`);
+          await BookingCancellationCore.processCancellation({
+            appointmentId: appointment.id,
+            reason: 'auto_expired',
+            adminClient
+          });
+        } catch (cancelErr) {
+          console.error('❌ Error executing auto_expired in approve-booking via Core:', cancelErr);
+        }
+
         return new Response(
-          JSON.stringify({ error: 'Uma ou mais aulas deste combo já expiraram e não podem mais ser aceitas.', code: 'AUTH_EXPIRED' }),
+          JSON.stringify({ 
+            error: 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O reembolso foi processado automaticamente.', 
+            code: 'LESSON_EXPIRED' 
+          }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
