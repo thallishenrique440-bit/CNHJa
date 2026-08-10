@@ -338,28 +338,37 @@ export class BookingCancellationCore {
       }
 
       // 6. Update payment_installments table (SSOT)
-      if (paymentId) {
+      if (paymentId || appointment.group_id) {
         try {
           const installmentStatus = isPaid ? 'REFUNDED' : 'CANCELLED';
-          const { error: piErr } = await adminClient
+          let piQuery = adminClient
             .from('payment_installments')
             .update({
               status: installmentStatus,
               updated_at: new Date().toISOString()
-            })
-            .or(`group_id.eq.${appointment.group_id},provider_payment_id.eq.${paymentId}`);
+            });
+
+          if (appointment.group_id && paymentId) {
+            piQuery = piQuery.or(`group_id.eq.${appointment.group_id},provider_payment_id.eq.${paymentId}`);
+          } else if (appointment.group_id) {
+            piQuery = piQuery.eq('group_id', appointment.group_id);
+          } else {
+            piQuery = piQuery.eq('provider_payment_id', paymentId);
+          }
+
+          const { error: piErr } = await piQuery;
 
           if (piErr) {
-            console.warn(`⚠️ Error updating payment_installments for ${paymentId}:`, piErr.message);
+            console.warn(`⚠️ Error updating payment_installments for ${paymentId || appointment.group_id}:`, piErr.message);
           } else {
-            console.log(`✅ payment_installments updated to ${installmentStatus} for ${paymentId}`);
+            console.log(`✅ payment_installments updated to ${installmentStatus} for ${paymentId || appointment.group_id}`);
           }
         } catch (piEx) {
           console.warn(`⚠️ Exception updating payment_installments:`, piEx);
         }
       }
 
-      // 7. Update Financial Transactions / Ledger (if paid)
+      // 7. Update Financial Transactions / Ledger / Projections
       if (isPaid && paymentId) {
         try {
           // Mark original lesson_payment as failed/cancelled
@@ -397,6 +406,46 @@ export class BookingCancellationCore {
           console.log(`✅ Logged refund transactions for ${appointmentsToCancel.length} appointment(s).`);
         } catch (txErr) {
           console.error(`⚠️ Error updating financial transactions:`, txErr);
+        }
+      } else if (!isPaid) {
+        // UNPAID CHECKOUT EXPIRATION: Revert future_receivables in instructor_financial_projections
+        try {
+          const cancelEventId = `cancel_sched_${paymentId || appointment.group_id || appointment.id}`;
+          const targetInstructorId = appointment.instructor_id;
+
+          if (targetInstructorId) {
+            const { data: currentProj } = await adminClient
+              .from('instructor_financial_projections')
+              .select('*')
+              .eq('instructor_id', targetInstructorId)
+              .maybeSingle();
+
+            if (currentProj && currentProj.last_processed_event_id === cancelEventId) {
+              console.log(`ℹ️ [BookingCancellationCore] Cancellation event ${cancelEventId} already projected for instructor ${targetInstructorId}. Skipping.`);
+            } else if (currentProj) {
+              const totalNetCents = appointmentsToCancel.reduce((sum: number, apt: any) => {
+                const gross = apt.price || 0;
+                const fee = Math.floor(gross * 0.1);
+                return sum + (gross - fee);
+              }, 0);
+
+              const updatedFutureReceivables = Math.max(0, (currentProj.future_receivables || 0) - totalNetCents);
+
+              await adminClient
+                .from('instructor_financial_projections')
+                .update({
+                  future_receivables: updatedFutureReceivables,
+                  last_processed_event_id: cancelEventId,
+                  projection_version: (currentProj.projection_version || 0) + 1,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('instructor_id', targetInstructorId);
+
+              console.log(`✅ [BookingCancellationCore] Reverted future_receivables for instructor ${targetInstructorId} by ${totalNetCents} cents (event: ${cancelEventId}). New value: ${updatedFutureReceivables}`);
+            }
+          }
+        } catch (projErr) {
+          console.error(`⚠️ Error reverting future_receivables projection:`, projErr);
         }
       }
 

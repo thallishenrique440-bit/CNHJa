@@ -24,51 +24,13 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString()
     
-    // Clean up abandoned checkouts
-    console.log("🧹 Cleaning up abandoned checkouts...")
-    
-    // Clean up awaiting_payment (soft delete/cancel)
-    const { data: abandonedBookings, error: deleteError } = await supabaseAdmin
-      .from('appointments')
-      .update({
-        status: 'cancelled',
-        payment_status: 'failed',
-        cancelled_reason: 'system_cleanup_expired',
-        updated_at: new Date().toISOString()
-      })
-      .eq('status', 'awaiting_payment')
-      .lt('expires_at', now)
-      .select('id')
-
-    if (deleteError) {
-      console.error("❌ Error cleaning up abandoned bookings:", deleteError)
-    } else if (abandonedBookings && abandonedBookings.length > 0) {
-      console.log(`✅ Cleaned up ${abandonedBookings.length} abandoned checkouts (awaiting_payment).`)
-    }
-
-    // Clean up reserved (soft delete to cancelled/failed)
-    const { data: reservedBookings, error: reservedError } = await supabaseAdmin
-      .from('appointments')
-      .update({
-        status: 'cancelled',
-        payment_status: 'failed',
-        cancelled_reason: 'system_cleanup_expired',
-        updated_at: new Date().toISOString()
-      })
-      .eq('status', 'reserved')
-      .lt('expires_at', now)
-      .select('id')
-
-    if (reservedError) {
-      console.error("❌ Error cleaning up reserved bookings:", reservedError)
-    } else if (reservedBookings && reservedBookings.length > 0) {
-      console.log(`✅ Cleaned up ${reservedBookings.length} abandoned checkouts (reserved).`)
-    }
-
+    // Fetch expired bookings for abandoned checkouts
+    // Target statuses: awaiting_payment, reserved, pending
+    // Strictly exclude: pending_approval (paid awaiting approval), confirmed, scheduled, cancelled, expired, cancelling
     const { data: expiredBookings, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, group_id')
-      .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'cancelling'])
+      .in('status', ['awaiting_payment', 'reserved', 'pending'])
       .lt('expires_at', now)
 
     if (fetchError) {
@@ -80,8 +42,7 @@ Deno.serve(async (req) => {
 
     if (!expiredBookings || expiredBookings.length === 0) {
       return new Response(JSON.stringify({ 
-        message: 'No expired bookings found.',
-        abandoned_cleaned: abandonedBookings?.length || 0
+        message: 'No expired bookings found.'
       }), {
         headers: { 'Content-Type': 'application/json' },
       })
@@ -115,9 +76,8 @@ Deno.serve(async (req) => {
     const successCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).status === 'expired_success').length
     const skippedCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
     const failCount = results.filter(r => r.status === 'rejected').length
-    const abandonedCount = abandonedBookings?.length || 0
 
-    console.log(`🏁 Job finished. Success: ${successCount}, Skipped: ${skippedCount}, Failed: ${failCount}, Abandoned Cleaned: ${abandonedCount}`)
+    console.log(`🏁 Job finished. Success: ${successCount}, Skipped: ${skippedCount}, Failed: ${failCount}`)
 
     return new Response(
       JSON.stringify({ 
@@ -126,7 +86,6 @@ Deno.serve(async (req) => {
         success: successCount,
         skipped: skippedCount,
         failed: failCount,
-        abandoned_cleaned: abandonedCount,
         results 
       }),
       { headers: { 'Content-Type': 'application/json' } }

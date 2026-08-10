@@ -510,12 +510,8 @@ providerInstance=${paymentProvider.getProviderName()}`);
       const startTimeMs = new Date(startTimeUtc).getTime();
       const isInsideWarningWindow = now.getTime() >= (startTimeMs - 30 * 60 * 1000);
 
-      // HARDENING 1: A flag ignoreTooClose é a fonte canônica para determinar a expiração
-      // Se ignoreTooClose == true -> expires_at = start_time_utc
-      // Se ignoreTooClose == false -> expires_at = start_time_utc - 30 minutos
-      const expiresAt = ignoreTooClose
-        ? startTimeUtc
-        : new Date(startTimeMs - 30 * 60 * 1000).toISOString();
+      // A janela de expiração do checkout é independente do horário da aula: criacao + 5 minutos
+      const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       const isLastMinute = isInsideWarningWindow || Boolean(ignoreTooClose);
 
       const origPrice = lesson.price || 0;
@@ -543,7 +539,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
         status: 'awaiting_payment',
         price: discountedLessonPrice, // Proportional net price in cents
         group_id: groupId,
-        expires_at: expiresAt,
+        expires_at: reservationExpiresAt,
         created_at: new Date().toISOString(),
         is_last_minute: isLastMinute
       };
