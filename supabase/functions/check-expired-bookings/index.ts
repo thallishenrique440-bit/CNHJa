@@ -91,7 +91,17 @@ Deno.serve(async (req) => {
     // Filter candidates whose lesson start time in America/Sao_Paulo (UTC-3) has passed
     const expiredPaidCandidates = (pendingPaidBookings || []).filter(apt => {
       if (!apt.date || !apt.start_time) return false;
-      const lessonStart = new Date(`${apt.date}T${apt.start_time}:00-03:00`);
+
+      // Clean start_time to HH:mm (handling HH:mm, HH:mm:ss, etc)
+      const timeClean = String(apt.start_time).trim().split(':').slice(0, 2).join(':');
+      const isoStr = `${String(apt.date).trim()}T${timeClean}:00-03:00`;
+      const lessonStart = new Date(isoStr);
+
+      if (isNaN(lessonStart.getTime())) {
+        console.error(`❌ [Module B] Invalid date parsed for appointment ${apt.id}: date="${apt.date}", start_time="${apt.start_time}", normalized="${isoStr}", reason="Failed to construct valid Date object"`);
+        return false;
+      }
+
       return lessonStart <= now;
     });
 

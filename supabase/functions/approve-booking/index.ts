@@ -119,8 +119,18 @@ Deno.serve(async (req) => {
 
     // Check if ANY lesson in the group has already started
     for (const apt of appointmentsToApprove) {
-      // Combine date and start_time to get a Date object with explicit Brazil offset (UTC-3)
-      const lessonStart = new Date(`${apt.date}T${apt.start_time}:00-03:00`);
+      if (!apt.date || !apt.start_time) continue;
+
+      // Clean start_time to HH:mm (handling HH:mm, HH:mm:ss, etc)
+      const timeClean = String(apt.start_time).trim().split(':').slice(0, 2).join(':');
+      const isoStr = `${String(apt.date).trim()}T${timeClean}:00-03:00`;
+      const lessonStart = new Date(isoStr);
+
+      if (isNaN(lessonStart.getTime())) {
+        console.error(`❌ [approve-booking] Invalid date parsed for appointment ${apt.id}: date="${apt.date}", start_time="${apt.start_time}", normalized="${isoStr}", reason="Failed to construct valid Date object"`);
+        continue;
+      }
+
       const now = new Date();
 
       if (now >= lessonStart) {
