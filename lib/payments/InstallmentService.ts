@@ -265,7 +265,9 @@ export class InstallmentService {
       .from('payment_installments')
       .select('id, installment_number, gross_amount, platform_fee, instructor_amount, instructor_id, student_id');
 
-    if (dto.groupId) {
+    if (dto.groupId && dto.providerPaymentId) {
+      query = query.or(`group_id.eq.${dto.groupId},provider_payment_id.eq.${dto.providerPaymentId}`);
+    } else if (dto.groupId) {
       query = query.eq('group_id', dto.groupId);
     } else {
       query = query.eq('provider_payment_id', dto.providerPaymentId);
@@ -289,7 +291,8 @@ export class InstallmentService {
           .update({ status: 'REFUNDED', updated_at: new Date().toISOString() })
           .eq('id', inst.id);
 
-        const settlementId = dto.providerSettlementId || `${dto.providerPaymentId}_refund_${inst.installment_number}`;
+        const instNum = inst.installment_number || dto.installmentNumber || 1;
+        const settlementId = dto.providerSettlementId || `${dto.providerPaymentId}_refund_${instNum}`;
 
         // Insert refund cash flow settlement
         await supabase
@@ -305,6 +308,8 @@ export class InstallmentService {
             platform_fee: -Math.abs(inst.platform_fee),
             instructor_amount: -Math.abs(inst.instructor_amount),
             settled_at: refundDate,
+            instructor_id: inst.instructor_id,
+            student_id: inst.student_id,
           }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
 
         // Dispatch REFUND_CREATED event to ProjectionDispatcher (Official Wave 2 Trigger)
@@ -319,7 +324,7 @@ export class InstallmentService {
             {
               eventType: ProjectionSourceEventType.REFUND_CREATED,
               settlementId: settlementId,
-              eventId: `refund_${dto.providerPaymentId}_${inst.installment_number}`,
+              eventId: `refund_${dto.providerPaymentId}_${instNum}`,
               providerPaymentId: dto.providerPaymentId,
               installmentId: inst.id,
               instructorId: instructorId || undefined,
@@ -339,7 +344,26 @@ export class InstallmentService {
       }
       console.log(`✅ [InstallmentService] Successfully recorded refund settlement for payment ${dto.providerPaymentId}`);
     } else {
-      console.warn(`⚠️ [InstallmentService] No installment found for refund on payment ${dto.providerPaymentId}`);
+      console.warn(`⚠️ [InstallmentService] No installment found for refund on payment ${dto.providerPaymentId}. Creating standalone refund settlement.`);
+      const instNum = dto.installmentNumber || 1;
+      const settlementId = dto.providerSettlementId || `${dto.providerPaymentId}_refund_${instNum}`;
+      const gross = Math.abs(dto.refundAmountCents);
+      const platformFee = Math.round(gross * 0.10);
+      const net = gross - platformFee;
+
+      await supabase
+        .from('payment_settlements')
+        .upsert({
+          provider_payment_id: dto.providerPaymentId,
+          provider_settlement_id: settlementId,
+          settlement_type: 'REFUND',
+          gross_amount: -gross,
+          net_amount: -net,
+          fee_amount: 0,
+          platform_fee: -platformFee,
+          instructor_amount: -net,
+          settled_at: refundDate
+        }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
     }
   }
 }

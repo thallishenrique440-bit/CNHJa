@@ -17,7 +17,7 @@ export interface CancellationResult {
   alreadyProcessed: boolean;
   reason: CancellationReason;
   status: 'cancelled' | 'expired';
-  paymentStatus: 'refunded' | 'released' | 'failed';
+  paymentStatus: 'refunded' | 'released' | 'failed' | 'refund_requested';
   isPaid: boolean;
   processedCount: number;
   groupId?: string;
@@ -195,7 +195,8 @@ export class BookingCancellationCore {
 
       // 5. Asaas Gateway Integration
       let isPaid = false;
-      let isAlreadyRefunded = false;
+      let isRefundRequestedOrConfirmed = false;
+      let isRefundConfirmed = false;
 
       if (paymentId && asaasApiKey) {
         console.log(`[BookingCancellationCore] Consulting Asaas payment details for ${paymentId} (reason: ${reason})`);
@@ -210,12 +211,13 @@ export class BookingCancellationCore {
             const asaasStatus = (paymentData.status || '').toUpperCase();
 
             isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
-            isAlreadyRefunded = ['REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+            isRefundRequestedOrConfirmed = ['REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+            isRefundConfirmed = asaasStatus === 'REFUNDED';
 
-            console.log(`[BookingCancellationCore] Asaas status: ${asaasStatus}, installment: ${installmentId || 'none'}, isPaid: ${isPaid}, isAlreadyRefunded: ${isAlreadyRefunded}`);
+            console.log(`[BookingCancellationCore] Asaas status: ${asaasStatus}, installment: ${installmentId || 'none'}, isPaid: ${isPaid}, isRefundRequestedOrConfirmed: ${isRefundRequestedOrConfirmed}, isRefundConfirmed: ${isRefundConfirmed}`);
 
-            if (isAlreadyRefunded) {
-              console.log(`✅ [BookingCancellationCore] Payment ${paymentId} is ALREADY refunded in Asaas (${asaasStatus}). Skipping Asaas API refund call.`);
+            if (isRefundRequestedOrConfirmed) {
+              console.log(`✅ [BookingCancellationCore] Payment ${paymentId} refund already requested or confirmed in Asaas (${asaasStatus}). Skipping Asaas API refund call.`);
             } else if (isPaid) {
               // Calculate total refund value in Reais
               const totalPriceCentavos = appointmentsToCancel.reduce((sum: number, a: any) => sum + (a.price || 0), 0);
@@ -331,7 +333,7 @@ export class BookingCancellationCore {
           }
         } catch (gatewayErr: any) {
           console.error(`⚠️ Gateway operation warning for payment ${paymentId}:`, gatewayErr?.message || gatewayErr);
-          if (isPaid && !isAlreadyRefunded) throw gatewayErr; // Re-throw if refund failed for paid transaction
+          if (isPaid && !isRefundRequestedOrConfirmed) throw gatewayErr; // Re-throw if refund failed for paid transaction
         }
       } else if (paymentId) {
         console.warn(`[BookingCancellationCore] Missing Asaas API key. Skipping gateway call for ${paymentId}.`);
@@ -340,28 +342,54 @@ export class BookingCancellationCore {
       // 6. Update payment_installments table (SSOT)
       if (paymentId || appointment.group_id) {
         try {
-          const installmentStatus = isPaid ? 'REFUNDED' : 'CANCELLED';
-          let piQuery = adminClient
-            .from('payment_installments')
-            .update({
-              status: installmentStatus,
-              updated_at: new Date().toISOString()
-            });
+          // Only update installment to 'REFUNDED' if Asaas confirmed the refund explicitly (status === 'REFUNDED').
+          // Otherwise, if refund is pending asynchronous confirmation, leave installment in its current state.
+          if (!isPaid) {
+            let piQuery = adminClient
+              .from('payment_installments')
+              .update({
+                status: 'CANCELLED',
+                updated_at: new Date().toISOString()
+              });
 
-          if (appointment.group_id && paymentId) {
-            piQuery = piQuery.or(`group_id.eq.${appointment.group_id},provider_payment_id.eq.${paymentId}`);
-          } else if (appointment.group_id) {
-            piQuery = piQuery.eq('group_id', appointment.group_id);
+            if (appointment.group_id && paymentId) {
+              piQuery = piQuery.or(`group_id.eq.${appointment.group_id},provider_payment_id.eq.${paymentId}`);
+            } else if (appointment.group_id) {
+              piQuery = piQuery.eq('group_id', appointment.group_id);
+            } else {
+              piQuery = piQuery.eq('provider_payment_id', paymentId);
+            }
+
+            const { error: piErr } = await piQuery;
+            if (piErr) {
+              console.warn(`⚠️ Error updating payment_installments for ${paymentId || appointment.group_id}:`, piErr.message);
+            } else {
+              console.log(`✅ payment_installments updated to CANCELLED for unpaid ${paymentId || appointment.group_id}`);
+            }
+          } else if (isRefundConfirmed) {
+            let piQuery = adminClient
+              .from('payment_installments')
+              .update({
+                status: 'REFUNDED',
+                updated_at: new Date().toISOString()
+              });
+
+            if (appointment.group_id && paymentId) {
+              piQuery = piQuery.or(`group_id.eq.${appointment.group_id},provider_payment_id.eq.${paymentId}`);
+            } else if (appointment.group_id) {
+              piQuery = piQuery.eq('group_id', appointment.group_id);
+            } else {
+              piQuery = piQuery.eq('provider_payment_id', paymentId);
+            }
+
+            const { error: piErr } = await piQuery;
+            if (piErr) {
+              console.warn(`⚠️ Error updating payment_installments for ${paymentId || appointment.group_id}:`, piErr.message);
+            } else {
+              console.log(`✅ payment_installments updated to REFUNDED for confirmed refund ${paymentId || appointment.group_id}`);
+            }
           } else {
-            piQuery = piQuery.eq('provider_payment_id', paymentId);
-          }
-
-          const { error: piErr } = await piQuery;
-
-          if (piErr) {
-            console.warn(`⚠️ Error updating payment_installments for ${paymentId || appointment.group_id}:`, piErr.message);
-          } else {
-            console.log(`✅ payment_installments updated to ${installmentStatus} for ${paymentId || appointment.group_id}`);
+            console.log(`ℹ️ [BookingCancellationCore] Refund requested at Asaas for ${paymentId}. payment_installments status preserved pending async confirmation.`);
           }
         } catch (piEx) {
           console.warn(`⚠️ Exception updating payment_installments:`, piEx);
@@ -371,14 +399,17 @@ export class BookingCancellationCore {
       // 7. Update Financial Transactions / Ledger / Projections
       if (isPaid && paymentId) {
         try {
-          // Mark original lesson_payment as failed/cancelled
-          await adminClient
-            .from('transactions')
-            .update({ status: 'failed' })
-            .eq('provider_payment_id', paymentId)
-            .eq('type', 'lesson_payment');
+          if (isRefundConfirmed) {
+            // Mark original lesson_payment as failed/cancelled only if refund is confirmed
+            await adminClient
+              .from('transactions')
+              .update({ status: 'failed' })
+              .eq('provider_payment_id', paymentId)
+              .eq('type', 'lesson_payment');
+          }
 
-          // Upsert negative refund transactions
+          // Upsert refund transaction (pending if requested, completed if refund is confirmed)
+          const refundTxStatus = isRefundConfirmed ? 'completed' : 'pending';
           for (const apt of appointmentsToCancel) {
             const gross = apt.price || 0;
             const fee = Math.floor(gross * 0.1);
@@ -395,15 +426,20 @@ export class BookingCancellationCore {
                 gross_amount: -gross,
                 platform_fee: -fee,
                 net_amount: -net,
-                status: 'completed',
+                status: refundTxStatus,
                 provider_name: 'asaas',
                 provider_payment_id: paymentId,
                 event_date: new Date().toISOString(),
                 description: reason === 'instructor_rejected' ? 'Estorno de Aula via Asaas' : 'Estorno por Expiração de Solicitação',
-                metadata: { provider: 'asaas', note: reason }
+                metadata: {
+                  provider: 'asaas',
+                  note: reason,
+                  refund_requested_at: new Date().toISOString(),
+                  asaas_refund_status: isRefundConfirmed ? 'REFUNDED' : 'REFUND_REQUESTED'
+                }
               }, { onConflict: 'appointment_id,type' });
           }
-          console.log(`✅ Logged refund transactions for ${appointmentsToCancel.length} appointment(s).`);
+          console.log(`✅ Logged refund transactions (${refundTxStatus}) for ${appointmentsToCancel.length} appointment(s).`);
         } catch (txErr) {
           console.error(`⚠️ Error updating financial transactions:`, txErr);
         }
@@ -451,7 +487,7 @@ export class BookingCancellationCore {
 
       // 8. Update Appointments Table
       const targetStatus: 'cancelled' | 'expired' = reason === 'instructor_rejected' ? 'cancelled' : 'expired';
-      const paymentStatus: 'refunded' | 'released' = isPaid ? 'refunded' : 'released';
+      const paymentStatus = isPaid ? (isRefundConfirmed ? 'refunded' : 'refund_requested') : 'released';
 
       const updateData: Record<string, any> = {
         status: targetStatus,

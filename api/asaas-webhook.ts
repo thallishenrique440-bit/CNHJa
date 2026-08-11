@@ -976,48 +976,51 @@ export default async function handler(req: Request, res: Response) {
         });
       }
 
-      const cancellingApts = apts.filter(a => a.status === 'cancelling');
-
-      if (cancellingApts.length === 0) {
-        console.log(`ℹ️ [ASAAS WEBHOOK] No appointments in 'cancelling' status for payment ${currentPaymentId} (already cancelled or not cancelling). Idempotent no-op.`);
-        await finalizeLedger('PROCESSED');
-        return res.status(200).json({
-          success: true,
-          message: 'Refund event processed (idempotent/no-op)',
-          event,
-          timestamp
-        });
+      // Update payment_status = 'refunded' on appointments and transition 'cancelling' -> 'cancelled' if applicable
+      for (const apt of apts) {
+        const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
+        await supabaseAdmin
+          .from('appointments')
+          .update({
+            status: newStatus,
+            payment_status: 'refunded',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', apt.id);
       }
 
-      const { data: updatedApts, error: updateErr } = await supabaseAdmin
-        .from('appointments')
-        .update({
-          status: 'cancelled',
-          payment_status: 'refunded',
-          updated_at: new Date().toISOString()
-        })
-        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`)
-        .eq('status', 'cancelling')
-        .select('id');
-
-      if (updateErr) {
-        console.error(`❌ [ASAAS WEBHOOK] Error updating appointments to cancelled:`, updateErr.message);
-        await finalizeLedger('FAILED', updateErr.message);
-        return res.status(500).json({ error: 'Database update failed' });
-      }
-
-      console.log(`✅ [ASAAS WEBHOOK] Successfully reconciled ${updatedApts?.length || 0} appointment(s) from 'cancelling' to 'cancelled'.`);
-
-      // Record Refund Settlement in payment_installments & payment_settlements
+      // Mark refund transactions as completed and lesson_payment transactions as failed
       try {
+        await supabaseAdmin
+          .from('transactions')
+          .update({ status: 'completed' })
+          .eq('provider_payment_id', currentPaymentId)
+          .eq('type', 'refund');
+
+        await supabaseAdmin
+          .from('transactions')
+          .update({ status: 'failed' })
+          .eq('provider_payment_id', currentPaymentId)
+          .eq('type', 'lesson_payment');
+      } catch (txErr) {
+        console.warn(`⚠️ [ASAAS WEBHOOK] Error updating transaction statuses on refund:`, txErr);
+      }
+
+      console.log(`✅ [ASAAS WEBHOOK] Successfully reconciled ${apts.length} appointment(s) to payment_status 'refunded'.`);
+
+      // Record Refund Settlement in payment_installments & payment_settlements (SSOT)
+      try {
+        const instNum = payload.payment?.installmentNumber || 1;
         const refundVal = Math.round((payload.payment?.value || 0) * 100);
         const refundGroupId = apts && apts.length > 0 ? apts[0].group_id : null;
+        const providerSettlementId = `${currentPaymentId}_refund_${instNum}`;
+
         await InstallmentService.recordRefundSettlement(supabaseAdmin, {
           providerPaymentId: currentPaymentId,
           groupId: refundGroupId,
-          installmentNumber: payload.payment?.installmentNumber,
+          installmentNumber: instNum,
           refundAmountCents: refundVal,
-          providerSettlementId: payload.payment?.id ? `${payload.payment.id}_refund` : undefined,
+          providerSettlementId: providerSettlementId,
           refundDate: new Date().toISOString()
         });
       } catch (refErr) {
