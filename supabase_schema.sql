@@ -259,12 +259,12 @@ EXCEPTION
     WHEN others THEN NULL;
 END $$;
 
--- 2. Atualizar Status de Pagamento (Adicionar authorized, released)
+-- 2. Atualizar Status de Pagamento (Adicionar authorized, released, refund_requested)
 DO $$
 BEGIN
     ALTER TABLE public.appointments DROP CONSTRAINT IF EXISTS appointments_payment_status_check;
     ALTER TABLE public.appointments ADD CONSTRAINT appointments_payment_status_check
-        CHECK (payment_status IN ('pending', 'paid', 'failed', 'refunded', 'authorized', 'released'));
+        CHECK (payment_status IN ('pending', 'paid', 'failed', 'refunded', 'authorized', 'released', 'refund_requested'));
 EXCEPTION
     WHEN others THEN NULL;
 END $$;

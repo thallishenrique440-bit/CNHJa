@@ -102,7 +102,71 @@ Deno.serve(async (req) => {
       const paymentData = await response.json();
       const asaasStatus = paymentData?.status?.toUpperCase();
 
-      if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
+      // Check if refund is completed in Asaas (top-level status OR inside paymentData.refunds collection)
+      const hasCompletedRefund = Array.isArray(paymentData?.refunds) && paymentData.refunds.some(
+        (r: any) => ['DONE', 'REFUNDED'].includes(r?.status?.toUpperCase())
+      );
+      const isRefunded = ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(asaasStatus) || hasCompletedRefund;
+
+      if (isRefunded) {
+        console.log(`✅ Reconciling Group ${groupId}: Asaas is refunded (status: ${asaasStatus}, hasCompletedRefund: ${hasCompletedRefund}).`);
+        action = 'repaired_refunded';
+
+        // Update appointments payment_status to 'refunded' and transition 'cancelling' -> 'cancelled' if needed
+        const { data: aptsToUpdate } = await supabaseAdmin
+          .from('appointments')
+          .select('id, status')
+          .eq('group_id', groupId);
+
+        const targetApts = (aptsToUpdate && aptsToUpdate.length > 0) ? aptsToUpdate : groupApts;
+
+        for (const apt of targetApts) {
+          const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
+          await supabaseAdmin
+            .from('appointments')
+            .update({
+              status: newStatus,
+              payment_status: 'refunded',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', apt.id);
+        }
+
+        // Update transaction statuses
+        try {
+          await supabaseAdmin
+            .from('transactions')
+            .update({ status: 'completed' })
+            .eq('provider_payment_id', paymentId)
+            .eq('type', 'refund');
+
+          await supabaseAdmin
+            .from('transactions')
+            .update({ status: 'failed' })
+            .eq('provider_payment_id', paymentId)
+            .eq('type', 'lesson_payment');
+        } catch (txErr) {
+          console.warn('⚠️ [Sync job] Error updating transaction statuses for refund:', txErr);
+        }
+
+        // Reconcile payment_installments & payment_settlements for refund via InstallmentService
+        try {
+          const instNum = paymentData?.installmentNumber || 1;
+          const grossVal = Math.round((paymentData?.value || 0) * 100);
+          const providerSettlementId = `${paymentId}_refund_${instNum}`;
+
+          await InstallmentService.recordRefundSettlement(supabaseAdmin, {
+            providerPaymentId: paymentId,
+            groupId: groupId,
+            installmentNumber: instNum,
+            refundAmountCents: grossVal,
+            providerSettlementId: providerSettlementId,
+            refundDate: new Date().toISOString()
+          });
+        } catch (refSyncErr) {
+          console.error('⚠️ [Sync job] Error syncing refund installment/settlement:', refSyncErr);
+        }
+      } else if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
         const hasInvalidStatus = allGroupApts?.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
         if (hasInvalidStatus) {
           console.log(`ℹ️ Group ${groupId} is paid on Asaas but already expired/cancelled in database. Skipping pending_approval transition.`);
@@ -227,64 +291,6 @@ Deno.serve(async (req) => {
           }
         } catch (instSyncErr) {
           console.error('⚠️ [Sync job] Error syncing installment/settlement:', instSyncErr);
-        }
-      } else if (['REFUNDED', 'PARTIALLY_REFUNDED'].includes(asaasStatus)) {
-        console.log(`✅ Reconciling Group ${groupId}: Asaas is refunded (${asaasStatus}).`);
-        action = 'repaired_refunded';
-
-        // Update appointments payment_status to 'refunded' and transition 'cancelling' -> 'cancelled' if needed
-        const { data: aptsToUpdate } = await supabaseAdmin
-          .from('appointments')
-          .select('id, status')
-          .eq('group_id', groupId);
-
-        if (aptsToUpdate) {
-          for (const apt of aptsToUpdate) {
-            const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
-            await supabaseAdmin
-              .from('appointments')
-              .update({
-                status: newStatus,
-                payment_status: 'refunded',
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', apt.id);
-          }
-        }
-
-        // Update transaction statuses
-        try {
-          await supabaseAdmin
-            .from('transactions')
-            .update({ status: 'completed' })
-            .eq('provider_payment_id', paymentId)
-            .eq('type', 'refund');
-
-          await supabaseAdmin
-            .from('transactions')
-            .update({ status: 'failed' })
-            .eq('provider_payment_id', paymentId)
-            .eq('type', 'lesson_payment');
-        } catch (txErr) {
-          console.warn('⚠️ [Sync job] Error updating transaction statuses for refund:', txErr);
-        }
-
-        // Reconcile payment_installments & payment_settlements for refund via InstallmentService
-        try {
-          const instNum = paymentData?.installmentNumber || 1;
-          const grossVal = Math.round((paymentData?.value || 0) * 100);
-          const providerSettlementId = `${paymentId}_refund_${instNum}`;
-
-          await InstallmentService.recordRefundSettlement(supabaseAdmin, {
-            providerPaymentId: paymentId,
-            groupId: groupId,
-            installmentNumber: instNum,
-            refundAmountCents: grossVal,
-            providerSettlementId: providerSettlementId,
-            refundDate: new Date().toISOString()
-          });
-        } catch (refSyncErr) {
-          console.error('⚠️ [Sync job] Error syncing refund installment/settlement:', refSyncErr);
         }
       } else {
         console.log(`ℹ️ Group ${groupId}: Asaas status is ${asaasStatus}. No action taken.`);
