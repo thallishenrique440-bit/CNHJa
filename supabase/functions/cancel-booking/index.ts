@@ -73,7 +73,7 @@ Deno.serve(async (req) => {
     }
 
     // Validation 1: Already cancelled or cancelling?
-    if (appointment.status === 'cancelled' || appointment.status === 'cancelling') {
+    if (appointment.status === 'cancelled' || appointment.status === 'cancelling' || appointment.status === 'expired') {
       return new Response(
         JSON.stringify({ message: 'Appointment already cancelled or cancellation in progress', appointment }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -141,6 +141,8 @@ Deno.serve(async (req) => {
     }));
 
     let isPaid = appointment.payment_status === 'paid' || appointment.payment_status === 'received' || appointment.payment_status === 'confirmed';
+    let isRefundRequestedOrConfirmed = false;
+    let isRefundConfirmed = false;
 
     // Custom Error class to identify deterministic vs indeterminate Asaas errors
     class AsaasError extends Error {
@@ -186,9 +188,15 @@ Deno.serve(async (req) => {
         console.log(JSON.stringify(paymentData, null, 2));
 
         const installmentId = paymentData.installment;
-        isPaid = paymentData.status === 'RECEIVED' || paymentData.status === 'CONFIRMED';
+        const asaasStatus = (paymentData.status || '').toUpperCase();
 
-        if (isPaid) {
+        isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+        isRefundRequestedOrConfirmed = ['REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+        isRefundConfirmed = asaasStatus === 'REFUNDED';
+
+        if (isRefundRequestedOrConfirmed) {
+          console.log(`✅ [Asaas] Payment ${paymentId} refund already requested or confirmed in Asaas (${asaasStatus}). Skipping Asaas API refund call.`);
+        } else if (isPaid) {
           const refundValue = appointment.price / 100;
           let totalPurchaseValue = paymentData.value || 0;
           let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
@@ -310,11 +318,25 @@ Deno.serve(async (req) => {
             console.log(responseBody);
 
             if (!refundRes.ok) {
-              console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${responseBody}`);
-              const is4xx = refundRes.status >= 400 && refundRes.status < 500;
-              throw new AsaasError(`Asaas refund failed: ${responseBody}`, is4xx, refundRes.status);
+              const errLower = responseBody.toLowerCase();
+              if (errLower.includes('already_refunded') || errLower.includes('estornada') || errLower.includes('já foi estornado')) {
+                console.warn(`⚠️ Asaas returned already refunded for ${paymentId}: ${responseBody}. Treating as success.`);
+                isRefundRequestedOrConfirmed = true;
+              } else {
+                console.error(`❌ Asaas refund failed for payment ${paymentId}. HTTP Status: ${refundRes.status}. Error: ${responseBody}`);
+                const is4xx = refundRes.status >= 400 && refundRes.status < 500;
+                throw new AsaasError(`Asaas refund failed: ${responseBody}`, is4xx, refundRes.status);
+              }
+            } else {
+              try {
+                const refundData = JSON.parse(responseBody);
+                const refStatus = (refundData.status || refundData.state || '').toUpperCase();
+                if (refStatus === 'DONE' || refStatus === 'REFUNDED') {
+                  isRefundConfirmed = true;
+                }
+              } catch (_) {}
+              console.log(`✅ Asaas payment ${paymentId} partially refunded / refund requested successfully.`);
             }
-            console.log(`✅ Asaas payment ${paymentId} partially refunded successfully.`);
           } else {
             // Installment Flow
             console.log(`[Asaas Installment Refund] Issuing partial refund of ${refundValue} for installment ${installmentId}. Payload:`, JSON.stringify(refundPayload));
@@ -334,11 +356,25 @@ Deno.serve(async (req) => {
             console.log(responseBody);
 
             if (!refundRes.ok) {
-              console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${responseBody}`);
-              const is4xx = refundRes.status >= 400 && refundRes.status < 500;
-              throw new AsaasError(`Asaas installment refund failed: ${responseBody}`, is4xx, refundRes.status);
+              const errLower = responseBody.toLowerCase();
+              if (errLower.includes('already_refunded') || errLower.includes('estornada') || errLower.includes('já foi estornado')) {
+                console.warn(`⚠️ Asaas returned already refunded for installment ${installmentId}: ${responseBody}. Treating as success.`);
+                isRefundRequestedOrConfirmed = true;
+              } else {
+                console.error(`❌ Asaas installment refund failed for installment ${installmentId}: ${responseBody}`);
+                const is4xx = refundRes.status >= 400 && refundRes.status < 500;
+                throw new AsaasError(`Asaas installment refund failed: ${responseBody}`, is4xx, refundRes.status);
+              }
+            } else {
+              try {
+                const refundData = JSON.parse(responseBody);
+                const refStatus = (refundData.status || refundData.state || '').toUpperCase();
+                if (refStatus === 'DONE' || refStatus === 'REFUNDED') {
+                  isRefundConfirmed = true;
+                }
+              } catch (_) {}
+              console.log(`✅ Asaas installment ${installmentId} partially refunded / refund requested successfully.`);
             }
-            console.log(`✅ Asaas installment ${installmentId} partially refunded successfully.`);
           }
         } else {
           // Pending / Unpaid Flow
@@ -398,12 +434,37 @@ Deno.serve(async (req) => {
       throw asaasError;
     }
 
+    // 4.5. Update payment_installments table (SSOT)
+    if (paymentId) {
+      try {
+        if (!isPaid) {
+          await adminClient
+            .from('payment_installments')
+            .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
+            .eq('provider_payment_id', paymentId);
+        } else if (isRefundConfirmed) {
+          await adminClient
+            .from('payment_installments')
+            .update({ status: 'REFUNDED', updated_at: new Date().toISOString() })
+            .eq('provider_payment_id', paymentId);
+        } else {
+          console.log(`ℹ️ [Cancel Booking] Refund requested at Asaas for ${paymentId}. payment_installments status preserved pending async confirmation.`);
+        }
+      } catch (piEx) {
+        console.warn(`⚠️ Exception updating payment_installments:`, piEx);
+      }
+    }
+
     // 5. Update appointment in DB
+    const targetPaymentStatus = isPaid
+      ? (isRefundConfirmed ? 'refunded' : 'refund_requested')
+      : 'released';
+
     const { error: updateError } = await adminClient
       .from('appointments')
       .update({
         status: 'cancelled',
-        payment_status: isPaid ? 'refunded' : 'released',
+        payment_status: targetPaymentStatus,
         cancelled_by: actor,
         cancelled_reason: cancel_reason || (actor === 'instructor' ? 'instructor_cancelled' : 'user_cancelled'),
         updated_at: new Date().toISOString()
@@ -418,6 +479,15 @@ Deno.serve(async (req) => {
     // 6. Create refund transaction if paid
     if (isPaid) {
       try {
+        if (isRefundConfirmed) {
+          await adminClient
+            .from('transactions')
+            .update({ status: 'failed' })
+            .eq('provider_payment_id', paymentId)
+            .eq('type', 'lesson_payment');
+        }
+
+        const refundTxStatus = isRefundConfirmed ? 'completed' : 'pending';
         const gross_amount = appointment.price || 0;
         const platform_fee = Math.floor(gross_amount * 0.1);
         const net_amount = gross_amount - platform_fee;
@@ -433,18 +503,23 @@ Deno.serve(async (req) => {
             gross_amount: -gross_amount,
             platform_fee: -platform_fee,
             net_amount: -net_amount,
-            status: 'completed',
+            status: refundTxStatus,
             provider_name: 'asaas',
             provider_payment_id: paymentId || null,
             event_date: new Date().toISOString(),
             description: 'Estorno de Aula via Asaas',
-            metadata: { provider: 'asaas', note: actor === 'instructor' ? 'instructor_cancelled' : 'student_cancelled' }
+            metadata: {
+              provider: 'asaas',
+              note: actor === 'instructor' ? 'instructor_cancelled' : 'student_cancelled',
+              refund_requested_at: new Date().toISOString(),
+              asaas_refund_status: isRefundConfirmed ? 'REFUNDED' : 'REFUND_REQUESTED'
+            }
           }, { onConflict: 'appointment_id,type' });
 
         if (refundTxErr) {
           console.error(`❌ [Cancel Booking] Error creating refund transaction:`, refundTxErr.message);
         } else {
-          console.log(`✅ [Cancel Booking] Logged refund transaction for appointment ${appointment.id}`);
+          console.log(`✅ [Cancel Booking] Logged refund transaction (${refundTxStatus}) for appointment ${appointment.id}`);
         }
       } catch (txErr) {
         console.error(`⚠️ [Cancel Booking] Unexpected error processing financial records:`, txErr);
@@ -480,7 +555,8 @@ Deno.serve(async (req) => {
       JSON.stringify({ 
         message: 'Cancelamento e estorno processados com sucesso.', 
         status: 'cancelled',
-        appointment: { ...appointment, status: 'cancelled', payment_status: isPaid ? 'refunded' : 'released' }
+        paymentStatus: targetPaymentStatus,
+        appointment: { ...appointment, status: 'cancelled', payment_status: targetPaymentStatus }
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

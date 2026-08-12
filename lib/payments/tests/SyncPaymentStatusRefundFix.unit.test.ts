@@ -1,4 +1,6 @@
 // Function under test logic isolated for unit testing
+export {};
+
 function evaluateSyncDecision(paymentData: any, allGroupApts: Array<{ status: string }>) {
   const asaasStatus = paymentData?.status?.toUpperCase();
 
