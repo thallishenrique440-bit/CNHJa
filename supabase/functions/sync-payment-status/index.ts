@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { NotificationService } from '../_shared/NotificationService.ts'
-import { asaasFetch } from '../_shared/asaasClient.ts'
+import { asaasFetch, getAsaasRefundState } from '../_shared/asaasClient.ts'
 import { InstallmentService } from '../_shared/InstallmentService.ts'
 
 const supabaseAdmin = createClient(
@@ -169,6 +169,77 @@ Deno.serve(async (req) => {
       } else if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
         const hasInvalidStatus = allGroupApts?.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
         if (hasInvalidStatus) {
+          const refundState = getAsaasRefundState(paymentData);
+
+          // Check if DB has a pending refund transaction for this payment
+          const { data: pendingRefundTxs } = await supabaseAdmin
+            .from('transactions')
+            .select('id, metadata, status')
+            .eq('provider_payment_id', paymentId)
+            .eq('type', 'refund')
+            .eq('status', 'pending');
+
+          if (pendingRefundTxs && pendingRefundTxs.length > 0) {
+            if (refundState === 'DENIED') {
+              // Explicit evidence of DENIED returned by gateway
+              console.log(`⚠️ [Sync job] Payment ${paymentId} has explicit refund DENIED on gateway. Reconciling refund tx to 'failed'.`);
+              for (const tx of pendingRefundTxs) {
+                const existingMeta = (tx.metadata && typeof tx.metadata === 'object') ? tx.metadata : {};
+                await supabaseAdmin
+                  .from('transactions')
+                  .update({
+                    status: 'failed',
+                    metadata: {
+                      ...existingMeta,
+                      sync_reconciliation: 'explicit_refund_denied_on_gateway',
+                      sync_reconciled_at: new Date().toISOString()
+                    }
+                  })
+                  .eq('id', tx.id);
+              }
+
+              for (const apt of (allGroupApts || groupApts)) {
+                if (apt.payment_status === 'refund_requested') {
+                  await supabaseAdmin
+                    .from('appointments')
+                    .update({
+                      payment_status: 'failed',
+                      updated_at: new Date().toISOString()
+                    })
+                    .eq('id', apt.id);
+                }
+              }
+
+              return { groupId, status: 'success', action: 'reconciled_refund_explicitly_denied' };
+            } else if (refundState === 'COMPLETED') {
+              console.log(`✅ [Sync job] Payment ${paymentId} refund confirmed as COMPLETED on gateway. Reconciling refund to completed.`);
+              // Reconcile as refunded
+              for (const apt of (allGroupApts || groupApts)) {
+                await supabaseAdmin
+                  .from('appointments')
+                  .update({
+                    payment_status: 'refunded',
+                    updated_at: new Date().toISOString()
+                  })
+                  .eq('id', apt.id);
+              }
+
+              await supabaseAdmin
+                .from('transactions')
+                .update({ status: 'completed' })
+                .eq('provider_payment_id', paymentId)
+                .eq('type', 'refund');
+
+              return { groupId, status: 'success', action: 'reconciled_refund_completed' };
+            } else {
+              // refundState is PENDING, NONE, or UNKNOWN
+              // CRITICAL: Absence of refund evidence is NOT evidence of refund denied!
+              // Preserve pending state in DB.
+              console.log(`ℹ️ Group ${groupId} is ${asaasStatus} on gateway, refundState is ${refundState}. Preserving pending refund state in DB.`);
+              return { groupId, status: 'skipped', reason: `refund_state_is_${refundState.toLowerCase()}_preserving_pending` };
+            }
+          }
+
           console.log(`ℹ️ Group ${groupId} is paid on Asaas but already expired/cancelled in database. Skipping pending_approval transition.`);
           return { groupId, status: 'skipped', reason: 'group_already_cancelled_or_expired' };
         }

@@ -35,7 +35,7 @@ async function runTests() {
 
   // TEST 3: Stateful In-Memory DB Table with Constraint unique_settlement_idempotency
   console.log('\n📌 TEST 3: InstallmentService.recordRefundSettlement Idempotency with Constraint simulation');
-
+  
   // Simulated PostgreSQL table enforcing UNIQUE (provider_payment_id, settlement_type, provider_settlement_id)
   const settlementDbRows: Map<string, any> = new Map();
   const installmentDbRows: Map<string, any> = new Map();
@@ -131,7 +131,7 @@ async function runTests() {
 
   // TEST 4: Verify BookingCancellationCore Logic Isolation for REFUND_REQUESTED vs REFUNDED
   console.log('\n📌 TEST 4: BookingCancellationCore REFUND_REQUESTED vs REFUNDED Logic');
-
+  
   const testAsaasStatuses = ['RECEIVED', 'CONFIRMED', 'REFUND_REQUESTED', 'REFUNDED'];
   for (const status of testAsaasStatuses) {
     const isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(status);

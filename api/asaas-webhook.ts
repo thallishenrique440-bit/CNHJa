@@ -965,7 +965,7 @@ export default async function handler(req: Request, res: Response) {
         return res.status(500).json({ error: 'Database verification failed' });
       }
 
-      if (!apts || apts.length === 0) {
+      if (!Array.isArray(apts) || apts.length === 0) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for refunded payment: ${currentPaymentId}`);
         await finalizeLedger('PROCESSED');
         return res.status(200).json({
@@ -977,16 +977,18 @@ export default async function handler(req: Request, res: Response) {
       }
 
       // Update payment_status = 'refunded' on appointments and transition 'cancelling' -> 'cancelled' if applicable
-      for (const apt of apts) {
-        const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
-        await supabaseAdmin
-          .from('appointments')
-          .update({
-            status: newStatus,
-            payment_status: 'refunded',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', apt.id);
+      if (Array.isArray(apts) && apts.length > 0) {
+        for (const apt of apts) {
+          const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
+          await supabaseAdmin
+            .from('appointments')
+            .update({
+              status: newStatus,
+              payment_status: 'refunded',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', apt.id);
+        }
       }
 
       // Mark refund transactions as completed and lesson_payment transactions as failed
@@ -1032,6 +1034,101 @@ export default async function handler(req: Request, res: Response) {
         success: true,
         message: 'Refund event reconciled successfully',
         event,
+        timestamp
+      });
+    } else if (event.toUpperCase() === 'PAYMENT_REFUND_DENIED') {
+      const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
+      const denialReason = payload.additionalInfo?.denialReason || payload.payment?.denialReason || payload.denialReason || payload.payment?.additionalInfo?.denialReason || 'Falha ao processar a transferência.';
+
+      if (!currentPaymentId) {
+        console.error('❌ Asaas Webhook: Payment ID missing for PAYMENT_REFUND_DENIED event.');
+        await finalizeLedger('FAILED', 'Missing paymentId');
+        return res.status(400).json({ error: 'Missing paymentId' });
+      }
+
+      console.log(`⚠️ [ASAAS WEBHOOK] Refund denied event received for payment ${currentPaymentId}. Reason: ${denialReason}`);
+
+      const { data: apts, error: fetchErr } = await supabaseAdmin
+        .from('appointments')
+        .select('id, status, payment_status, group_id')
+        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
+
+      if (fetchErr) {
+        console.error(`❌ [ASAAS WEBHOOK] Error querying appointments for PAYMENT_REFUND_DENIED:`, fetchErr.message);
+        await finalizeLedger('FAILED', fetchErr.message);
+        return res.status(500).json({ error: 'Database verification failed' });
+      }
+
+      // Mark refund transactions as failed and store denialReason in metadata
+      try {
+        const { data: refundTxs } = await supabaseAdmin
+          .from('transactions')
+          .select('id, metadata')
+          .eq('provider_payment_id', currentPaymentId)
+          .eq('type', 'refund');
+
+        if (refundTxs && refundTxs.length > 0) {
+          for (const tx of refundTxs) {
+            const existingMeta = (tx.metadata && typeof tx.metadata === 'object') ? tx.metadata : {};
+            await supabaseAdmin
+              .from('transactions')
+              .update({
+                status: 'failed',
+                metadata: {
+                  ...existingMeta,
+                  denial_reason: denialReason,
+                  denialReason: denialReason,
+                  denied_at: new Date().toISOString()
+                }
+              })
+              .eq('id', tx.id);
+          }
+        } else if (apts && apts.length > 0) {
+          for (const apt of apts) {
+            await supabaseAdmin
+              .from('transactions')
+              .upsert({
+                appointment_id: apt.id,
+                type: 'refund',
+                status: 'failed',
+                amount: 0,
+                provider_name: 'asaas',
+                provider_payment_id: currentPaymentId,
+                event_date: new Date().toISOString(),
+                description: 'Estorno Negado pelo Asaas',
+                metadata: {
+                  denial_reason: denialReason,
+                  denialReason: denialReason,
+                  denied_at: new Date().toISOString()
+                }
+              }, { onConflict: 'appointment_id,type' });
+          }
+        } else {
+          console.warn(`⚠️ [ASAAS WEBHOOK] No refund transaction or appointments found for payment ${currentPaymentId} on PAYMENT_REFUND_DENIED`);
+        }
+      } catch (txErr) {
+        console.warn(`⚠️ [ASAAS WEBHOOK] Error updating transaction status for PAYMENT_REFUND_DENIED:`, txErr);
+      }
+
+      // Update appointments payment_status = 'failed' (preserves status = 'cancelled')
+      if (apts && apts.length > 0) {
+        for (const apt of apts) {
+          await supabaseAdmin
+            .from('appointments')
+            .update({
+              payment_status: 'failed',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', apt.id);
+        }
+      }
+
+      await finalizeLedger('PROCESSED');
+      return res.status(200).json({
+        success: true,
+        message: 'PAYMENT_REFUND_DENIED event processed successfully',
+        event,
+        denialReason,
         timestamp
       });
     } else {

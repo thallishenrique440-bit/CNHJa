@@ -1,7 +1,9 @@
-import { NotificationService } from './NotificationService.ts'
-import { asaasFetch } from './asaasClient.ts'
+declare const Deno: any;
 
-export type CancellationReason = 'instructor_rejected' | 'auto_expired';
+import { NotificationService } from './NotificationService'
+import { asaasFetch, getAsaasRefundState } from './asaasClient'
+
+export type CancellationReason = 'instructor_rejected' | 'auto_expired' | 'student_cancelled';
 
 export interface CancellationParams {
   appointmentId: string;
@@ -43,8 +45,18 @@ export class BookingCancellationCore {
   static async processCancellation(params: CancellationParams): Promise<CancellationResult> {
     const { appointmentId, reason, initiatedBy, adminClient } = params;
 
-    const asaasApiKey = params.asaasApiKey || Deno.env.get('ASAAS_API_KEY') || '';
-    const asaasApiUrl = params.asaasApiUrl || Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+    const getEnvVar = (name: string) => {
+      try {
+        if (typeof Deno !== 'undefined' && (Deno as any).env) return (Deno as any).env.get(name);
+      } catch (_) {}
+      try {
+        if (typeof process !== 'undefined' && process.env) return process.env[name];
+      } catch (_) {}
+      return '';
+    };
+
+    const asaasApiKey = params.asaasApiKey || getEnvVar('ASAAS_API_KEY') || '';
+    const asaasApiUrl = params.asaasApiUrl || getEnvVar('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
 
     // 1. Fetch target appointment
     const { data: appointment, error: fetchError } = await adminClient
@@ -109,9 +121,19 @@ export class BookingCancellationCore {
         }
       }
 
-      const allowedStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved', 'cancelling'];
+      const allowedStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved'];
       if (!allowedStatuses.includes(appointment.status)) {
-        throw new Error(`Invalid status change: Cannot cancel appointment with status '${appointment.status}'`);
+        return {
+          success: false,
+          alreadyProcessed: true,
+          reason,
+          status: appointment.status,
+          paymentStatus: appointment.payment_status || 'released',
+          isPaid: appointment.payment_status === 'refunded',
+          processedCount: 0,
+          groupId: appointment.group_id || appointment.id,
+          message: `Agendamento em estado não cancelável (status atual: ${appointment.status}).`
+        };
       }
 
       // 4. Fetch Group Appointments
@@ -152,6 +174,7 @@ export class BookingCancellationCore {
 
       // 4.5 Atomic State Lock: Atomically claim appointment(s) by updating status to 'cancelling'
       // This prevents approve-booking from approving the appointment while we process Asaas gateway refund
+      // Note: 'cancelling' is strictly EXCLUDED from source statuses to prevent cancelling -> cancelling lock acquisition
       const targetIds = appointmentsToCancel.map((a: any) => a.id);
 
       const { data: claimedRows, error: claimError } = await adminClient
@@ -161,7 +184,7 @@ export class BookingCancellationCore {
           updated_at: new Date().toISOString()
         })
         .in('id', targetIds)
-        .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'reserved', 'cancelling'])
+        .in('status', ['pending', 'pending_approval', 'awaiting_payment', 'reserved'])
         .select('id, status');
 
       if (claimError) {
@@ -197,6 +220,8 @@ export class BookingCancellationCore {
       let isPaid = false;
       let isRefundRequestedOrConfirmed = false;
       let isRefundConfirmed = false;
+      let isRefundDenied = false;
+      let existingRefundTxs: any[] = [];
 
       if (paymentId && asaasApiKey) {
         console.log(`[BookingCancellationCore] Consulting Asaas payment details for ${paymentId} (reason: ${reason})`);
@@ -210,15 +235,36 @@ export class BookingCancellationCore {
             const installmentId = paymentData.installment;
             const asaasStatus = (paymentData.status || '').toUpperCase();
 
-            isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
-            isRefundRequestedOrConfirmed = ['REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
-            isRefundConfirmed = asaasStatus === 'REFUNDED';
+            const refundState = getAsaasRefundState(paymentData);
 
-            console.log(`[BookingCancellationCore] Asaas status: ${asaasStatus}, installment: ${installmentId || 'none'}, isPaid: ${isPaid}, isRefundRequestedOrConfirmed: ${isRefundRequestedOrConfirmed}, isRefundConfirmed: ${isRefundConfirmed}`);
+            // Check if DB already has a refund transaction for this payment (pending, completed, or failed)
+            const { data: fetchedRefundTxs } = await adminClient
+              .from('transactions')
+              .select('id, status, appointment_id, metadata')
+              .eq('provider_payment_id', paymentId)
+              .eq('type', 'refund')
+              .in('status', ['pending', 'completed', 'failed']);
+
+            existingRefundTxs = fetchedRefundTxs || [];
+
+            const hasPendingDbRefundTx = existingRefundTxs && existingRefundTxs.some((tx: any) => tx.status === 'pending');
+            const hasCompletedDbRefundTx = existingRefundTxs && existingRefundTxs.some((tx: any) => tx.status === 'completed');
+            const hasFailedDbRefundTx = existingRefundTxs && existingRefundTxs.some((tx: any) => tx.status === 'failed');
+
+            isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+            isRefundDenied = refundState === 'DENIED' || hasFailedDbRefundTx;
+            isRefundRequestedOrConfirmed = refundState === 'PENDING' || refundState === 'COMPLETED' || hasPendingDbRefundTx || hasCompletedDbRefundTx || isRefundDenied;
+            isRefundConfirmed = refundState === 'COMPLETED' || hasCompletedDbRefundTx;
+
+            console.log(`[BookingCancellationCore] Asaas status: ${asaasStatus}, refundState: ${refundState}, DB refund tx: pending=${hasPendingDbRefundTx}, completed=${hasCompletedDbRefundTx}, failed=${hasFailedDbRefundTx}, isPaid: ${isPaid}`);
 
             if (isRefundRequestedOrConfirmed) {
-              console.log(`✅ [BookingCancellationCore] Payment ${paymentId} refund already requested or confirmed in Asaas (${asaasStatus}). Skipping Asaas API refund call.`);
-            } else if (isPaid) {
+              if (isRefundDenied) {
+                console.warn(`⚠️ [BookingCancellationCore] Payment ${paymentId} refund was previously DENIED or FAILED (refundState: ${refundState}, DB failed tx: ${hasFailedDbRefundTx}). Skipping automatic POST /refund retry.`);
+              } else {
+                console.log(`✅ [BookingCancellationCore] Payment ${paymentId} refund already requested or confirmed (refundState: ${refundState}). Skipping Asaas API refund call.`);
+              }
+            } else if (isPaid && refundState === 'NONE') {
               // Calculate total refund value in Reais
               const totalPriceCentavos = appointmentsToCancel.reduce((sum: number, a: any) => sum + (a.price || 0), 0);
               let refundValue = totalPriceCentavos > 0 
@@ -243,6 +289,21 @@ export class BookingCancellationCore {
                 }
               }
 
+              // Calculate total nominal price of lessons to avoid ratio contamination by consumer/gateway fees
+              let totalGroupNominalPrice = 0;
+              if (appointment.group_id) {
+                const { data: gApts } = await adminClient
+                  .from('appointments')
+                  .select('price')
+                  .eq('group_id', appointment.group_id);
+                if (gApts && gApts.length > 0) {
+                  totalGroupNominalPrice = gApts.reduce((sum: number, a: any) => sum + ((a.price || 0) / 100), 0);
+                }
+              }
+              if (!totalGroupNominalPrice || totalGroupNominalPrice <= 0) {
+                totalGroupNominalPrice = totalPriceCentavos > 0 ? (totalPriceCentavos / 100) : refundValue;
+              }
+
               // Calculate splits matching cancel-booking logic
               const splitRefunds: Array<{ id: string; value: number }> = [];
               if (Array.isArray(splits) && splits.length > 0) {
@@ -254,7 +315,7 @@ export class BookingCancellationCore {
 
                   let splitRefundValue = 0;
                   if (s.fixedValue !== undefined && s.fixedValue !== null) {
-                    const ratio = (totalPurchaseValue && totalPurchaseValue > 0) ? (refundValue / totalPurchaseValue) : 1;
+                    const ratio = totalGroupNominalPrice > 0 ? Math.min(1, refundValue / totalGroupNominalPrice) : 1;
                     splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
                     splitRefundValue = Math.min(splitRefundValue, s.fixedValue);
                   } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
@@ -272,7 +333,7 @@ export class BookingCancellationCore {
 
               const refundPayload: Record<string, any> = {
                 value: refundValue,
-                description: reason === 'instructor_rejected' ? 'Estorno por recusa do instrutor' : 'Estorno por expiração de solicitação'
+                description: reason === 'instructor_rejected' ? 'Estorno por recusa do instrutor' : (reason === 'student_cancelled' ? 'Estorno por cancelamento do aluno' : 'Estorno por expiração de solicitação')
               };
               if (splitRefunds.length > 0) {
                 refundPayload.splitRefunds = splitRefunds;
@@ -408,12 +469,35 @@ export class BookingCancellationCore {
               .eq('type', 'lesson_payment');
           }
 
-          // Upsert refund transaction (pending if requested, completed if refund is confirmed)
-          const refundTxStatus = isRefundConfirmed ? 'completed' : 'pending';
+          // Upsert refund transaction with strict status precedence:
+          // COMPLETED -> 'completed', DENIED / failed -> 'failed', PENDING / default -> 'pending'
+          // Never transition failed -> pending or failed -> completed!
+          let baseRefundTxStatus = 'pending';
+          if (isRefundConfirmed) {
+            baseRefundTxStatus = 'completed';
+          } else if (isRefundDenied) {
+            baseRefundTxStatus = 'failed';
+          }
+
           for (const apt of appointmentsToCancel) {
             const gross = apt.price || 0;
             const fee = Math.floor(gross * 0.1);
             const net = gross - fee;
+
+            const existingTx = existingRefundTxs?.find((tx: any) => tx.appointment_id === apt.id);
+            let finalStatus = baseRefundTxStatus;
+            if (existingTx?.status === 'failed') {
+              finalStatus = 'failed';
+            }
+
+            const existingMeta = (existingTx?.metadata && typeof existingTx.metadata === 'object') ? existingTx.metadata : {};
+            const mergedMetadata = {
+              ...existingMeta,
+              provider: 'asaas',
+              note: reason,
+              refund_requested_at: existingMeta.refund_requested_at || new Date().toISOString(),
+              asaas_refund_status: finalStatus === 'completed' ? 'REFUNDED' : (finalStatus === 'failed' ? 'DENIED' : 'REFUND_REQUESTED')
+            };
 
             await adminClient
               .from('transactions')
@@ -426,20 +510,15 @@ export class BookingCancellationCore {
                 gross_amount: -gross,
                 platform_fee: -fee,
                 net_amount: -net,
-                status: refundTxStatus,
+                status: finalStatus,
                 provider_name: 'asaas',
                 provider_payment_id: paymentId,
                 event_date: new Date().toISOString(),
-                description: reason === 'instructor_rejected' ? 'Estorno de Aula via Asaas' : 'Estorno por Expiração de Solicitação',
-                metadata: {
-                  provider: 'asaas',
-                  note: reason,
-                  refund_requested_at: new Date().toISOString(),
-                  asaas_refund_status: isRefundConfirmed ? 'REFUNDED' : 'REFUND_REQUESTED'
-                }
+                description: reason === 'instructor_rejected' ? 'Estorno de Aula via Asaas' : (reason === 'student_cancelled' ? 'Estorno por Cancelamento do Aluno' : 'Estorno por Expiração de Solicitação'),
+                metadata: mergedMetadata
               }, { onConflict: 'appointment_id,type' });
           }
-          console.log(`✅ Logged refund transactions (${refundTxStatus}) for ${appointmentsToCancel.length} appointment(s).`);
+          console.log(`✅ Logged refund transactions (${baseRefundTxStatus}) for ${appointmentsToCancel.length} appointment(s).`);
         } catch (txErr) {
           console.error(`⚠️ Error updating financial transactions:`, txErr);
         }

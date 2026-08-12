@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { NotificationService } from '../_shared/NotificationService.ts'
-import { asaasFetch } from '../_shared/asaasClient.ts'
+import { asaasFetch, getAsaasRefundState } from '../_shared/asaasClient.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -111,7 +111,15 @@ Deno.serve(async (req) => {
     }
 
     // 3.5 Compare-And-Set (CAS): Atomically transition status to 'cancelling'
-    const originalStatus = appointment.status;
+    // 'cancelling' is strictly EXCLUDED from validSourceStatuses to prevent cancelling -> cancelling lock re-acquisition
+    const validSourceStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved'];
+    if (!validSourceStatuses.includes(appointment.status)) {
+      return new Response(
+        JSON.stringify({ message: `Appointment status '${appointment.status}' is not eligible for cancellation lock acquisition`, appointment }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const { data: casAppointment, error: casError } = await adminClient
       .from('appointments')
       .update({
@@ -119,7 +127,7 @@ Deno.serve(async (req) => {
         updated_at: new Date().toISOString()
       })
       .eq('id', appointment_id)
-      .eq('status', originalStatus)
+      .in('status', validSourceStatuses)
       .select('id, status')
       .maybeSingle();
 
@@ -190,13 +198,34 @@ Deno.serve(async (req) => {
         const installmentId = paymentData.installment;
         const asaasStatus = (paymentData.status || '').toUpperCase();
 
+        const refundState = getAsaasRefundState(paymentData);
+
+        // Check if DB already has a refund transaction for this payment (pending, completed, or failed)
+        const { data: existingRefundTxs } = await adminClient
+          .from('transactions')
+          .select('id, status')
+          .eq('provider_payment_id', paymentId)
+          .eq('type', 'refund')
+          .in('status', ['pending', 'completed', 'failed']);
+
+        const hasPendingDbRefundTx = existingRefundTxs && existingRefundTxs.some((tx: any) => tx.status === 'pending');
+        const hasCompletedDbRefundTx = existingRefundTxs && existingRefundTxs.some((tx: any) => tx.status === 'completed');
+        const hasFailedDbRefundTx = existingRefundTxs && existingRefundTxs.some((tx: any) => tx.status === 'failed');
+
         isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
-        isRefundRequestedOrConfirmed = ['REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
-        isRefundConfirmed = asaasStatus === 'REFUNDED';
+        const isRefundDenied = refundState === 'DENIED' || hasFailedDbRefundTx;
+        isRefundRequestedOrConfirmed = refundState === 'PENDING' || refundState === 'COMPLETED' || hasPendingDbRefundTx || hasCompletedDbRefundTx || isRefundDenied;
+        isRefundConfirmed = refundState === 'COMPLETED' || hasCompletedDbRefundTx;
+
+        console.log(`[cancel-booking] Asaas status: ${asaasStatus}, refundState: ${refundState}, DB refund tx: pending=${hasPendingDbRefundTx}, completed=${hasCompletedDbRefundTx}, failed=${hasFailedDbRefundTx}, isPaid: ${isPaid}`);
 
         if (isRefundRequestedOrConfirmed) {
-          console.log(`✅ [Asaas] Payment ${paymentId} refund already requested or confirmed in Asaas (${asaasStatus}). Skipping Asaas API refund call.`);
-        } else if (isPaid) {
+          if (isRefundDenied) {
+            console.warn(`⚠️ [cancel-booking] Payment ${paymentId} refund was previously DENIED or FAILED (refundState: ${refundState}, DB failed tx: ${hasFailedDbRefundTx}). Skipping automatic POST /refund retry.`);
+          } else {
+            console.log(`✅ [Asaas] Payment ${paymentId} refund already requested or confirmed in Asaas (refundState: ${refundState}). Skipping Asaas API refund call.`);
+          }
+        } else if (isPaid && refundState === 'NONE') {
           const refundValue = appointment.price / 100;
           let totalPurchaseValue = paymentData.value || 0;
           let splits = Array.isArray(paymentData.split) ? paymentData.split : [];
@@ -245,6 +274,21 @@ Deno.serve(async (req) => {
           }
           console.log(JSON.stringify(splits, null, 2));
 
+          // Calculate total nominal price of lessons to avoid ratio contamination by consumer/gateway fees
+          let totalGroupNominalPrice = 0;
+          if (appointment.group_id) {
+            const { data: gApts } = await adminClient
+              .from('appointments')
+              .select('price')
+              .eq('group_id', appointment.group_id);
+            if (gApts && gApts.length > 0) {
+              totalGroupNominalPrice = gApts.reduce((sum: number, a: any) => sum + ((a.price || 0) / 100), 0);
+            }
+          }
+          if (!totalGroupNominalPrice || totalGroupNominalPrice <= 0) {
+            totalGroupNominalPrice = refundValue;
+          }
+
           const hasSplits = Array.isArray(splits) && splits.length > 0;
           const splitRefunds: Array<{ id: string; value: number }> = [];
 
@@ -269,7 +313,7 @@ Deno.serve(async (req) => {
 
               let splitRefundValue = 0;
               if (s.fixedValue !== undefined && s.fixedValue !== null) {
-                const ratio = (totalPurchaseValue && totalPurchaseValue > 0) ? (refundValue / totalPurchaseValue) : 1;
+                const ratio = totalGroupNominalPrice > 0 ? Math.min(1, refundValue / totalGroupNominalPrice) : 1;
                 splitRefundValue = Number((s.fixedValue * ratio).toFixed(2));
               } else if (s.percentualValue !== undefined && s.percentualValue !== null) {
                 splitRefundValue = Number((refundValue * (s.percentualValue / 100)).toFixed(2));
@@ -487,10 +531,31 @@ Deno.serve(async (req) => {
             .eq('type', 'lesson_payment');
         }
 
-        const refundTxStatus = isRefundConfirmed ? 'completed' : 'pending';
+        let baseRefundTxStatus = 'pending';
+        if (isRefundConfirmed) {
+          baseRefundTxStatus = 'completed';
+        } else if (isRefundDenied) {
+          baseRefundTxStatus = 'failed';
+        }
+
         const gross_amount = appointment.price || 0;
         const platform_fee = Math.floor(gross_amount * 0.1);
         const net_amount = gross_amount - platform_fee;
+
+        const existingTx = existingRefundTxs?.find((tx: any) => tx.appointment_id === appointment.id);
+        let finalStatus = baseRefundTxStatus;
+        if (existingTx?.status === 'failed') {
+          finalStatus = 'failed';
+        }
+
+        const existingMeta = (existingTx?.metadata && typeof existingTx.metadata === 'object') ? existingTx.metadata : {};
+        const mergedMetadata = {
+          ...existingMeta,
+          provider: 'asaas',
+          note: actor === 'instructor' ? 'instructor_cancelled' : 'student_cancelled',
+          refund_requested_at: existingMeta.refund_requested_at || new Date().toISOString(),
+          asaas_refund_status: finalStatus === 'completed' ? 'REFUNDED' : (finalStatus === 'failed' ? 'DENIED' : 'REFUND_REQUESTED')
+        };
 
         const { error: refundTxErr } = await adminClient
           .from('transactions')
@@ -503,17 +568,12 @@ Deno.serve(async (req) => {
             gross_amount: -gross_amount,
             platform_fee: -platform_fee,
             net_amount: -net_amount,
-            status: refundTxStatus,
+            status: finalStatus,
             provider_name: 'asaas',
             provider_payment_id: paymentId || null,
             event_date: new Date().toISOString(),
             description: 'Estorno de Aula via Asaas',
-            metadata: {
-              provider: 'asaas',
-              note: actor === 'instructor' ? 'instructor_cancelled' : 'student_cancelled',
-              refund_requested_at: new Date().toISOString(),
-              asaas_refund_status: isRefundConfirmed ? 'REFUNDED' : 'REFUND_REQUESTED'
-            }
+            metadata: mergedMetadata
           }, { onConflict: 'appointment_id,type' });
 
         if (refundTxErr) {

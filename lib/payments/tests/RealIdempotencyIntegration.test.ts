@@ -110,7 +110,7 @@ async function runRealDbIdempotencyTest() {
       .from('payment_settlements')
       .delete()
       .eq('provider_payment_id', testPaymentId);
-
+    
     await supabase
       .from('payment_installments')
       .delete()

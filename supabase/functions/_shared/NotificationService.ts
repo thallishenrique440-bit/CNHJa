@@ -1,4 +1,6 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+declare const Deno: any;
+
+import { createClient } from '@supabase/supabase-js'
 
 // Centralized Enums
 export enum NotificationType {
@@ -33,8 +35,9 @@ export enum NotificationTargetScreen {
   STUDENT_FINANCE = 'student_finance'
 }
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL') || 'https://ohftsqsxymtrclnpadam.supabase.co';
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const getEnvVar = (key: string) => (typeof Deno !== 'undefined' && Deno?.env?.get(key)) || (typeof process !== 'undefined' ? process.env[key] : '') || '';
+const supabaseUrl = getEnvVar('SUPABASE_URL') || 'https://ohftsqsxymtrclnpadam.supabase.co';
+const supabaseServiceKey = getEnvVar('SUPABASE_SERVICE_ROLE_KEY') || 'eyMockKey123';
 
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 

@@ -13,3 +13,4 @@ ALTER TABLE public.appointments ADD CONSTRAINT appointments_payment_status_check
             'refund_requested'
         )
     );
+

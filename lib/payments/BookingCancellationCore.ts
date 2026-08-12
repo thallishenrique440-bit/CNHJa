@@ -1,6 +1,6 @@
 import { NotificationService } from '../NotificationService.js';
 
-export type CancellationReason = 'instructor_rejected' | 'auto_expired';
+export type CancellationReason = 'instructor_rejected' | 'auto_expired' | 'student_cancelled';
 
 export interface CancellationParams {
   appointmentId: string;
