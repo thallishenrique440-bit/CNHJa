@@ -1,0 +1,18 @@
+import { buildRefundOperationKey } from '../RefundOperationKey.js';
+import { canTransitionRefund } from '../RefundStateMachine.js';
+const assert = (value: boolean, message: string) => { if (!value) throw new Error(`FAIL: ${message}`); console.log(`PASS: ${message}`); };
+const base = { provider: 'asaas', providerPaymentId: 'pay-1', refundScope: 'appointment', items: [{ id: 'b', amountCents: 200 }, { id: 'a', amountCents: 100 }], splits: [{ id: 'z', amountCents: 300 }], requestedAmountCents: 300, allocationVersion: 'split-v1' };
+const key = buildRefundOperationKey(base);
+assert(key === buildRefundOperationKey({ ...base, items: [...base.items].reverse(), splits: [...base.splits].reverse() }), 'canonical order produces same operation key');
+assert(key !== buildRefundOperationKey({ ...base, requestedAmountCents: 301 }), 'amount changes operation key');
+assert(key !== buildRefundOperationKey({ ...base, splits: [{ id: 'z', amountCents: 299 }] }), 'split changes operation key');
+assert(key === buildRefundOperationKey({ ...base, items: [{ id: 'a', amountCents: 100 }, { id: 'b', amountCents: 200 }] }), 'combo key is deterministic');
+assert(canTransitionRefund('REQUESTED', 'PENDING'), 'requested can become pending');
+assert(!canTransitionRefund('COMPLETED', 'PENDING'), 'completed cannot downgrade');
+assert(!canTransitionRefund('DENIED', 'PENDING'), 'denied cannot downgrade');
+assert(!canTransitionRefund('UNKNOWN', 'PENDING'), 'unknown requires external evidence');
+assert(canTransitionRefund('UNKNOWN', 'PENDING', { source: 'webhook', complete: false }), 'unknown can reconcile from external evidence');
+assert(!canTransitionRefund('PARTIALLY_COMPLETED', 'COMPLETED'), 'partial completion requires evidence');
+assert(canTransitionRefund('PARTIALLY_COMPLETED', 'COMPLETED', { source: 'webhook', complete: true }), 'partial can complete with evidence');
+assert(!key.includes('requestId'), 'operation key does not contain request identity');
+assert(buildRefundOperationKey({ ...base, provider: 'stripe' }) !== key, 'provider is part of operation identity');

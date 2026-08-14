@@ -101,7 +101,7 @@ export async function asaasFetch(url: string, options: AsaasFetchOptions = {}): 
   }
 }
 
-export type AsaasRefundState = 'NONE' | 'PENDING' | 'COMPLETED' | 'DENIED' | 'UNKNOWN';
+export type AsaasRefundState = 'NONE' | 'PENDING' | 'COMPLETED' | 'PARTIALLY_COMPLETED' | 'DENIED' | 'UNKNOWN';
 
 /**
  * Helper to inspect Asaas paymentData payload and return a unified refund state:
@@ -115,15 +115,17 @@ export function getAsaasRefundState(paymentData: any): AsaasRefundState {
   const asaasStatus = (paymentData.status || '').toUpperCase();
 
   // 1. Top-level status check
-  if (asaasStatus === 'REFUNDED' || asaasStatus === 'PARTIALLY_REFUNDED') {
-    return 'COMPLETED';
-  }
+  if (asaasStatus === 'REFUNDED') return 'COMPLETED';
+  if (asaasStatus === 'PARTIALLY_REFUNDED') return 'PARTIALLY_COMPLETED';
 
   if (asaasStatus === 'REFUND_REQUESTED') {
     return 'PENDING';
   }
 
   // 2. Refunds array check
+  // A missing/null refunds field is not evidence that no refund exists.
+  // Only a known-complete refund listing may establish NONE.
+  const hasRefundsField = Object.prototype.hasOwnProperty.call(paymentData, 'refunds');
   const refunds = Array.isArray(paymentData.refunds) ? paymentData.refunds : [];
 
   if (refunds.length > 0) {
@@ -156,15 +158,15 @@ export function getAsaasRefundState(paymentData: any): AsaasRefundState {
       }
     }
 
-    if (hasCompleted) return 'COMPLETED';
+    if (hasCompleted) return hasPending ? 'PARTIALLY_COMPLETED' : 'COMPLETED';
     if (hasPending) return 'PENDING';
     if (hasDenied) return 'DENIED';
   }
 
-  // 3. No active, completed or denied refund in array (or refunds array empty)
-  if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'PENDING', 'AWAITING_RISK_ANALYSIS'].includes(asaasStatus)) {
-    return 'NONE';
-  }
+  // Empty arrays from payment payloads are not assumed complete. Callers must
+  // use GET /payments/{id}/refunds and pass its complete result before NONE.
+  if (hasRefundsField && Array.isArray(paymentData.refunds) && paymentData.refunds.length === 0
+    && paymentData.refundsComplete === true) return 'NONE';
 
   return 'UNKNOWN';
 }

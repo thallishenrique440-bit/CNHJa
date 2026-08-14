@@ -5,6 +5,7 @@ import { NotificationService } from '../lib/NotificationService.js';
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
 import { PaymentStateService } from '../lib/payments/PaymentStateService.js';
 import { AsaasWebhookPayload, TransitionOutcome } from '../lib/payments/PaymentStateTypes.js';
+import { RefundOperationRepository } from '../lib/payments/RefundOperationRepository.js';
 import { SettlementService } from '../lib/payments/SettlementService.js';
 import { SettlementType } from '../lib/payments/SettlementTypes.js';
 import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDispatcher.js';
@@ -943,7 +944,42 @@ export default async function handler(req: Request, res: Response) {
         event,
         timestamp
       });
+    } else if (event.toUpperCase() === 'PAYMENT_REFUND_IN_PROGRESS') {
+      const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
+      if (!currentPaymentId) {
+        await finalizeLedger('FAILED', 'Missing paymentId');
+        return res.status(400).json({ error: 'Missing paymentId' });
+      }
+
+      // Reconcile reconcilable RefundOperations: transition REQUESTED -> PENDING
+      const reconcilableOps = await RefundOperationRepository.getReconcilableOperations(supabaseAdmin, 'asaas', currentPaymentId);
+      for (const op of reconcilableOps) {
+        if (op.status === 'REQUESTED') {
+          try {
+            await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'PENDING', {
+              sent_at: new Date().toISOString(),
+              metadata: { ...(op.metadata || {}), in_progress_event_at: new Date().toISOString() }
+            });
+          } catch (trErr) {
+            console.warn(`[ASAAS WEBHOOK] Could not transition op ${op.id} to PENDING:`, trErr);
+          }
+        }
+      }
+
+      const { data: apts } = await supabaseAdmin
+        .from('appointments')
+        .select('id')
+        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
+      for (const apt of apts || []) {
+        await supabaseAdmin.from('appointments').update({
+          payment_status: 'refund_requested',
+          updated_at: new Date().toISOString()
+        }).eq('id', apt.id);
+      }
+      await finalizeLedger('PROCESSED');
+      return res.status(200).json({ success: true, message: 'Refund in progress recorded', event, timestamp });
     } else if (['PAYMENT_REFUNDED', 'PAYMENT_PARTIALLY_REFUNDED'].includes(event.toUpperCase())) {
+      const isPartialRefundEvent = event.toUpperCase() === 'PAYMENT_PARTIALLY_REFUNDED';
       const currentPaymentId = payload.payment?.id || payload.paymentId || paymentId;
 
       if (!currentPaymentId) {
@@ -965,18 +1001,88 @@ export default async function handler(req: Request, res: Response) {
         return res.status(500).json({ error: 'Database verification failed' });
       }
 
-      if (!Array.isArray(apts) || apts.length === 0) {
-        console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for refunded payment: ${currentPaymentId}`);
-        await finalizeLedger('PROCESSED');
-        return res.status(200).json({
-          success: true,
-          message: 'Refund event processed but no associated appointment found',
-          event,
-          timestamp
-        });
+      // Reconcile RefundOperation(s) with actual refund items
+      const reconcilableOps = await RefundOperationRepository.getReconcilableOperations(supabaseAdmin, 'asaas', currentPaymentId);
+      const rawRefunds = payload.payment?.refunds;
+      const refundItems = Array.isArray(rawRefunds) && rawRefunds.length > 0
+        ? rawRefunds
+        : (payload.refund ? [payload.refund] : []);
+
+      let matchedOpCount = 0;
+      let conflictCount = 0;
+
+      if (reconcilableOps.length > 0) {
+        if (refundItems.length > 0) {
+          for (const item of refundItems) {
+            const itemStatus = String(item.status || 'DONE').toUpperCase();
+            if (!['DONE', 'REFUNDED', 'COMPLETED'].includes(itemStatus)) continue;
+
+            const itemValueCents = Math.round(Number(item.value || 0) * 100);
+            const providerRefundId = item.id || null;
+
+            // Match candidates
+            const candidateOps = reconcilableOps.filter(op =>
+              (providerRefundId && (op.provider_refund_id === providerRefundId || op.metadata?.provider_refund_id === providerRefundId)) ||
+              (op.requested_amount_cents === itemValueCents)
+            );
+
+            if (candidateOps.length === 1) {
+              const matched = candidateOps[0];
+              const targetStatus = itemValueCents >= matched.requested_amount_cents ? 'COMPLETED' : 'PARTIALLY_COMPLETED';
+              try {
+                await RefundOperationRepository.reconcileTransition(supabaseAdmin, matched.id, matched.version, targetStatus, {
+                  completed_amount_cents: itemValueCents,
+                  provider_refund_id: providerRefundId || matched.provider_refund_id,
+                  metadata: { ...(matched.metadata || {}), reconciled_via_webhook: true, event_id: payload.id || null }
+                });
+                matchedOpCount++;
+              } catch (trErr) {
+                console.warn(`[ASAAS WEBHOOK] Transition error for matched op ${matched.id}:`, trErr);
+              }
+            } else if (candidateOps.length > 1) {
+              // Ambiguous match across multiple operations with exact same amount -> CONFLICT
+              console.warn(`⚠️ [ASAAS WEBHOOK] Multiple candidate operations match refund item ${itemValueCents} cents for payment ${currentPaymentId}. Marking CONFLICT.`);
+              for (const op of candidateOps) {
+                try {
+                  await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'CONFLICT', {
+                    metadata: { ...(op.metadata || {}), conflict_reason: 'Ambiguous match across multiple operations with same amount' }
+                  });
+                  conflictCount++;
+                } catch (trErr) {
+                  console.warn(`[ASAAS WEBHOOK] Error setting CONFLICT on op ${op.id}:`, trErr);
+                }
+              }
+            }
+          }
+        } else if (reconcilableOps.length === 1 && !isPartialRefundEvent) {
+          // Single candidate operation and payment fully refunded -> Unequivocal match
+          const singleOp = reconcilableOps[0];
+          try {
+            await RefundOperationRepository.reconcileTransition(supabaseAdmin, singleOp.id, singleOp.version, 'COMPLETED', {
+              completed_amount_cents: singleOp.requested_amount_cents,
+              metadata: { ...(singleOp.metadata || {}), reconciled_via_webhook: true, event_id: payload.id || null }
+            });
+            matchedOpCount++;
+          } catch (trErr) {
+            console.warn(`[ASAAS WEBHOOK] Transition error for single op ${singleOp.id}:`, trErr);
+          }
+        } else if (reconcilableOps.length > 1 && !isPartialRefundEvent) {
+          // Multiple candidate operations without refund items breakdown -> CONFLICT
+          console.warn(`⚠️ [ASAAS WEBHOOK] Multiple candidate operations (${reconcilableOps.length}) for payment ${currentPaymentId} without item breakdown. Marking CONFLICT.`);
+          for (const op of reconcilableOps) {
+            try {
+              await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'CONFLICT', {
+                metadata: { ...(op.metadata || {}), conflict_reason: 'Multiple operations exist for payment without item breakdown' }
+              });
+              conflictCount++;
+            } catch (trErr) {
+              console.warn(`[ASAAS WEBHOOK] Error setting CONFLICT on op ${op.id}:`, trErr);
+            }
+          }
+        }
       }
 
-      // Update payment_status = 'refunded' on appointments and transition 'cancelling' -> 'cancelled' if applicable
+      // Update appointments and transactions based on reconciled scope
       if (Array.isArray(apts) && apts.length > 0) {
         for (const apt of apts) {
           const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
@@ -984,18 +1090,17 @@ export default async function handler(req: Request, res: Response) {
             .from('appointments')
             .update({
               status: newStatus,
-              payment_status: 'refunded',
+              payment_status: isPartialRefundEvent ? 'refund_requested' : 'refunded',
               updated_at: new Date().toISOString()
             })
             .eq('id', apt.id);
         }
       }
 
-      // Mark refund transactions as completed and lesson_payment transactions as failed
       try {
         await supabaseAdmin
           .from('transactions')
-          .update({ status: 'completed' })
+          .update({ status: isPartialRefundEvent ? 'pending' : 'completed' })
           .eq('provider_payment_id', currentPaymentId)
           .eq('type', 'refund');
 
@@ -1008,10 +1113,17 @@ export default async function handler(req: Request, res: Response) {
         console.warn(`⚠️ [ASAAS WEBHOOK] Error updating transaction statuses on refund:`, txErr);
       }
 
-      console.log(`✅ [ASAAS WEBHOOK] Successfully reconciled ${apts.length} appointment(s) to payment_status 'refunded'.`);
-
-      // Record Refund Settlement in payment_installments & payment_settlements (SSOT)
       try {
+        if (isPartialRefundEvent) {
+          await finalizeLedger('RECONCILIATION_PENDING', 'Partial refund recorded pending reconciliation');
+          return res.status(200).json({
+            success: true,
+            message: 'Partial refund recorded pending reconciliation',
+            event,
+            timestamp
+          });
+        }
+
         const instNum = payload.payment?.installmentNumber || 1;
         const refundVal = Math.round((payload.payment?.value || 0) * 100);
         const refundGroupId = apts && apts.length > 0 ? apts[0].group_id : null;
@@ -1034,6 +1146,8 @@ export default async function handler(req: Request, res: Response) {
         success: true,
         message: 'Refund event reconciled successfully',
         event,
+        matchedOperations: matchedOpCount,
+        conflicts: conflictCount,
         timestamp
       });
     } else if (event.toUpperCase() === 'PAYMENT_REFUND_DENIED') {
@@ -1048,18 +1162,25 @@ export default async function handler(req: Request, res: Response) {
 
       console.log(`⚠️ [ASAAS WEBHOOK] Refund denied event received for payment ${currentPaymentId}. Reason: ${denialReason}`);
 
-      const { data: apts, error: fetchErr } = await supabaseAdmin
+      // Reconcile RefundOperation(s) -> DENIED (without downgrading COMPLETED)
+      const reconcilableOps = await RefundOperationRepository.getReconcilableOperations(supabaseAdmin, 'asaas', currentPaymentId);
+      for (const op of reconcilableOps) {
+        if (['REQUESTED', 'PENDING', 'UNKNOWN'].includes(op.status)) {
+          try {
+            await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'DENIED', {
+              metadata: { ...(op.metadata || {}), denial_reason: denialReason, denied_at: new Date().toISOString() }
+            });
+          } catch (trErr) {
+            console.warn(`[ASAAS WEBHOOK] Could not transition op ${op.id} to DENIED:`, trErr);
+          }
+        }
+      }
+
+      const { data: apts } = await supabaseAdmin
         .from('appointments')
         .select('id, status, payment_status, group_id')
         .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
 
-      if (fetchErr) {
-        console.error(`❌ [ASAAS WEBHOOK] Error querying appointments for PAYMENT_REFUND_DENIED:`, fetchErr.message);
-        await finalizeLedger('FAILED', fetchErr.message);
-        return res.status(500).json({ error: 'Database verification failed' });
-      }
-
-      // Mark refund transactions as failed and store denialReason in metadata
       try {
         const { data: refundTxs } = await supabaseAdmin
           .from('transactions')
@@ -1083,34 +1204,11 @@ export default async function handler(req: Request, res: Response) {
               })
               .eq('id', tx.id);
           }
-        } else if (apts && apts.length > 0) {
-          for (const apt of apts) {
-            await supabaseAdmin
-              .from('transactions')
-              .upsert({
-                appointment_id: apt.id,
-                type: 'refund',
-                status: 'failed',
-                amount: 0,
-                provider_name: 'asaas',
-                provider_payment_id: currentPaymentId,
-                event_date: new Date().toISOString(),
-                description: 'Estorno Negado pelo Asaas',
-                metadata: {
-                  denial_reason: denialReason,
-                  denialReason: denialReason,
-                  denied_at: new Date().toISOString()
-                }
-              }, { onConflict: 'appointment_id,type' });
-          }
-        } else {
-          console.warn(`⚠️ [ASAAS WEBHOOK] No refund transaction or appointments found for payment ${currentPaymentId} on PAYMENT_REFUND_DENIED`);
         }
       } catch (txErr) {
         console.warn(`⚠️ [ASAAS WEBHOOK] Error updating transaction status for PAYMENT_REFUND_DENIED:`, txErr);
       }
 
-      // Update appointments payment_status = 'failed' (preserves status = 'cancelled')
       if (apts && apts.length > 0) {
         for (const apt of apts) {
           await supabaseAdmin

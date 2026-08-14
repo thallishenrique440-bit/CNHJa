@@ -1235,18 +1235,29 @@ export const InstructorAgenda: React.FC = () => {
     
     setIsActionLoading(true);
     try {
-        const { error } = await invokeSecureFunction('cancel-booking', {
+        const { data, error } = await invokeSecureFunction('cancel-booking', {
             body: {
                 appointment_id: selectedLesson.id,
                 actor: 'instructor',
+                reason: 'instructor_cancelled',
                 cancel_reason: cancelReason,
                 initiated_from: 'instructor_agenda'
             }
         });
 
-        if (error) throw error;
+        if (error) {
+            throw new Error(error.message || 'Erro ao cancelar agendamento.');
+        }
 
-        // Update local state immediately to 'cancelled'
+        if (data?.error) {
+            throw new Error(data.error);
+        }
+
+        if (data && data.status !== 'cancelled' && !data.success && !data.message?.includes('sucesso')) {
+            throw new Error(data.message || 'Falha ao processar o cancelamento no servidor.');
+        }
+
+        // Update local state ONLY AFTER backend confirmation
         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);
         if (keyToUpdate) {
             setAppointments(prev => {
@@ -1261,10 +1272,11 @@ export const InstructorAgenda: React.FC = () => {
 
         setViewState('cancel_success');
         addToast("Aula cancelada e horário liberado.", 'success');
+        fetchAppointments();
 
     } catch (err: any) {
-        console.error(err);
-        addToast("Erro ao cancelar: " + err.message, 'error');
+        console.error("Error cancelling lesson:", err);
+        addToast("Erro ao cancelar: " + (err.message || "Erro desconhecido"), 'error');
     } finally {
         setIsActionLoading(false);
     }

@@ -38,6 +38,7 @@ export interface RecordSettlementDTO {
 export interface RecordRefundDTO {
   providerPaymentId: string;
   groupId?: string | null;
+  appointmentId?: string | null;
   installmentNumber?: number;
   refundAmountCents: number;
   providerSettlementId?: string | null;
@@ -260,12 +261,14 @@ export class InstallmentService {
   ): Promise<void> {
     const refundDate = dto.refundDate || new Date().toISOString();
 
-    // Fetch existing installments for this group_id or provider_payment_id
+    // Fetch existing installments for this appointment_id, group_id, or provider_payment_id
     let query = supabase
       .from('payment_installments')
       .select('id, installment_number, gross_amount, platform_fee, instructor_amount, instructor_id, student_id');
 
-    if (dto.groupId && dto.providerPaymentId) {
+    if (dto.appointmentId) {
+      query = query.eq('appointment_id', dto.appointmentId);
+    } else if (dto.groupId && dto.providerPaymentId) {
       query = query.or(`group_id.eq.${dto.groupId},provider_payment_id.eq.${dto.providerPaymentId}`);
     } else if (dto.groupId) {
       query = query.eq('group_id', dto.groupId);

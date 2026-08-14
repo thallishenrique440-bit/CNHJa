@@ -1,0 +1,52 @@
+warning: in the working copy of 'pages/InstructorAgenda.tsx', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/pages/InstructorAgenda.tsx b/pages/InstructorAgenda.tsx[m
+[1mindex 36c37ff..564abcb 100644[m
+[1m--- a/pages/InstructorAgenda.tsx[m
+[1m+++ b/pages/InstructorAgenda.tsx[m
+[36m@@ -1235,18 +1235,29 @@[m [mexport const InstructorAgenda: React.FC = () => {[m
+     [m
+     setIsActionLoading(true);[m
+     try {[m
+[31m-        const { error } = await invokeSecureFunction('cancel-booking', {[m
+[32m+[m[32m        const { data, error } = await invokeSecureFunction('cancel-booking', {[m
+             body: {[m
+                 appointment_id: selectedLesson.id,[m
+                 actor: 'instructor',[m
+[32m+[m[32m                reason: 'instructor_cancelled',[m
+                 cancel_reason: cancelReason,[m
+                 initiated_from: 'instructor_agenda'[m
+             }[m
+         });[m
+ [m
+[31m-        if (error) throw error;[m
+[32m+[m[32m        if (error) {[m
+[32m+[m[32m            throw new Error(error.message || 'Erro ao cancelar agendamento.');[m
+[32m+[m[32m        }[m
+[32m+[m
+[32m+[m[32m        if (data?.error) {[m
+[32m+[m[32m            throw new Error(data.error);[m
+[32m+[m[32m        }[m
+ [m
+[31m-        // Update local state immediately to 'cancelled'[m
+[32m+[m[32m        if (data && data.status !== 'cancelled' && !data.success && !data.message?.includes('sucesso')) {[m
+[32m+[m[32m            throw new Error(data.message || 'Falha ao processar o cancelamento no servidor.');[m
+[32m+[m[32m        }[m
+[32m+[m
+[32m+[m[32m        // Update local state ONLY AFTER backend confirmation[m
+         const keyToUpdate = Object.keys(appointments).find(k => appointments[k].id === selectedLesson.id);[m
+         if (keyToUpdate) {[m
+             setAppointments(prev => {[m
+[36m@@ -1261,10 +1272,11 @@[m [mexport const InstructorAgenda: React.FC = () => {[m
+ [m
+         setViewState('cancel_success');[m
+         addToast("Aula cancelada e horário liberado.", 'success');[m
+[32m+[m[32m        fetchAppointments();[m
+ [m
+     } catch (err: any) {[m
+[31m-        console.error(err);[m
+[31m-        addToast("Erro ao cancelar: " + err.message, 'error');[m
+[32m+[m[32m        console.error("Error cancelling lesson:", err);[m
+[32m+[m[32m        addToast("Erro ao cancelar: " + (err.message || "Erro desconhecido"), 'error');[m
+     } finally {[m
+         setIsActionLoading(false);[m
+     }[m
