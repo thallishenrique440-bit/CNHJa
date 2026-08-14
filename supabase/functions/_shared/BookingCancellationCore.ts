@@ -2,8 +2,8 @@ declare const Deno: any;
 
 import { NotificationService } from './NotificationService.ts';
 import { asaasFetch } from './asaasClient.ts';
-import { RefundOperationRepository } from '../../lib/payments/RefundOperationRepository.ts';
-import { buildRefundOperationKey, RefundOperationKeyInput } from '../../lib/payments/RefundOperationKey.ts';
+import { RefundOperationRepository } from './RefundOperationRepository.ts';
+import { buildRefundOperationKey, RefundOperationKeyInput } from './RefundOperationKey.ts';
 
 export type CancellationReason = 'instructor_rejected' | 'auto_expired' | 'student_cancelled';
 
