@@ -103,13 +103,11 @@ Deno.serve(async (req) => {
       const asaasStatus = paymentData?.status?.toUpperCase();
 
       // Check if refund is completed in Asaas (top-level status OR inside paymentData.refunds collection)
-      const hasCompletedRefund = Array.isArray(paymentData?.refunds) && paymentData.refunds.some(
-        (r: any) => ['DONE', 'REFUNDED'].includes(r?.status?.toUpperCase())
-      );
-      const isRefunded = ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(asaasStatus) || hasCompletedRefund;
+      const isFullRefund = asaasStatus === 'REFUNDED';
+      const isPartialRefund = asaasStatus === 'PARTIALLY_REFUNDED';
 
-      if (isRefunded) {
-        console.log(`✅ Reconciling Group ${groupId}: Asaas is refunded (status: ${asaasStatus}, hasCompletedRefund: ${hasCompletedRefund}).`);
+      if (isFullRefund) {
+        console.log(`✅ Reconciling Group ${groupId}: Asaas is refunded (status: ${asaasStatus}).`);
         action = 'repaired_refunded';
 
         // Update appointments payment_status to 'refunded' and transition 'cancelling' -> 'cancelled' if needed
@@ -121,6 +119,10 @@ Deno.serve(async (req) => {
         const targetApts = (aptsToUpdate && aptsToUpdate.length > 0) ? aptsToUpdate : groupApts;
 
         for (const apt of targetApts) {
+          // Inviolable rule: completed appointments represent consumed service and must not be mutated
+          if (apt.status === 'completed') {
+            continue;
+          }
           const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
           await supabaseAdmin
             .from('appointments')
@@ -149,23 +151,22 @@ Deno.serve(async (req) => {
           console.warn('⚠️ [Sync job] Error updating transaction statuses for refund:', txErr);
         }
 
-        // Reconcile payment_installments & payment_settlements for refund via InstallmentService
+        // Reconcile payment_installments for refund via InstallmentService
         try {
-          const instNum = paymentData?.installmentNumber || 1;
           const grossVal = Math.round((paymentData?.value || 0) * 100);
-          const providerSettlementId = `${paymentId}_refund_${instNum}`;
 
           await InstallmentService.recordRefundSettlement(supabaseAdmin, {
             providerPaymentId: paymentId,
             groupId: groupId,
-            installmentNumber: instNum,
             refundAmountCents: grossVal,
-            providerSettlementId: providerSettlementId,
             refundDate: new Date().toISOString()
           });
         } catch (refSyncErr) {
-          console.error('⚠️ [Sync job] Error syncing refund installment/settlement:', refSyncErr);
+          console.error('⚠️ [Sync job] Error syncing refund installment:', refSyncErr);
         }
+      } else if (isPartialRefund) {
+        console.log(`ℹ️ [Sync job] Group ${groupId} has partial refund in Asaas (status: PARTIALLY_REFUNDED). Preserving active installments/appointments.`);
+        return { groupId, status: 'skipped', reason: 'partial_refund_retained' };
       } else if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
         const hasInvalidStatus = allGroupApts?.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
         if (hasInvalidStatus) {
@@ -215,6 +216,9 @@ Deno.serve(async (req) => {
               console.log(`✅ [Sync job] Payment ${paymentId} refund confirmed as COMPLETED on gateway. Reconciling refund to completed.`);
               // Reconcile as refunded
               for (const apt of (allGroupApts || groupApts)) {
+                if (apt.status === 'completed') {
+                  continue;
+                }
                 await supabaseAdmin
                   .from('appointments')
                   .update({
