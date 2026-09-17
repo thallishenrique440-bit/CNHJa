@@ -286,6 +286,9 @@ export class PaymentStateService {
         {
           eventType: evtType,
           eventId: `state_tr_${providerPaymentId}_${targetState}`,
+          // A-1: params.ledgerId is the real transactions row id - it is already used as
+          // .eq('id', params.ledgerId) at lines 251 and 271 of this same file.
+          ledgerId: params.ledgerId || undefined,
           providerPaymentId: providerPaymentId,
           installmentId: installmentId,
           instructorId: (installment as any)?.instructor_id,

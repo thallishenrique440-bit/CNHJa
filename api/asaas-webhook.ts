@@ -9,7 +9,17 @@ import { RefundOperationRepository } from '../lib/payments/RefundOperationReposi
 import { SettlementService } from '../lib/payments/SettlementService.js';
 import { SettlementType } from '../lib/payments/SettlementTypes.js';
 import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDispatcher.js';
+import { PaymentStateMapper } from '../lib/payments/PaymentStateMapper.js';
 import { ProjectionSourceEventType } from '../lib/payments/projections/ProjectionTypes.js';
+
+// P-1-B: raised when the event ledger cannot record a final state at all.
+// Caught by the handler's outer catch, which answers 5xx so the provider retries.
+class LedgerPersistenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LedgerPersistenceError';
+  }
+}
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -159,6 +169,8 @@ export default async function handler(req: Request, res: Response) {
     const { data: existingLedger } = await ledgerQuery.maybeSingle();
 
     let currentAttempt = 1;
+    // P-1-F: kept in scope so finalizeLedger can merge reason_code without losing retry_history.
+    let currentLedgerMetadata: Record<string, any> = {};
 
     if (existingLedger) {
       ledgerId = existingLedger.id;
@@ -185,11 +197,14 @@ export default async function handler(req: Request, res: Response) {
         last_attempt_at: timestamp
       };
 
+      currentLedgerMetadata = updatedMetadata;
+
       // Idempotency Check (Refinement 1 & Approved Model)
       if (existingLedger.processing_status === 'PROCESSED') {
         console.log(`ℹ️ [EVENT LEDGER] Duplicate event received and already PROCESSED. Provider Event ID: ${providerEventId}, Attempt: ${currentAttempt}. Idempotency hit.`);
 
-        await supabaseAdmin
+        // P-1-F: idempotency bookkeeping is still a ledger write; its error was discarded.
+        const { error: dupUpdateError } = await supabaseAdmin
           .from('transactions')
           .update({
             attempt_count: currentAttempt,
@@ -197,6 +212,12 @@ export default async function handler(req: Request, res: Response) {
             updated_at: timestamp
           })
           .eq('id', ledgerId);
+
+        if (dupUpdateError) {
+          console.error(
+            `⚠️ [EVENT LEDGER] Could not record duplicate delivery on ledger ${ledgerId}: ${dupUpdateError.message}`
+          );
+        }
 
         return res.status(200).json({
           success: true,
@@ -208,17 +229,27 @@ export default async function handler(req: Request, res: Response) {
         });
       }
 
-      // Retry attempt: update record to RECEIVED / PENDING for re-processing
-      await supabaseAdmin
+      // Retry attempt: update record to RECEIVED / PENDING for re-processing.
+      // P-1-E: backfill provider_payment_id on redelivery when the original row lacks it.
+      // P-1-F: the write result is inspected; it used to be discarded entirely.
+      const { error: retryUpdateError } = await supabaseAdmin
         .from('transactions')
         .update({
           attempt_count: currentAttempt,
           receipt_status: 'RECEIVED',
           processing_status: 'PENDING',
+          ...(paymentId ? { provider_payment_id: paymentId } : {}),
           metadata: updatedMetadata,
           updated_at: timestamp
         })
         .eq('id', ledgerId);
+
+      if (retryUpdateError) {
+        console.error(
+          `❌ [EVENT LEDGER] Failed to reset ledger ${ledgerId} for reprocessing: ${retryUpdateError.message}`
+        );
+        return res.status(500).json({ error: 'Internal Server Error: Event Ledger retry update failed' });
+      }
 
     } else {
       const initialMetadata = {
@@ -231,11 +262,18 @@ export default async function handler(req: Request, res: Response) {
         }]
       };
 
+      currentLedgerMetadata = initialMetadata;
+
+      // P-1-E: persist the Asaas payment id on its own column. It previously lived only
+      // inside raw_payload, which crippled traceability, idempotency lookups and
+      // reconciliation. Only the provider payment id is written here - never an
+      // appointment id, never an installment id.
       const { data: insertedLedger, error: ledgerErr } = await supabaseAdmin
         .from('transactions')
         .insert({
           type: 'webhook_event',
           provider: 'asaas',
+          provider_payment_id: paymentId || null,
           provider_event_id: providerEventId,
           idempotency_key: idempotencyKey,
           receipt_status: 'RECEIVED',
@@ -257,25 +295,83 @@ export default async function handler(req: Request, res: Response) {
       ledgerId = insertedLedger.id;
     }
 
-    const finalizeLedger = async (status: 'PROCESSED' | 'FAILED' | 'IGNORED' | 'RECONCILIATION_PENDING', errorMsg?: string) => {
-      try {
-        await supabaseAdmin
-          .from('transactions')
-          .update({
-            processing_status: status,
-            processed_at: new Date().toISOString(),
-            ...(errorMsg ? { processing_error: errorMsg } : {})
-          })
-          .eq('id', ledgerId);
-      } catch (err) {
-        console.error(`⚠️ [EVENT LEDGER] Failed to update processing status to ${status}:`, err);
+    // P-1-A: only the four states accepted by transactions_processing_status_check.
+    // Sub-classification (e.g. reconciliation pending, projection failure) travels in
+    // processing_error and metadata.reason_code, never as a new processing_status value.
+    type LedgerStatus = 'PROCESSED' | 'FAILED' | 'IGNORED' | 'PENDING';
+
+    // P-1-B / P-1-F: the Supabase JS client resolves with { data, error } instead of
+    // throwing, so the previous try/catch never fired and write failures vanished.
+    // The result is now inspected explicitly; if the ledger cannot be updated at all
+    // the handler must not report success.
+    const finalizeLedger = async (
+      status: LedgerStatus,
+      errorMsg?: string,
+      reasonCode?: string
+    ): Promise<void> => {
+      const patch: Record<string, unknown> = {
+        processing_status: status,
+        processed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      if (errorMsg) patch.processing_error = errorMsg;
+      if (reasonCode) {
+        patch.metadata = { ...(currentLedgerMetadata || {}), reason_code: reasonCode };
       }
+
+      const { error: updateError } = await supabaseAdmin
+        .from('transactions')
+        .update(patch)
+        .eq('id', ledgerId);
+
+      if (!updateError) return;
+
+      console.error(
+        `❌ [EVENT LEDGER] Failed to persist processing_status='${status}' for ledger ${ledgerId}: ${updateError.message}`
+      );
+
+      // Degraded second attempt: state + reason only, no metadata merge.
+      const { error: fallbackError } = await supabaseAdmin
+        .from('transactions')
+        .update({
+          processing_status: 'FAILED',
+          processing_error: `Ledger finalize failed (${status}): ${updateError.message}`,
+          processed_at: new Date().toISOString()
+        })
+        .eq('id', ledgerId);
+
+      if (!fallbackError) {
+        console.error(`⚠️ [EVENT LEDGER] Ledger ${ledgerId} degraded to FAILED after write error.`);
+        return;
+      }
+
+      // Both writes failed: the event has no observable state. Surface it so the
+      // outer catch answers 5xx and the provider retries, instead of silently 200.
+      console.error(
+        `❌❌ [EVENT LEDGER] Ledger ${ledgerId} is unobservable: fallback write also failed: ${fallbackError.message}`
+      );
+      throw new LedgerPersistenceError(
+        `Event ledger ${ledgerId} could not be finalized: ${updateError.message}`
+      );
     };
 
+    // P-1-D: classify the event BEFORE applying any installment gate.
+    // PaymentStateMapper is the project's existing taxonomy: it returns an installment
+    // status for events that change payment state, and null for informational ones
+    // (PAYMENT_CHECKOUT_VIEWED, PAYMENT_BANK_SLIP_VIEWED, PAYMENT_REFUND_IN_PROGRESS,
+    // PAYMENT_REFUND_DENIED and anything unmapped, e.g. PAYMENT_SPLIT_CANCELLED).
+    // Informational events used to be forced through the payment_installments contract
+    // check and finalized with an invalid state; they now fall through to the event
+    // router below, which decides their real outcome.
+    const mappedInstallmentStatus = PaymentStateMapper.mapAsaasEventToInstallmentStatus(event);
+    const isInformationalEvent = mappedInstallmentStatus === null;
+    const externalRefRaw = payload.payment?.externalReference || '';
+    const isTipEvent = externalRefRaw.startsWith('tip:');
+
     // Invoke PaymentStateService (Etapa 5) & SettlementService (Etapa 6)
-    if (paymentId && event.toUpperCase().startsWith('PAYMENT_')) {
-      const externalRef = payload.payment?.externalReference || '';
-      const isTip = externalRef.startsWith('tip:');
+    if (paymentId && event.toUpperCase().startsWith('PAYMENT_') && (isTipEvent || !isInformationalEvent)) {
+      const externalRef = externalRefRaw;
+      const isTip = isTipEvent;
 
       if (isTip) {
         console.log(`[ASAAS WEBHOOK] Processando confirmação de caixinha: ${externalRef}`);
@@ -467,6 +563,13 @@ export default async function handler(req: Request, res: Response) {
             console.log(`✅ [ASAAS WEBHOOK] Notificação de caixinha processada via NotificationService para o instrutor ${instructorId}`);
 
           } catch (notifErr) {
+            // A-2: sem este rethrow a LedgerPersistenceError seria engolida, o
+            // `return res.status(200)` interno nao executaria e o fluxo de caixinha
+            // cairia no gate de installment abaixo, sendo processado como pagamento
+            // comum. Propaga-se ao catch externo, que responde 5xx.
+            if (notifErr instanceof LedgerPersistenceError) {
+              throw notifErr;
+            }
             console.error(`⚠️ [ASAAS WEBHOOK] Error processing tip notification & push:`, notifErr);
           }
         }
@@ -528,7 +631,10 @@ export default async function handler(req: Request, res: Response) {
           timestamp: timestamp
         });
 
-        await finalizeLedger('RECONCILIATION_PENDING', reconciliationErrorMsg);
+        // P-1-A: 'RECONCILIATION_PENDING' is rejected by transactions_processing_status_check.
+        // The event stays PENDING (its real state: received, not yet reconciled) and the
+        // reason is recorded in processing_error + metadata.reason_code.
+        await finalizeLedger('PENDING', reconciliationErrorMsg, 'RECONCILIATION_PENDING');
 
         return res.status(200).json({
           success: true,
@@ -537,7 +643,8 @@ export default async function handler(req: Request, res: Response) {
           installment_number: instNumber,
           provider_event_id: providerEventId,
           event_type: event,
-          processing_status: 'RECONCILIATION_PENDING',
+          processing_status: 'PENDING',
+          reason_code: 'RECONCILIATION_PENDING',
           reason: reconciliationErrorMsg
         });
       }
@@ -1115,7 +1222,7 @@ export default async function handler(req: Request, res: Response) {
 
       try {
         if (isPartialRefundEvent) {
-          await finalizeLedger('RECONCILIATION_PENDING', 'Partial refund recorded pending reconciliation');
+          await finalizeLedger('PENDING', 'Partial refund recorded pending reconciliation', 'RECONCILIATION_PENDING');
           return res.status(200).json({
             success: true,
             message: 'Partial refund recorded pending reconciliation',
@@ -1138,6 +1245,13 @@ export default async function handler(req: Request, res: Response) {
           refundDate: new Date().toISOString()
         });
       } catch (refErr) {
+        // A-2: a LedgerPersistenceError sinaliza que o ledger ficou sem estado observavel.
+        // Engoli-la aqui faria o fluxo seguir e responder 200 sobre um evento sem rastro,
+        // alem de registrar um log falso de "erro ao gravar settlement". Propaga-se ao
+        // catch externo do handler, que responde 5xx.
+        if (refErr instanceof LedgerPersistenceError) {
+          throw refErr;
+        }
         console.error(`⚠️ [ASAAS WEBHOOK] Error recording refund settlement:`, refErr);
       }
 
@@ -1241,21 +1355,31 @@ export default async function handler(req: Request, res: Response) {
     }
   } catch (error: any) {
     console.error('⚠️ Error processing Asaas Webhook:', error.message);
-    // Best-effort attempt to log ledger error if ledgerId was defined
-    if (typeof ledgerId !== 'undefined') {
-      try {
-        await supabaseAdmin
-          .from('transactions')
-          .update({
-            processing_status: 'FAILED',
-            processing_error: error.message,
-            processed_at: new Date().toISOString()
-          })
-          .eq('id', ledgerId);
-      } catch (e) {
-        // ignore secondary catch error
+
+    // P-1-B: a LedgerPersistenceError means finalizeLedger already exhausted both write
+    // attempts. Retrying the same update here would fail again, so skip straight to 5xx
+    // and let the provider redeliver.
+    const ledgerUnwritable = error instanceof LedgerPersistenceError;
+
+    if (typeof ledgerId !== 'undefined' && ledgerId && !ledgerUnwritable) {
+      // P-1-F: the previous empty catch discarded this failure entirely. The Supabase
+      // client returns { error } instead of throwing, so it is inspected explicitly.
+      const { error: ledgerWriteError } = await supabaseAdmin
+        .from('transactions')
+        .update({
+          processing_status: 'FAILED',
+          processing_error: error.message,
+          processed_at: new Date().toISOString()
+        })
+        .eq('id', ledgerId);
+
+      if (ledgerWriteError) {
+        console.error(
+          `❌ [EVENT LEDGER] Could not record FAILED for ledger ${ledgerId}: ${ledgerWriteError.message}`
+        );
       }
     }
+
     return res.status(500).json({ error: `Internal Server Error: ${error.message}` });
   }
 }

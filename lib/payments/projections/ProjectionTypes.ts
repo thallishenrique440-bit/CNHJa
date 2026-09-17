@@ -85,7 +85,15 @@ export interface CashFlowProjectionRecord {
 
 export interface ProjectionEventPayload {
   eventType: ProjectionSourceEventType;
-  eventId?: string;              // Ledger / event ID
+  eventId?: string;              // Synthetic correlation id (e.g. "sched_<paymentId>"). NOT a DB row id.
+  /**
+   * A-1: real UUID of the public.transactions row that holds the webhook event ledger.
+   * Only webhook-originated flows have one. Never a providerPaymentId, settlementId,
+   * appointmentId or synthetic eventId - those are not transactions.id.
+   * Absent for flows that do not run from a webhook (booking confirmation, schedule
+   * creation, Edge Function sync): in that case no ledger write is attempted.
+   */
+  ledgerId?: string;
   settlementId?: string;         // Settlement record ID
   providerPaymentId: string;
   installmentId?: string;

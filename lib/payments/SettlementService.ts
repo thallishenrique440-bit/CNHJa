@@ -204,6 +204,9 @@ export class SettlementService {
           supabase,
           {
             eventType: sType,
+            // A-1: input.eventLedgerId is populated by api/asaas-webhook.ts as
+            // `eventLedgerId: ledgerId`, the real transactions row id.
+            ledgerId: input.eventLedgerId || undefined,
             settlementId: settlementRecord.id,
             providerPaymentId: input.providerPaymentId,
             installmentId: installment ? installment.id : undefined,
