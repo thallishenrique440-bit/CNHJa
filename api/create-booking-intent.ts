@@ -7,6 +7,7 @@ import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.j
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
 import { fetchGatewayFeeRules } from '../lib/payments/GatewayFeeRepository.js';
 import { buildAppliedFeeSnapshot, quoteCheckout } from '../lib/payments/GatewayFeeModel.js';
+import { deriveLessonPrices } from '../lib/payments/LessonPricing.js';
 
 const MAX_INSTALLMENTS = 4;
 
@@ -182,7 +183,7 @@ export default async function handler(req: any, res: any) {
     // 1. Fetch instructor details (including generic provider details)
     const { data: instructor, error: instructorError } = await supabase
       .from('instructors')
-      .select('provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons')
+      .select('provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons, base_price, night_price')
       .eq('id', instructorId)
       .single();
 
@@ -396,8 +397,52 @@ providerInstance=${paymentProvider.getProviderName()}`);
     // 3. Calculate discount
     const discounts = await getInstructorDiscounts(instructorId, supabase);
     
-    // Calculate total base price by summing individual lesson prices
-    const totalBasePrice = lessons.reduce((sum: number, lesson: any) => sum + (lesson.price || 0), 0);
+    // P-1.17 (G1) — PRECO AUTORITATIVO.
+    // O preco de cada aula e' derivado no servidor a partir de
+    // public.instructor_categories, com fallback para public.instructors.
+    // `lesson.price` do request e' dado NAO CONFIAVEL e nao entra em nenhum
+    // calculo financeiro: serve apenas para registrar divergencia.
+    const { data: categoryPriceRows, error: categoryPriceError } = await supabase
+      .from('instructor_categories')
+      .select('category, day_price, night_price')
+      .eq('instructor_id', instructorId);
+
+    if (categoryPriceError) {
+      console.error('[PRICE AUTHORITY] Falha ao ler instructor_categories:', categoryPriceError);
+      return res.status(500).json({
+        error: 'Nao foi possivel determinar o preco da aula.',
+        code: 'PRICE_AUTHORITY_UNAVAILABLE'
+      });
+    }
+
+    const pricing = deriveLessonPrices(
+      lessons,
+      category,
+      categoryPriceRows || [],
+      {
+        base_price: instructor.base_price ?? null,
+        night_price: instructor.night_price ?? null,
+        has_night_lessons: instructor.has_night_lessons ?? null
+      }
+    );
+
+    if (pricing.unresolved.length > 0 || pricing.prices.length !== lessons.length) {
+      console.error(`[PRICE AUTHORITY] Preco autoritativo indisponivel: ${pricing.unresolved.map(u => u.reason).join(' | ')}`);
+      return res.status(400).json({
+        error: 'Preco da aula indisponivel para o instrutor/categoria selecionados.',
+        code: 'PRICE_AUTHORITY_UNRESOLVED'
+      });
+    }
+
+    const authoritativePrices = pricing.prices;
+
+    for (const a of pricing.audit) {
+      if (a.diverged) {
+        console.warn(`[PRICE AUTHORITY] Divergencia na aula ${a.index} (${a.startTime}): cliente enviou ${a.submittedCents}, autoritativo ${a.authoritativeCents} (${a.source}). Valor do cliente IGNORADO.`);
+      }
+    }
+
+    const totalBasePrice = authoritativePrices.reduce((sum: number, p: number) => sum + p, 0);
     
     const { finalPrice, discountAmount } = calculateDiscount(
       lessons.length,
@@ -492,7 +537,8 @@ providerInstance=${paymentProvider.getProviderName()}`);
       const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       const isLastMinute = isInsideWarningWindow || Boolean(ignoreTooClose);
 
-      const origPrice = lesson.price || 0;
+      // P-1.17: base do rateio e' o preco autoritativo desta aula, nunca lesson.price.
+      const origPrice = authoritativePrices[index];
       let discountedLessonPrice = 0;
 
       if (index === lessons.length - 1) {
