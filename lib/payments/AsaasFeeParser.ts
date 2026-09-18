@@ -74,32 +74,47 @@ function pick(root: any, paths: string[][]): { value: number; path: string } | n
   return null;
 }
 
-// Caminhos ja praticados pelo parser anterior (P-1.16A), preservados.
+// ---------------------------------------------------------------------------
+// Caminhos do contrato DOCUMENTADO de GET /v3/myAccount/fees (P-1.16B.3).
+// Toda tarifa de cobranca vive sob a chave raiz `payment`.
+// Nao acrescentar caminho que nao esteja na documentacao do Asaas.
+// ---------------------------------------------------------------------------
 const PIX_FIXED_PATHS = [
-  ['pix', 'fixedFee'],
-  ['pix', 'fee'],
-  ['paymentMethods', 'pix', 'fixedFee'],
-  ['paymentMethods', 'pix', 'fixedValue'],
-  ['pixFee']
+  ['payment', 'pix', 'fixedFeeValue']
 ];
 const PIX_PERCENT_PATHS = [
-  ['pix', 'percentualFee'],
-  ['pix', 'percentageFee'],
-  ['paymentMethods', 'pix', 'percentualFee'],
-  ['paymentMethods', 'pix', 'percentageFee']
+  ['payment', 'pix', 'percentageFee']
 ];
-const CARD_1X_PERCENT_PATHS = [
-  ['card', 'creditCard', 'fee'],
-  ['paymentMethods', 'creditCard', 'fee'],
-  ['paymentMethods', 'creditCard', 'percentageFee'],
-  ['creditCardFee']
+
+/** Componente fixo por transacao de cartao, comum a todas as faixas. */
+const CARD_FIXED_PATHS = [
+  ['payment', 'creditCard', 'operationValue']
 ];
-const CARD_1X_FIXED_PATHS = [
-  ['card', 'creditCard', 'fixedFee'],
-  ['card', 'creditCard', 'operationValue'],
-  ['paymentMethods', 'creditCard', 'fixedFee'],
-  ['paymentMethods', 'creditCard', 'operationValue']
+
+/**
+ * Faixas de parcelamento do cartao. O contrato expressa cada faixa como um
+ * percentual "ate N parcelas", o que mapeia exatamente para os intervalos ja
+ * usados pelo gateway_fee_schedule.
+ */
+const CARD_TIERS: Array<{ from: number; to: number; percentPath: string[] }> = [
+  { from: 1,  to: 1,  percentPath: ['payment', 'creditCard', 'oneInstallmentPercentage'] },
+  { from: 2,  to: 6,  percentPath: ['payment', 'creditCard', 'upToSixInstallmentsPercentage'] },
+  { from: 7,  to: 12, percentPath: ['payment', 'creditCard', 'upToTwelveInstallmentsPercentage'] },
+  { from: 13, to: 21, percentPath: ['payment', 'creditCard', 'upToTwentyOneInstallmentsPercentage'] }
 ];
+
+// PENDENTE DE DECISAO FINANCEIRA — NAO LIDO POR ESTE PARSER:
+//   payment.creditCard.discountOneInstallmentPercentage
+//   payment.creditCard.discountUpToSixInstallmentsPercentage
+//   payment.creditCard.discountUpToTwelveInstallmentsPercentage
+//   payment.creditCard.discountUpToTwentyOneInstallmentsPercentage
+//   payment.creditCard.discountExpiration
+//   payment.pix.fixedFeeValueWithDiscount / discountExpiration
+//   payment.pix.percentageFee (lido apenas como guarda, nunca interpretado)
+//   payment.pix.minimumFeeValue / maximumFeeValue
+// Qual tarifa vale quando ha desconto vigente, e como representar piso/teto
+// de PIX, sao decisoes de negocio. Ate que sejam tomadas, nenhum destes
+// campos influencia o valor sincronizado.
 
 export function parseAsaasFees(asaasData: any): ParseAsaasFeesResult {
   const ranges: ParsedFeeRange[] = [];
@@ -126,7 +141,7 @@ export function parseAsaasFees(asaasData: any): ParseAsaasFeesResult {
     // puramente fixa. Recusar em vez de gravar so' o fixo e perder o percentual.
     unmapped.push({
       method: 'PIX', installmentFrom: 1, installmentTo: 1,
-      reason: `Resposta traz percentual de PIX (${pixPercent.path}=${pixPercent.value}); revisao manual necessaria`
+      reason: `Resposta traz percentual de PIX (${pixPercent.path}=${pixPercent.value}); modelo atual so representa tarifa fixa — revisao manual necessaria`
     });
   } else {
     const cents = brlToCents(pixFixed.value);
@@ -147,41 +162,63 @@ export function parseAsaasFees(asaasData: any): ParseAsaasFeesResult {
     }
   }
 
-  // ---- CARTAO 1x ----------------------------------------------------------
-  const cardPercent = pick(asaasData, CARD_1X_PERCENT_PATHS);
-  const cardFixed = pick(asaasData, CARD_1X_FIXED_PATHS);
+  // ---- CARTAO: as quatro faixas documentadas ------------------------------
+  // Uma faixa so' e' sincronizada quando o percentual DELA e o componente fixo
+  // comum forem ambos extraidos. Um sozinho nao define a tarifa.
+  const cardFixed = pick(asaasData, CARD_FIXED_PATHS);
+  const cardFixedCents = cardFixed ? brlToCents(cardFixed.value) : null;
 
-  if (!cardPercent && !cardFixed) {
-    unmapped.push({ method: 'CREDIT_CARD', installmentFrom: 1, installmentTo: 1, reason: 'Nem percentual nem fixo do cartao 1x encontrados na resposta' });
-  } else if (!cardPercent) {
-    unmapped.push({ method: 'CREDIT_CARD', installmentFrom: 1, installmentTo: 1, reason: 'Percentual do cartao 1x nao encontrado; fixo sozinho nao define a tarifa' });
-  } else if (!cardFixed) {
-    // Caso real observado: a resposta traz o percentual mas nao o componente
-    // fixo (R$0,49 no painel). Gravar so' o percentual zeraria o fixo.
-    unmapped.push({ method: 'CREDIT_CARD', installmentFrom: 1, installmentTo: 1, reason: 'Componente fixo do cartao 1x nao encontrado na resposta; faixa mantida manual para nao zerar o fixo vigente' });
-  } else if (cardPercent.value < 0 || cardPercent.value > MAX_PERCENT) {
-    unmapped.push({ method: 'CREDIT_CARD', installmentFrom: 1, installmentTo: 1, reason: `Percentual do cartao fora da banda de sanidade (${cardPercent.path}=${cardPercent.value})` });
-  } else {
-    const cents = brlToCents(cardFixed.value);
-    if (cents === null) {
-      unmapped.push({ method: 'CREDIT_CARD', installmentFrom: 1, installmentTo: 1, reason: `Valor fixo do cartao fora da banda de sanidade (${cardFixed.path}=${cardFixed.value})` });
-    } else {
-      ranges.push({
-        method: 'CREDIT_CARD', installmentFrom: 1, installmentTo: 1,
-        percent: cardPercent.value, fixedCents: cents,
-        evidence: { percent: cardPercent.path, fixed: cardFixed.path }
+  for (const tier of CARD_TIERS) {
+    const tierPercent = pick(asaasData, [tier.percentPath]);
+
+    if (!tierPercent && !cardFixed) {
+      unmapped.push({
+        method: 'CREDIT_CARD', installmentFrom: tier.from, installmentTo: tier.to,
+        reason: `Nem percentual (${tier.percentPath.join('.')}) nem fixo (${CARD_FIXED_PATHS[0].join('.')}) encontrados na resposta`
       });
+      continue;
     }
-  }
 
-  // ---- CARTAO PARCELADO ---------------------------------------------------
-  // As faixas 2x-6x, 7x-12x e 13x-21x nao tem representacao conhecida em
-  // /myAccount/fees. Nao ha caminho de JSON confirmado, portanto nao ha o que
-  // extrair: permanecem manuais. NAO inventar campo nem copiar o painel.
-  for (const [from, to] of [[2, 6], [7, 12], [13, 21]] as Array<[number, number]>) {
-    unmapped.push({
-      method: 'CREDIT_CARD', installmentFrom: from, installmentTo: to,
-      reason: 'Faixa de parcelamento sem campo confirmado em /myAccount/fees; gestao manual'
+    if (!tierPercent) {
+      unmapped.push({
+        method: 'CREDIT_CARD', installmentFrom: tier.from, installmentTo: tier.to,
+        reason: `Percentual ${tier.percentPath.join('.')} nao encontrado; fixo sozinho nao define a tarifa`
+      });
+      continue;
+    }
+
+    if (!cardFixed) {
+      // Gravar so' o percentual zeraria o componente fixo vigente.
+      unmapped.push({
+        method: 'CREDIT_CARD', installmentFrom: tier.from, installmentTo: tier.to,
+        reason: `Componente fixo ${CARD_FIXED_PATHS[0].join('.')} nao encontrado; faixa mantida manual para nao zerar o fixo vigente`
+      });
+      continue;
+    }
+
+    if (tierPercent.value < 0 || tierPercent.value > MAX_PERCENT) {
+      unmapped.push({
+        method: 'CREDIT_CARD', installmentFrom: tier.from, installmentTo: tier.to,
+        reason: `Percentual do cartao fora da banda de sanidade (${tierPercent.path}=${tierPercent.value})`
+      });
+      continue;
+    }
+
+    if (cardFixedCents === null) {
+      unmapped.push({
+        method: 'CREDIT_CARD', installmentFrom: tier.from, installmentTo: tier.to,
+        reason: `Valor fixo do cartao fora da banda de sanidade (${cardFixed.path}=${cardFixed.value})`
+      });
+      continue;
+    }
+
+    ranges.push({
+      method: 'CREDIT_CARD',
+      installmentFrom: tier.from,
+      installmentTo: tier.to,
+      percent: tierPercent.value,
+      fixedCents: cardFixedCents,
+      evidence: { percent: tierPercent.path, fixed: cardFixed.path }
     });
   }
 
