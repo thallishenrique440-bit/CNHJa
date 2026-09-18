@@ -16,6 +16,14 @@ export interface RecordScheduleDTO {
   studentId?: string | null;
   instructorId?: string | null;
   dueDate?: string | null;
+  // P-1.16A — snapshot congelado da tarifa aplicada a esta compra.
+  // Opcionais: chamadores antigos continuam funcionando e gravam NULL.
+  feeRuleId?: string | null;
+  feePercentApplied?: number | null;
+  feeFixedCents?: number | null;
+  feeSource?: string | null;
+  feeEffectiveFrom?: string | null;
+  paymentMethod?: string | null;
 }
 
 export interface RecordSettlementDTO {
@@ -120,6 +128,13 @@ export class InstallmentService {
         transaction_id: dto.transactionId || null,
         student_id: dto.studentId || null,
         instructor_id: dto.instructorId || null,
+        // P-1.16A — auditoria da tarifa congelada nesta compra
+        fee_rule_id: dto.feeRuleId ?? null,
+        fee_percent_applied: dto.feePercentApplied ?? null,
+        fee_fixed_cents: dto.feeFixedCents ?? null,
+        fee_source: dto.feeSource ?? null,
+        fee_effective_from: dto.feeEffectiveFrom ?? null,
+        payment_method: dto.paymentMethod ?? null,
         updated_at: new Date().toISOString()
       });
     }

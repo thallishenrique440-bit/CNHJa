@@ -5,6 +5,8 @@ import { AGENDA_SLOTS } from '../lib/slots.js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
 import { InstallmentService } from '../lib/payments/InstallmentService.js';
+import { fetchGatewayFeeRules } from '../lib/payments/GatewayFeeRepository.js';
+import { buildAppliedFeeSnapshot, quoteCheckout } from '../lib/payments/GatewayFeeModel.js';
 
 const MAX_INSTALLMENTS = 4;
 
@@ -199,52 +201,11 @@ providerName=${providerName}`);
     console.log(`[PAYMENT_DIAGNOSTIC]
 providerInstance=${paymentProvider.getProviderName()}`);
 
-    // FASE 2 — LEITURA DAS TAXAS
-    let settings = {
-      pix_flat_fee: 149,
-      credit_1x_fee: 3.99,
-      credit_2x_fee: 5.49,
-      credit_3x_fee: 6.49,
-      credit_4x_fee: 7.49,
-      credit_5x_fee: 8.49,
-      credit_6x_fee: 9.49,
-      credit_7x_fee: 10.49,
-      credit_8x_fee: 11.49,
-      credit_9x_fee: 12.49,
-      credit_10x_fee: 13.49,
-      credit_11x_fee: 14.49,
-      credit_12x_fee: 15.49
-    };
-
-    try {
-      const { data: dbSettings, error: dbSettingsError } = await supabase
-        .from('platform_financial_settings')
-        .select('*')
-        .limit(1)
-        .maybeSingle();
-      
-      if (dbSettingsError) {
-        console.error('[ERROR] Failed to fetch platform_financial_settings:', dbSettingsError);
-      } else if (dbSettings) {
-        settings = {
-          pix_flat_fee: dbSettings.pix_flat_fee,
-          credit_1x_fee: Number(dbSettings.credit_1x_fee),
-          credit_2x_fee: Number(dbSettings.credit_2x_fee),
-          credit_3x_fee: Number(dbSettings.credit_3x_fee),
-          credit_4x_fee: Number(dbSettings.credit_4x_fee),
-          credit_5x_fee: Number(dbSettings.credit_5x_fee),
-          credit_6x_fee: Number(dbSettings.credit_6x_fee),
-          credit_7x_fee: Number(dbSettings.credit_7x_fee),
-          credit_8x_fee: Number(dbSettings.credit_8x_fee),
-          credit_9x_fee: Number(dbSettings.credit_9x_fee),
-          credit_10x_fee: Number(dbSettings.credit_10x_fee),
-          credit_11x_fee: Number(dbSettings.credit_11x_fee),
-          credit_12x_fee: Number(dbSettings.credit_12x_fee),
-        };
-      }
-    } catch (err) {
-      console.error('[ERROR] Exception fetching platform_financial_settings:', err);
-    }
+    // FASE 2 — LEITURA DAS TAXAS (P-1.16A)
+    // Fonte unica: public.gateway_fee_schedule. A leitura nunca lanca; se
+    // falhar, quoteCheckout cai no DEFAULT_GATEWAY_FEE_SCHEDULE embutido —
+    // a tarifa nunca e' zerada nem volta a percentuais antigos.
+    const gatewayFeeRules = await fetchGatewayFeeRules(supabase, providerName);
 
     // Validate gateway setup for selected provider
     if (providerName === 'asaas' && !instructor?.provider_account_id && !instructor?.provider_wallet_id) {
@@ -445,17 +406,35 @@ providerInstance=${paymentProvider.getProviderName()}`);
     );
 
     // FASE 3 — CÁLCULO DA TAXA & FASE 4 — TOTAL COBRADO
-    let processingFee = 0;
-    if (providerName === 'asaas') {
-      if (paymentMethod === 'PIX') {
-        processingFee = settings.pix_flat_fee;
-      } else if (paymentMethod === 'CREDIT_CARD') {
-        const instCount = installmentCount || 1;
-        const feeKey = `credit_${instCount}x_fee` as keyof typeof settings;
-        const percentage = settings[feeKey] !== undefined ? Number(settings[feeKey]) : 3.99;
-        processingFee = Math.round(finalPrice * (percentage / 100));
-      }
+    // P-1.16A: a tarifa e' resolvida pelo modelo canonico compartilhado
+    // (lib/payments/GatewayFeeModel). O frontend usa exatamente as mesmas
+    // funcoes e o mesmo schedule, portanto exibe o mesmo total que sera
+    // cobrado aqui. `finalPrice` (service_price) nao e' alterado pela tarifa.
+    const feeQuote = quoteCheckout({
+      servicePriceCents: finalPrice,
+      method: paymentMethod === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'PIX',
+      installmentCount: installmentCount || 1,
+      provider: providerName,
+      rules: gatewayFeeRules
+    });
+
+    // Fail-closed: sem faixa de tarifa nao ha como formar student_charge sem
+    // que a plataforma absorva a tarifa inteira em silencio.
+    if (providerName === 'asaas' && !feeQuote.rule) {
+      console.error(`[GATEWAY FEE] Nenhuma faixa de tarifa para ${feeQuote.method} em ${feeQuote.installmentCount}x.`);
+      return res.status(400).json({
+        error: 'Tarifa de pagamento indisponivel para o metodo/parcelamento selecionado.',
+        code: 'GATEWAY_FEE_RULE_NOT_FOUND'
+      });
     }
+
+    const processingFee = providerName === 'asaas' ? feeQuote.gatewayFeeExpectedCents : 0;
+    const appliedFee = buildAppliedFeeSnapshot(feeQuote);
+
+    if (feeQuote.usedFallback) {
+      console.warn(`[GATEWAY FEE] Schedule do banco indisponivel para ${feeQuote.method}/${feeQuote.installmentCount}x. Usando DEFAULT_GATEWAY_FEE_SCHEDULE embutido.`);
+    }
+    console.log(`[GATEWAY FEE] method=${feeQuote.method} installments=${feeQuote.installmentCount} percent=${appliedFee.feePercentApplied} fixed=${appliedFee.feeFixedCents} servicePrice=${finalPrice} fee=${processingFee} source=${appliedFee.feeSource}`);
 
     const totalPriceWithFee = finalPrice + processingFee;
 
@@ -686,6 +665,14 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
           netAmountCents: finalPrice - applicationFeeAmount,
           platformFeeCents: applicationFeeAmount + processingFee,
           feeAmountCents: processingFee,
+          // P-1.16A: congelamento da tarifa aplicada a esta compra.
+          // Uma alteracao futura do schedule nao recalcula esta linha.
+          feeRuleId: appliedFee.feeRuleId,
+          feePercentApplied: appliedFee.feePercentApplied,
+          feeFixedCents: appliedFee.feeFixedCents,
+          feeSource: appliedFee.feeSource,
+          feeEffectiveFrom: appliedFee.feeEffectiveFrom,
+          paymentMethod: appliedFee.paymentMethod,
           groupId: groupId,
           appointmentId: firstAptId,
           studentId: secureStudentId,

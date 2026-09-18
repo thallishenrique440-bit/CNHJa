@@ -13,6 +13,13 @@ import { getLowestActiveCategoryPrice } from '../../lib/instructorPricing';
 import { calculateInstructorRating } from '../../lib/instructorRating';
 import { PAYMENT_ERRORS } from '../../src/constants/paymentErrors';
 import { CheckoutLauncher } from '../../lib/payments/CheckoutLauncher';
+import {
+  GATEWAY_FEE_SELECT,
+  GATEWAY_FEE_TABLE,
+  GatewayFeeRule,
+  mapGatewayFeeRows,
+  quoteCheckout
+} from '../../lib/payments/GatewayFeeModel';
 
 // Define Interface for the State matches DB structure
 const MAX_INSTALLMENTS = 4;
@@ -155,44 +162,28 @@ export const StudentInstructorProfile: React.FC = () => {
   const [selectedInstallmentCount, setSelectedInstallmentCount] = useState<number>(1);
   const [paymentIgnoreTooClose, setPaymentIgnoreTooClose] = useState(false);
 
-  // platform_financial_settings State
-  const [financialSettings, setFinancialSettings] = useState<any>(null);
+  // P-1.16A: schedule de tarifas (mesma fonte lida pelo backend)
+  const [gatewayFeeRules, setGatewayFeeRules] = useState<GatewayFeeRule[]>([]);
 
   useEffect(() => {
     const fetchSettings = async () => {
       try {
         const { data, error } = await supabase
-          .from('platform_financial_settings')
-          .select('*')
-          .limit(1)
-          .maybeSingle();
-        if (data) {
-          setFinancialSettings(data);
+          .from(GATEWAY_FEE_TABLE)
+          .select(GATEWAY_FEE_SELECT)
+          .eq('provider', 'asaas')
+          .is('effective_to', null);
+        if (error) {
+          console.error('Error fetching gateway fee schedule:', error.message);
+          return;
         }
+        setGatewayFeeRules(mapGatewayFeeRows(data));
       } catch (err) {
-        console.error('Error fetching financial settings:', err);
+        console.error('Error fetching gateway fee schedule:', err);
       }
     };
     fetchSettings();
   }, []);
-
-  const activeSettings = useMemo(() => {
-    return financialSettings || {
-      pix_flat_fee: 149,
-      credit_1x_fee: 3.99,
-      credit_2x_fee: 5.49,
-      credit_3x_fee: 6.49,
-      credit_4x_fee: 7.49,
-      credit_5x_fee: 8.49,
-      credit_6x_fee: 9.49,
-      credit_7x_fee: 10.49,
-      credit_8x_fee: 11.49,
-      credit_9x_fee: 12.49,
-      credit_10x_fee: 13.49,
-      credit_11x_fee: 14.49,
-      credit_12x_fee: 15.49
-    };
-  }, [financialSettings]);
 
   const handleSaveCpfAndPhone = async () => {
     const cleanCpf = studentCpf.replace(/\D/g, '');
@@ -929,20 +920,21 @@ export const StudentInstructorProfile: React.FC = () => {
 
   const totalPrice = priceInfo.total;
 
+  // P-1.16A: o total exibido ao aluno vem da MESMA funcao usada pelo backend
+  // em api/create-booking-intent.ts. Nao recalcular tarifa aqui.
   const feeInfo = useMemo(() => {
-    let fee = 0;
-    if (selectedPaymentMethod === 'PIX') {
-      fee = activeSettings.pix_flat_fee;
-    } else if (selectedPaymentMethod === 'CREDIT_CARD') {
-      const key = `credit_${selectedInstallmentCount}x_fee`;
-      const percentage = activeSettings[key] !== undefined ? Number(activeSettings[key]) : 3.99;
-      fee = Math.round(totalPrice * (percentage / 100));
-    }
+    const quote = quoteCheckout({
+      servicePriceCents: totalPrice,
+      method: selectedPaymentMethod === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'PIX',
+      installmentCount: selectedInstallmentCount,
+      rules: gatewayFeeRules
+    });
     return {
-      fee,
-      totalWithFee: totalPrice + fee
+      fee: quote.gatewayFeeExpectedCents,
+      totalWithFee: quote.studentChargeCents,
+      quote
     };
-  }, [totalPrice, selectedPaymentMethod, selectedInstallmentCount, activeSettings]);
+  }, [totalPrice, selectedPaymentMethod, selectedInstallmentCount, gatewayFeeRules]);
 
 
   const handleBook = async (ignoreTooClose = false) => {
@@ -2257,11 +2249,14 @@ export const StudentInstructorProfile: React.FC = () => {
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all cursor-pointer appearance-none text-sm font-medium"
                 >
                   {Array.from({ length: MAX_INSTALLMENTS }, (_, i) => i + 1).map((count) => {
-                    const key = `credit_${count}x_fee`;
-                    const percentage = activeSettings[key] !== undefined ? Number(activeSettings[key]) : 3.99;
-                    const fee = Math.round(totalPrice * (percentage / 100));
-                    const totalWithFeeForOption = totalPrice + fee;
-                    const installmentValue = totalWithFeeForOption / count;
+                    const optionQuote = quoteCheckout({
+                      servicePriceCents: totalPrice,
+                      method: 'CREDIT_CARD',
+                      installmentCount: count,
+                      rules: gatewayFeeRules
+                    });
+                    const percentage = optionQuote.rule ? optionQuote.rule.percent : 0;
+                    const installmentValue = optionQuote.studentChargeCents / count;
                     return (
                       <option key={count} value={count}>
                         {count}x de {formatCurrency(installmentValue)} (com taxa de {percentage}%)
