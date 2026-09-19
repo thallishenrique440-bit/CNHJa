@@ -248,7 +248,66 @@ Deno.serve(async (req) => {
           return { groupId, status: 'skipped', reason: 'group_already_cancelled_or_expired' };
         }
 
-        console.log(`✅ Repairing Group ${groupId}: Asaas is paid (${asaasStatus}).`);
+        // P-1.18P2.6: CONFIRMED significa cartao autorizado com credito AINDA
+        // FUTURO. Nao liquida, nao marca parcela e nao repara appointment.
+        // Mesma regra de api/asaas-webhook.ts:691.
+        const isEffectivelyReceived = ['RECEIVED', 'RECEIVED_IN_CASH'].includes(asaasStatus);
+
+        if (!isEffectivelyReceived) {
+          console.log(`ℹ️ [Sync job] Group ${groupId}: Asaas esta ${asaasStatus} (autorizado, ainda nao recebido). Nenhuma acao financeira nem reparo de appointment.`);
+          return { groupId, status: 'skipped', asaas_status: asaasStatus, reason: 'not_received_yet' };
+        }
+
+        // P-1.18P2.6: a reconciliacao e' DELEGADA ao fluxo financeiro oficial.
+        //
+        // Esta Edge Function deixou de calcular qualquer valor. Ela envia
+        // SOMENTE o identificador do pagamento; o endpoint na Vercel consulta o
+        // Asaas por conta propria e chama o SettlementService, que continua
+        // sendo a autoridade financeira unica. Nenhum valor trafega daqui.
+        let reconciled = false;
+        try {
+          const { data: baseUrlRow } = await supabaseAdmin
+            .from('notification_config')
+            .select('value')
+            .eq('key', 'app_base_url')
+            .maybeSingle();
+
+          const appBaseUrl = String(baseUrlRow?.value || '').replace(/\/+$/, '');
+          const cronSecret = Deno.env.get('CRON_SECRET') || '';
+
+          if (!appBaseUrl) {
+            console.error(`❌ [Sync job] app_base_url ausente em notification_config. Reconciliacao de ${groupId} nao executada.`);
+          } else if (!cronSecret) {
+            console.error(`❌ [Sync job] CRON_SECRET ausente no ambiente. Reconciliacao de ${groupId} nao executada.`);
+          } else {
+            const reconcileRes = await fetch(`${appBaseUrl}/api/reconcile-payment`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${cronSecret}`
+              },
+              body: JSON.stringify({ providerPaymentId: paymentId })
+            });
+
+            const reconcileBody = await reconcileRes.json().catch(() => ({}));
+
+            if (!reconcileRes.ok) {
+              console.error(`❌ [Sync job] Reconciliacao recusada para ${groupId} (HTTP ${reconcileRes.status}, code=${reconcileBody?.code ?? 'n/a'}).`);
+            } else {
+              reconciled = reconcileBody?.settled === true;
+              console.log(`ℹ️ [Sync job] Reconciliacao de ${groupId}: outcome=${reconcileBody?.outcome ?? 'n/a'} settled=${reconciled}.`);
+            }
+          }
+        } catch (reconcileErr) {
+          console.error(`⚠️ [Sync job] Erro ao chamar a reconciliacao para ${groupId}:`, reconcileErr);
+        }
+
+        if (!reconciled) {
+          console.log(`ℹ️ [Sync job] Group ${groupId}: liquidacao oficial nao confirmada. Appointment preservado como esta.`);
+          return { groupId, status: 'reconcile_pending', asaas_status: asaasStatus };
+        }
+
+        console.log(`✅ Repairing Group ${groupId}: liquidacao oficial confirmada (${asaasStatus}).`);
         action = 'repaired_succeeded';
 
         // Notify Instructor (Idempotent)
@@ -310,63 +369,21 @@ Deno.serve(async (req) => {
           if (updateError) throw updateError;
         }
 
-        // Reconcile payment_installments & payment_settlements
-        try {
-          const grossVal = Math.round((paymentData?.value || 0) * 100);
-          const netVal = paymentData?.netValue !== undefined 
-            ? Math.round(paymentData.netValue * 100) 
-            : Math.round(grossVal * 0.90);
-          const platformFeeVal = grossVal - netVal;
-          const instNum = paymentData?.installmentNumber || 1;
-          const totalInst = paymentData?.installmentCount || 1;
-          const payDate = paymentData?.paymentDate || paymentData?.clientPaymentDate || new Date().toISOString();
-          const instructorAmount = grossVal - platformFeeVal;
-
-          const conflictTarget = groupId ? 'group_id,installment_number' : 'provider_payment_id,installment_number';
-          const { data: instData } = await supabaseAdmin
-            .from('payment_installments')
-            .upsert({
-              provider_payment_id: paymentId,
-              installment_number: instNum,
-              total_installments: totalInst,
-              gross_amount: grossVal,
-              net_amount: netVal,
-              fee_amount: 0,
-              platform_fee: platformFeeVal,
-              instructor_amount: instructorAmount,
-              status: 'PAID',
-              payment_date: payDate,
-              group_id: groupId,
-              appointment_id: firstApt.id,
-              student_id: firstApt.student_id,
-              instructor_id: firstApt.instructor_id,
-              updated_at: new Date().toISOString()
-            }, { onConflict: conflictTarget })
-            .select('id')
-            .single();
-
-          if (['RECEIVED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
-            const settlementId = paymentData?.id || paymentId;
-            await supabaseAdmin
-              .from('payment_settlements')
-              .upsert({
-                installment_id: instData?.id || null,
-                provider_payment_id: paymentId,
-                provider_settlement_id: settlementId,
-                settlement_type: 'PAYMENT',
-                gross_amount: grossVal,
-                net_amount: netVal,
-                fee_amount: 0,
-                platform_fee: platformFeeVal,
-                instructor_amount: instructorAmount,
-                settled_at: payDate,
-              }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
-          } else {
-            console.log(`ℹ️ [Sync job] Skipping payment_settlements upsert for asaasStatus: ${asaasStatus} (settlement recorded only on RECEIVED / RECEIVED_IN_CASH).`);
-          }
-        } catch (instSyncErr) {
-          console.error('⚠️ [Sync job] Error syncing installment/settlement:', instSyncErr);
-        }
+        // P-1.18P2.6: a aritmetica financeira que existia aqui foi REMOVIDA.
+        //
+        // Ela era uma segunda implementacao da regra, divergente do contrato
+        // oficial: tratava a tarifa do Asaas como comissao da CNHJa
+        // (platform_fee = gross - netValue), devolvia ao instrutor
+        // gross - platform_fee (= netValue, ou seja, os 90% MAIS a comissao),
+        // gravava fee_amount = 0, marcava a parcela como 'PAID' e escrevia
+        // direto em payment_settlements, sem ledger, sem projecao e sem
+        // idempotencia.
+        //
+        // Tudo isso agora acontece no fluxo oficial, atraves de
+        // POST /api/reconcile-payment -> SettlementService, acima.
+        // A parcela e' marcada como RECEIVED (nunca 'PAID') pelo
+        // InstallmentService, e o appointment so' e' reparado depois de a
+        // liquidacao oficial ser confirmada.
       } else {
         console.log(`ℹ️ Group ${groupId}: Asaas status is ${asaasStatus}. No action taken.`);
         return { groupId, status: 'skipped', asaas_status: asaasStatus };
