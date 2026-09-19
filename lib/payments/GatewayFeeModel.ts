@@ -37,6 +37,10 @@ export interface GatewayFeeQuote {
   servicePriceCents: number;
   gatewayFeeExpectedCents: number;
   studentChargeCents: number;
+  /** P-1.18E: taxa REAL que o Asaas cobrara sobre studentChargeCents. */
+  gatewayFeeChargedCents: number;
+  /** P-1.18E: gatewayFeeExpectedCents - gatewayFeeChargedCents. >= 0. */
+  surplusCents: number;
   method: string;
   installmentCount: number;
   /** null quando nenhuma faixa cobre a combinacao pedida. */
@@ -156,23 +160,158 @@ export function resolveGatewayFeeRule(
   return eligible[0];
 }
 
+/** Divisao inteira exata para operandos nao negativos, sem passar por divisao
+ *  fracionaria. Usada em todo o calculo de taxa para que nenhum resultado
+ *  dependa de ponto flutuante. */
+function idiv(a: number, b: number): number {
+  return (a - (a % b)) / b;
+}
+
 /**
- * gateway_fee_expected = round(service_price * percent / 100 + fixed)
+ * P-1.18E — conversao de unidade da faixa.
  *
- * O calculo e' feito em aritmetica inteira ate a divisao final para que o
- * resultado nao dependa de erro de ponto flutuante. `percent` e' convertido
- * para centesimos de ponto percentual (2.99 -> 299).
- *
- * Exemplo do contrato: R$130,00 em 1x, 2,99% + R$0,49
- *   (13000 * 299 + 49 * 10000) / 10000 = 437.7 -> 438 centavos = R$4,38
+ * `percent` chega como numero fracionario (2.99) porque e' assim que vem do
+ * banco e da API do Asaas. E' convertido UMA unica vez para centesimos de ponto
+ * percentual (299); dai em diante toda a aritmetica da taxa e' inteira.
  */
-export function calculateGatewayFeeCents(servicePriceCents: number, rule: GatewayFeeRule | null): number {
+export function rulePercentHundredths(rule: GatewayFeeRule | null): number {
   if (!rule) return 0;
-  const base = Math.max(0, Math.round(Number(servicePriceCents) || 0));
-  const percentHundredths = Math.round((Number(rule.percent) || 0) * 100);
-  const fixed = Math.round(Number(rule.fixedCents) || 0);
-  const totalScaled = base * percentHundredths + fixed * 10000;
-  return Math.max(0, Math.round(totalScaled / 10000));
+  return Math.max(0, Math.round((Number(rule.percent) || 0) * 100));
+}
+
+/** Componente fixo da faixa, em centavos inteiros. */
+export function ruleFixedCents(rule: GatewayFeeRule | null): number {
+  if (!rule) return 0;
+  return Math.max(0, Math.round(Number(rule.fixedCents) || 0));
+}
+
+/**
+ * P-1.18E — TAXA REAL cobrada pelo Asaas sobre um total ja' formado.
+ *
+ * Modelo derivado na P-1.18D (secoes 3 a 5) e conferido contra quatro
+ * evidencias reais, parcela a parcela:
+ *
+ *   base  = SC // n
+ *   v_i   = base                (i < n)        v_n = SC - base*(n-1)
+ *   fee_i = (v_i * P) // 10000 + (F // n)
+ *   taxa  = soma dos fee_i
+ *
+ * O percentual incide sobre CADA PARCELA, e o componente fixo e' rateado entre
+ * as parcelas com truncamento (o resto simplesmente nao e' cobrado).
+ *
+ * NAO substituir por (SC*P)//10000 + F: a diferenca chega a n centavos.
+ * Evidencia: 4x de 21498 a 3,49%+49 custa 796, e nao 799 (P-1.18D secao 5).
+ *
+ * Evidencias reproduzidas exatamente:
+ *   (10149, 1, PIX 0%+199)        -> 199
+ *   (13519, 1, 2,99%+49)          -> 453
+ *   (21498, 4, 3,49%+49)          -> 796
+ *   (20747, 4, 3,49%+49)          -> 769
+ */
+export function gatewayFeeRealCents(
+  studentChargeCents: number,
+  installmentCount: number,
+  rule: GatewayFeeRule | null
+): number {
+  if (!rule) return 0;
+  const total = Math.max(0, Math.trunc(Number(studentChargeCents) || 0));
+  const n = Math.max(1, Math.trunc(Number(installmentCount) || 1));
+  const percentHundredths = rulePercentHundredths(rule);
+  const fixedPerInstallment = idiv(ruleFixedCents(rule), n);
+  const base = idiv(total, n);
+
+  let fee = 0;
+  for (let i = 1; i <= n; i++) {
+    const value = i < n ? base : total - base * (n - 1);
+    fee += idiv(value * percentHundredths, 10000) + fixedPerInstallment;
+  }
+  return fee;
+}
+
+/**
+ * P-1.18E — MENOR total a cobrar do aluno que recupera service_price integral.
+ *
+ * Devolve o menor SC inteiro tal que
+ *
+ *   SC - gatewayFeeRealCents(SC, n, rule) >= service_price
+ *
+ * Algoritmo da P-1.18D secao 7:
+ *   1. candidato de forma fechada  SC = ((SP + n*(F//n)) * 10000) // (10000 - P)
+ *      — verificado exaustivamente (~1,2 milhao de casos) como sempre suficiente;
+ *   2. descida de no maximo n centavos ate o minimo verdadeiro;
+ *   3. subida de seguranca, caso o candidato nao satisfaca.
+ *
+ * BUSCA BINARIA E' PROIBIDA AQUI. g(SC) = SC - taxa(SC) NAO e' monotonica para
+ * n >= 3: g(20747) = 19978 mas g(20748) = 19976 (P-1.18D secao 8c). Este
+ * algoritmo nunca assume monotonicidade — parte de um ponto provadamente valido
+ * e caminha um centavo por vez, verificando a condicao a cada passo.
+ */
+export function minimumStudentChargeCents(
+  servicePriceCents: number,
+  installmentCount: number,
+  rule: GatewayFeeRule | null
+): number {
+  const servicePrice = Math.max(0, Math.trunc(Number(servicePriceCents) || 0));
+  if (!rule) return servicePrice;
+
+  const n = Math.max(1, Math.trunc(Number(installmentCount) || 1));
+  const percentHundredths = rulePercentHundredths(rule);
+  const fixedCharged = n * idiv(ruleFixedCents(rule), n);
+  const denominator = 10000 - percentHundredths;
+
+  // Faixa com percentual >= 100% e' invalida (o sync limita a 30% e o schedule
+  // embutido vai ate 4,29%). Sem denominador positivo nao ha gross-up possivel:
+  // devolve o service_price e deixa a decisao com o chamador, que e' fail-closed.
+  if (denominator <= 0) return servicePrice;
+
+  const candidate = idiv((servicePrice + fixedCharged) * 10000, denominator);
+
+  // 2. descida em JANELA FIXA, guardando o MENOR valor valido.
+  //
+  // Correcao P-1.18E sobre o pseudocodigo da P-1.18D secao 7: um laco
+  // "while (o anterior ainda satisfaz)" para no primeiro centavo invalido, e
+  // como g(SC) nao e' monotonica isso pode deixar para tras um SC menor e
+  // valido. Exemplo real: SP = 19978 em 4x — o candidato e' 20750, 20749 NAO
+  // satisfaz, mas 20747 satisfaz e e' o minimo. A janela percorre todos os
+  // passos e fica com o menor que satisfaz.
+  //
+  // Largura da janela: o excesso do candidato sobre o minimo verdadeiro e' no
+  // maximo n (medido em varredura independente, SP de 100 a 200000, n de 1 a 6).
+  // n + 2 e' margem.
+  let charge = candidate;
+  for (let step = 1; step <= n + 2; step++) {
+    const lower = candidate - step;
+    if (lower < servicePrice) break;
+    if (lower - gatewayFeeRealCents(lower, n, rule) >= servicePrice) charge = lower;
+  }
+
+  // 3. subida de seguranca — nao observada em nenhum caso, mantida por prudencia.
+  // O limite de passos evita laco infinito diante de uma faixa corrompida.
+  let guard = 0;
+  while (charge - gatewayFeeRealCents(charge, n, rule) < servicePrice && guard < 10000) {
+    charge += 1;
+    guard += 1;
+  }
+
+  return charge;
+}
+
+/**
+ * gateway_fee_expected = student_charge - service_price
+ *
+ * P-1.18E: deixou de ser "percentual sobre o service_price mais o fixo". Agora
+ * e' a diferenca exata necessaria para que, DEPOIS da taxa real do Asaas, reste
+ * exatamente o service_price. `installmentCount` e' obrigatorio no cartao — a
+ * taxa de 1x nao vale para o parcelado.
+ */
+export function calculateGatewayFeeCents(
+  servicePriceCents: number,
+  rule: GatewayFeeRule | null,
+  installmentCount: number = 1
+): number {
+  if (!rule) return 0;
+  const servicePrice = Math.max(0, Math.trunc(Number(servicePriceCents) || 0));
+  return minimumStudentChargeCents(servicePrice, installmentCount, rule) - servicePrice;
 }
 
 export interface QuoteCheckoutInput extends ResolveFeeRuleInput {
@@ -212,12 +351,23 @@ export function quoteCheckout(input: QuoteCheckoutInput): GatewayFeeQuote {
     usedFallback = rule !== null;
   }
 
-  const gatewayFeeExpectedCents = calculateGatewayFeeCents(servicePriceCents, rule);
+  // P-1.18E — o total cobrado e' o MINIMO que recupera o service_price integral
+  // apos a taxa real. A tarifa esperada e' a diferenca, nunca um segundo calculo
+  // independente: assim a identidade student_charge - fee = service_price vale
+  // por construcao, e nao por coincidencia de arredondamento.
+  const studentChargeCents = minimumStudentChargeCents(servicePriceCents, installmentCount, rule);
+  const gatewayFeeExpectedCents = studentChargeCents - servicePriceCents;
+  const gatewayFeeChargedCents = gatewayFeeRealCents(studentChargeCents, installmentCount, rule);
 
   return {
     servicePriceCents,
     gatewayFeeExpectedCents,
-    studentChargeCents: servicePriceCents + gatewayFeeExpectedCents,
+    studentChargeCents,
+    gatewayFeeChargedCents,
+    // Sobra de arredondamento: o que sobra depois de o Asaas descontar a taxa
+    // real. Sempre >= 0 e, nos casos medidos, <= 1 centavo. Nao sai do
+    // instrutor, que recebe 90% do service_price via totalFixedValue.
+    surplusCents: gatewayFeeExpectedCents - gatewayFeeChargedCents,
     method,
     installmentCount,
     rule,

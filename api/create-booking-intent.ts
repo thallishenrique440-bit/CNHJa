@@ -709,7 +709,12 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
           totalInstallments: installmentCount || 1,
           grossAmountCents: totalPriceWithFee,
           netAmountCents: finalPrice - applicationFeeAmount,
-          platformFeeCents: applicationFeeAmount + processingFee,
+          // P-1.18E (decisao J1 da P-1.18A): platform_fee e' a COMISSAO PURA.
+          // A tarifa do gateway pertence ao student_charge e ja' e' registrada
+          // em feeAmountCents; soma-la aqui contabilizava a tarifa duas vezes e
+          // inflava a receita da plataforma.
+          //   gross  = net + platform_fee + fee_amount   (identidade exata)
+          platformFeeCents: applicationFeeAmount,
           feeAmountCents: processingFee,
           // P-1.16A: congelamento da tarifa aplicada a esta compra.
           // Uma alteracao futura do schedule nao recalcula esta linha.
