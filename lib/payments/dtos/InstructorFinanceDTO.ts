@@ -43,6 +43,9 @@ export interface InstructorStatementEntryDTO {
   settlementsCount?: number;
   receivedInstallments?: number;
   lastSettlementDate?: string;
+  /** P-1.19: soma do liquido das parcelas ainda NAO recebidas desta compra. */
+  futureNetAmountCents?: number;
+  isTip?: boolean;
 }
 
 export interface InstructorCashFlowDTO {

@@ -248,6 +248,12 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
       }
     }
 
+    // P-1.19: as entradas vindas de payment_settlements representam o que ja' foi
+    // RECEBIDO. Elas deixam de ser o retorno direto do metodo: abaixo sao
+    // combinadas com as compras existentes em payment_installments, para que uma
+    // venda apareca no historico desde que existe, mesmo com 0 parcelas recebidas.
+    let settlementEntries: InstructorStatementEntryDTO[] = [];
+
     if (settlementsData.length > 0) {
       // Enrich missing student names for direct settlements (e.g. tips)
       const missingStudentIds = Array.from(
@@ -391,58 +397,190 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         aggregated = aggregated.filter(e => e.status === options.status);
       }
 
-      return aggregated.sort((a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime());
+      settlementEntries = aggregated;
     }
 
-    // Fallback if payment_settlements query yields no records or fails (e.g. mock test environments or pre-settlement states)
+    // P-1.19 — a VENDA vem de payment_installments, nao de payment_settlements.
+    //
+    // Causa raiz do bug: payment_settlements so' existe depois que o dinheiro e'
+    // efetivamente recebido. Usar essa tabela como fonte da venda escondia do
+    // instrutor qualquer compra parcelada ainda nao liquidada — e, pior, o
+    // caminho de reserva so' era acionado quando o instrutor nao tinha NENHUM
+    // settlement, de modo que uma venda nova ficava invisivel para quem ja'
+    // tinha historico.
+    //
+    // "Venda existente" e "recebimento efetivo" sao conceitos diferentes:
+    //   - a venda existe assim que ha' parcelas em payment_installments;
+    //   - o recebimento existe quando a parcela esta' RECEIVED.
+    // Nenhum valor financeiro e' recalculado aqui, e nenhum registro e' criado.
     const installmentsTable = supabaseClient.from('payment_installments');
     if (!installmentsTable || typeof installmentsTable.select !== 'function') {
-      return [];
+      return settlementEntries.sort(
+        (a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime()
+      );
     }
 
-    let fallbackQuery = installmentsTable
-      .select('id, provider_payment_id, student_id, gross_amount, net_amount, platform_fee, fee_amount, status, due_date, payment_date, profiles ( full_name )')
+    let installmentsQuery = installmentsTable
+      .select('id, provider_payment_id, group_id, installment_number, total_installments, student_id, gross_amount, net_amount, platform_fee, fee_amount, status, due_date, payment_date, profiles ( full_name )')
       .eq('instructor_id', instructorId)
       .order('due_date', { ascending: false });
 
-    if (options?.status) {
-      fallbackQuery = fallbackQuery.eq('status', options.status);
-    }
     if (options?.limit) {
-      fallbackQuery = fallbackQuery.limit(options.limit);
-    }
-    if (options?.offset) {
-      fallbackQuery = fallbackQuery.range(options.offset, options.offset + (options.limit || 10) - 1);
+      installmentsQuery = installmentsQuery.limit(options.limit);
     }
 
-    const { data: fbData } = await fallbackQuery;
-    if (!fbData || fbData.length === 0) {
-      return [];
+    const { data: installmentRows } = await installmentsQuery;
+
+    if (!installmentRows || installmentRows.length === 0) {
+      return settlementEntries.sort(
+        (a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime()
+      );
     }
 
-    return fbData.map((item: any) => {
-      const profileObj = Array.isArray(item?.profiles) ? item?.profiles[0] : item?.profiles;
-      const studentName = profileObj?.full_name || undefined;
+    interface PurchaseAccumulator {
+      firstId: string;
+      providerPaymentId: string;
+      groupId?: string;
+      studentId: string;
+      studentName?: string;
+      totalInstallments: number;
+      rowCount: number;
+      receivedCount: number;
+      receivedGrossCents: number;
+      receivedNetCents: number;
+      receivedPlatformFeeCents: number;
+      receivedFeeAmountCents: number;
+      futureNetCents: number;
+      dueDate: string;
+      lastPaymentDate?: string;
+      statuses: string[];
+    }
 
-      const platformFeeCents = item.platform_fee || 0;
-      const feeAmountCents = item.fee_amount || 0;
-      const commissionCnhJaCents = this.calculateCommissionCnhJa(platformFeeCents, feeAmountCents);
+    const purchases = new Map<string, PurchaseAccumulator>();
 
-      return {
-        id: item.id,
-        providerPaymentId: item.provider_payment_id,
-        installmentId: item.id,
-        studentId: item.student_id,
-        studentName,
-        grossAmountCents: item.gross_amount || 0,
-        netAmountCents: item.net_amount || 0,
-        platformFeeCents,
-        feeAmountCents,
-        commissionCnhJaCents,
-        status: item.status,
-        dueDate: item.due_date,
-        settledAt: item.payment_date || undefined
-      };
+    for (const row of installmentRows as any[]) {
+      const key = row.group_id || row.provider_payment_id || row.id;
+      const rawStatus = String(row.status || '').toUpperCase();
+      const isReceived = rawStatus === 'RECEIVED';
+
+      if (!purchases.has(key)) {
+        const profileObj = Array.isArray(row?.profiles) ? row?.profiles[0] : row?.profiles;
+        purchases.set(key, {
+          firstId: row.id,
+          providerPaymentId: row.provider_payment_id,
+          groupId: row.group_id || undefined,
+          studentId: row.student_id,
+          studentName: profileObj?.full_name || undefined,
+          totalInstallments: Number(row.total_installments) > 0 ? Number(row.total_installments) : 0,
+          rowCount: 0,
+          receivedCount: 0,
+          receivedGrossCents: 0,
+          receivedNetCents: 0,
+          receivedPlatformFeeCents: 0,
+          receivedFeeAmountCents: 0,
+          futureNetCents: 0,
+          dueDate: row.due_date,
+          lastPaymentDate: undefined,
+          statuses: []
+        });
+      }
+
+      const acc = purchases.get(key)!;
+      acc.rowCount += 1;
+      acc.statuses.push(rawStatus);
+
+      // A parcela de numero 1 define a data de referencia da compra.
+      if (Number(row.installment_number) === 1 && row.due_date) {
+        acc.dueDate = row.due_date;
+      }
+
+      if (isReceived) {
+        acc.receivedCount += 1;
+        acc.receivedGrossCents += row.gross_amount || 0;
+        acc.receivedNetCents += row.net_amount || 0;
+        acc.receivedPlatformFeeCents += row.platform_fee || 0;
+        acc.receivedFeeAmountCents += row.fee_amount || 0;
+        if (row.payment_date) {
+          const current = acc.lastPaymentDate ? new Date(acc.lastPaymentDate).getTime() : 0;
+          if (new Date(row.payment_date).getTime() > current) {
+            acc.lastPaymentDate = row.payment_date;
+          }
+        }
+      } else {
+        // Ainda nao recebida: compoe os recebimentos futuros do instrutor.
+        acc.futureNetCents += row.net_amount || 0;
+      }
+    }
+
+    /** Status consolidado da compra, sem inventar estado novo. */
+    const resolvePurchaseStatus = (acc: PurchaseAccumulator): string => {
+      const total = acc.totalInstallments > 0 ? acc.totalInstallments : acc.rowCount;
+      if (acc.statuses.includes('CHARGEBACK')) return 'CHARGEBACK';
+      if (acc.statuses.every(st => st === 'REFUNDED')) return 'REFUNDED';
+      if (acc.statuses.every(st => st === 'CANCELLED')) return 'CANCELLED';
+      if (acc.receivedCount > 0 && acc.receivedCount >= total) return 'RECEIVED';
+      if (acc.statuses.includes('CONFIRMED')) return 'CONFIRMED';
+      if (acc.statuses.includes('OVERDUE')) return 'OVERDUE';
+      return acc.receivedCount > 0 ? 'CONFIRMED' : 'PENDING';
+    };
+
+    const byKey = new Map<string, InstructorStatementEntryDTO>();
+    for (const entry of settlementEntries) {
+      byKey.set(entry.groupId || entry.providerPaymentId || entry.id, entry);
+    }
+
+    for (const [key, acc] of purchases.entries()) {
+      const total = acc.totalInstallments > 0 ? acc.totalInstallments : acc.rowCount;
+      const existing = byKey.get(key);
+
+      if (existing) {
+        // A venda ja' aparece via settlements (dinheiro recebido). Apenas as
+        // CONTAGENS passam a vir de payment_installments, que e' a fonte da
+        // compra. Os valores financeiros permanecem exatamente como estavam.
+        existing.totalInstallments = total;
+        existing.receivedInstallments = acc.receivedCount;
+        existing.futureNetAmountCents = acc.futureNetCents;
+        continue;
+      }
+
+      // Venda existente e ainda sem nenhum settlement: aparece com 0 recebidas.
+      byKey.set(key, {
+        id: acc.firstId,
+        providerPaymentId: acc.providerPaymentId,
+        installmentId: acc.firstId,
+        studentId: acc.studentId,
+        studentName: acc.studentName,
+        grossAmountCents: acc.receivedGrossCents,
+        netAmountCents: acc.receivedNetCents,
+        platformFeeCents: acc.receivedPlatformFeeCents,
+        feeAmountCents: acc.receivedFeeAmountCents,
+        commissionCnhJaCents: this.calculateCommissionCnhJa(
+          acc.receivedPlatformFeeCents,
+          acc.receivedFeeAmountCents
+        ),
+        futureNetAmountCents: acc.futureNetCents,
+        status: resolvePurchaseStatus(acc),
+        dueDate: acc.dueDate,
+        settledAt: acc.lastPaymentDate,
+        groupId: acc.groupId,
+        installmentNumber: acc.receivedCount,
+        totalInstallments: total,
+        settlementsCount: acc.receivedCount,
+        receivedInstallments: acc.receivedCount,
+        lastSettlementDate: acc.lastPaymentDate
+      });
+    }
+
+    let merged = Array.from(byKey.values());
+
+    if (options?.status) {
+      merged = merged.filter(e => e.status === options.status);
+    }
+
+    return merged.sort((a, b) => {
+      const aDate = a.settledAt || a.dueDate || 0;
+      const bDate = b.settledAt || b.dueDate || 0;
+      return new Date(bDate).getTime() - new Date(aDate).getTime();
     });
   }
 

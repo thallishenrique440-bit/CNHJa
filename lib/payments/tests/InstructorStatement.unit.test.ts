@@ -77,17 +77,24 @@ async function runStatementUnitTests() {
 
   assert(Array.isArray(statement), 'getStatement returns an array');
   assert(statement.length === 2, 'Returns 2 statement entries');
-  assert(statement[0].id === 'inst_1', 'Entry 1 id matches');
-  assert(statement[0].grossAmountCents === 10000, 'Entry 1 grossAmountCents is 10000');
-  assert(statement[0].netAmountCents === 9000, 'Entry 1 netAmountCents is 9000');
-  assert(statement[0].platformFeeCents === 1000, 'Entry 1 platformFeeCents is 1000');
-  assert(statement[0].commissionCnhJaCents === 1000, 'Entry 1 commissionCnhJaCents is calculated in Read Model');
-  assert(statement[0].status === 'RECEIVED', 'Entry 1 status is RECEIVED');
-  assert(statement[0].settledAt === '2026-07-02T10:00:00Z', 'Entry 1 settledAt date matches');
+  // P-1.19: as entradas passaram a ser localizadas por id em vez de por posicao.
+  // A ordenacao do extrato agora usa settledAt com queda para dueDate, para que
+  // uma venda ainda sem recebimento apareca no topo em vez de no fim da lista.
+  // As assercoes de conteudo sao exatamente as mesmas.
+  const entry1: any = statement.find((e: any) => e.id === 'inst_1');
+  const entry2: any = statement.find((e: any) => e.id === 'inst_2');
 
-  assert(statement[1].id === 'inst_2', 'Entry 2 id matches');
-  assert(statement[1].status === 'CONFIRMED', 'Entry 2 status is CONFIRMED');
-  assert(statement[1].settledAt === undefined, 'Entry 2 settledAt is undefined for pending installment');
+  assert(!!entry1, 'Entry 1 id matches');
+  assert(entry1.grossAmountCents === 10000, 'Entry 1 grossAmountCents is 10000');
+  assert(entry1.netAmountCents === 9000, 'Entry 1 netAmountCents is 9000');
+  assert(entry1.platformFeeCents === 1000, 'Entry 1 platformFeeCents is 1000');
+  assert(entry1.commissionCnhJaCents === 1000, 'Entry 1 commissionCnhJaCents is calculated in Read Model');
+  assert(entry1.status === 'RECEIVED', 'Entry 1 status is RECEIVED');
+  assert(entry1.settledAt === '2026-07-02T10:00:00Z', 'Entry 1 settledAt date matches');
+
+  assert(!!entry2, 'Entry 2 id matches');
+  assert(entry2.status === 'CONFIRMED', 'Entry 2 status is CONFIRMED');
+  assert(entry2.settledAt === undefined, 'Entry 2 settledAt is undefined for pending installment');
 
   // Test 2: Empty statement fallback
   const mockSupabaseEmpty: any = {

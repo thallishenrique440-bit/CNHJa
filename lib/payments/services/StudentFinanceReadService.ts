@@ -318,16 +318,23 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
 
       let hasRefunded = false;
       let hasFailed = false;
-      let hasReceivedOrConfirmed = false;
 
       groupInsts.forEach((inst: any) => {
         grossAmountCents += inst.gross_amount || 0;
         feeAmountCents += inst.fee_amount || 0;
 
+        // P-1.18F.3 (R1): parcela paga e' SOMENTE status RECEIVED.
+        //
+        // RECEIVED e' o unico status de liquidacao que a producao escreve em
+        // payment_installments (InstallmentService.recordPaymentSettlement, a
+        // partir de PAYMENT_RECEIVED / PAYMENT_DUNNING_RECEIVED no webhook).
+        // CONFIRMED significa cartao autorizado com credito ainda FUTURO — o
+        // dinheiro nao entrou. PAID nao e' escrito por nenhum caminho de
+        // producao. Contar qualquer um dos dois como pago mostrava ao aluno
+        // parcelas quitadas que ainda serao creditadas.
         const rawStatus = (inst.status || '').toUpperCase();
-        if (['RECEIVED', 'CONFIRMED', 'PAID'].includes(rawStatus)) {
+        if (rawStatus === 'RECEIVED') {
           receivedInstallments++;
-          hasReceivedOrConfirmed = true;
         } else if (['REFUNDED'].includes(rawStatus)) {
           hasRefunded = true;
         } else if (['FAILED', 'CANCELLED'].includes(rawStatus)) {
@@ -347,10 +354,14 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
       const lessonPriceCents = grossAmountCents - feeAmountCents;
 
       // Consolidate UI status for the overall purchase
+      //
+      // P-1.18F.3 (R2): 'completed' exige TODAS as parcelas do grupo em
+      // RECEIVED. Antes, uma unica parcela recebida marcava a compra inteira
+      // como concluida — numa compra 4x real o card exibiria "1 de 4 parcelas
+      // pagas" com status geral "Concluido". Compras a vista nao mudam:
+      // totalInstallments = 1 e a unica parcela recebida ja satisfaz a regra.
       let uiStatus = 'pending';
-      if (receivedInstallments >= totalInstallments && totalInstallments > 0) {
-        uiStatus = 'completed';
-      } else if (hasReceivedOrConfirmed) {
+      if (totalInstallments > 0 && receivedInstallments >= totalInstallments) {
         uiStatus = 'completed';
       } else if (hasRefunded) {
         uiStatus = 'refunded';
