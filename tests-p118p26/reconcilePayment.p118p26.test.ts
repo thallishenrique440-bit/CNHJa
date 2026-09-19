@@ -230,11 +230,80 @@ async function main() {
   section('T8/T9 — idempotencia e concorrencia');
 
   {
+    // Parcela ainda PENDING: NO_OP no settlement, mas a parcela pode ser
+    // corrigida (cenario B).
     const { calls, deps } = mockDeps({ outcome: SettlementOutcome.NO_OP_DUPLICATE });
     const r = await reconcilePayment(deps, 'pay_382oqobmuzycog9d');
     eq(r.body.outcome, SettlementOutcome.NO_OP_DUPLICATE, 'T8) retry -> NO_OP_DUPLICATE');
     eq(r.body.settled, true, 'T8) retry continua reportando liquidado');
     eq(calls.settlement.length, 1, 'T8) uma unica chamada de liquidacao');
+  }
+
+  // -------------------------------------------------------------------------
+  section('P-1.18P2.7 — NO_OP_DUPLICATE nao pode sobrescrever a tarifa real');
+
+  // A) primeira reconciliacao: parcela PENDING, sem liquidacao previa
+  {
+    const { calls, deps } = mockDeps({
+      outcome: SettlementOutcome.SETTLEMENT_EXECUTED,
+      installment: { ...PARCELA, status: 'PENDING' }
+    });
+    const r = await reconcilePayment(deps, 'pay_382oqobmuzycog9d');
+    eq(r.body.outcome, SettlementOutcome.SETTLEMENT_EXECUTED, 'A) primeira reconciliacao liquida');
+    eq(calls.settlement.length, 1, 'A) SettlementService chamado 1x');
+    eq(calls.installment.length, 1, 'A) parcela marcada RECEIVED 1x');
+    eq(r.body.wrote, true, 'A) houve escrita');
+  }
+
+  // B) ja liquidado E parcela RECEIVED -> NO-OP TOTAL
+  {
+    const { calls, deps } = mockDeps({
+      outcome: SettlementOutcome.NO_OP_DUPLICATE,
+      installment: { ...PARCELA, status: 'RECEIVED' }
+    });
+    const r = await reconcilePayment(deps, 'pay_y5tvjf2s3yy4c5n8');
+    eq(r.body.outcome, 'NO_OP_ALREADY_RECONCILED', 'B) cenario A -> NO_OP_ALREADY_RECONCILED');
+    eq(r.body.settled, true, 'B) continua reportando liquidado');
+    eq(r.body.wrote, false, 'B) nenhuma escrita');
+    eq(calls.installment.length, 0, 'B) recordPaymentSettlement chamado 0x');
+    eq(calls.settlement.length, 1, 'B) o settlement foi apenas consultado (NO_OP), nao recriado');
+    // fee_amount / platform_fee / instructor_amount permanecem intocados:
+    // nenhuma escrita partiu do endpoint em nenhuma das duas tabelas.
+    eq(calls.installment.length, 0, 'B) fee_amount da parcela permanece inalterado');
+    eq(calls.installment.length, 0, 'B) platform_fee permanece inalterado');
+    eq(calls.installment.length, 0, 'B) instructor_amount permanece inalterado');
+  }
+
+  // C) liquidacao existente + parcela ainda nao RECEIVED -> so a parcela
+  {
+    for (const st of ['PENDING', 'OVERDUE', 'AUTHORIZED']) {
+      const { calls, deps } = mockDeps({
+        outcome: SettlementOutcome.NO_OP_DUPLICATE,
+        installment: { ...PARCELA, status: st }
+      });
+      const r = await reconcilePayment(deps, 'pay_382oqobmuzycog9d');
+      eq(r.body.outcome, SettlementOutcome.NO_OP_DUPLICATE, `C/${st}) settlement permanece NO_OP`);
+      eq(calls.installment.length, 1, `C/${st}) parcela corrigida para RECEIVED`);
+      const dto = calls.installment[0];
+      eq(dto.grossAmountCents, PARCELA.gross_amount, `C/${st}) gross preservado`);
+      eq(dto.netAmountCents, PARCELA.net_amount, `C/${st}) net preservado`);
+      eq(dto.platformFeeCents, PARCELA.platform_fee, `C/${st}) platform_fee preservado`);
+      eq(dto.feeAmountCents, PARCELA.fee_amount, `C/${st}) fee_amount preservado (nao recalculado)`);
+    }
+  }
+
+  // D) protecao estrutural: o endpoint nao escreve payment_settlements
+  {
+    const src = fs.readFileSync(path.join(process.cwd(), 'api/reconcile-payment.ts'), 'utf8')
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert(!/payment_settlements/.test(src),
+      'D) nenhuma referencia a payment_settlements no codigo do endpoint');
+    assert(!/\.(insert|update|upsert|delete)\(/.test(src.split('from(')[0] || ''),
+      'D) nenhuma escrita direta antes da primeira query');
+    const inst = fs.readFileSync(path.join(process.cwd(), 'lib/payments/InstallmentService.ts'), 'utf8')
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert(!/from\(['"]payment_settlements['"]\)/.test(inst),
+      'D) P-1.18P2.2 continua valida: InstallmentService nao escreve payment_settlements');
   }
   {
     // T9 — webhook e reconciliacao simultaneos: a chave e a mesma, entao o

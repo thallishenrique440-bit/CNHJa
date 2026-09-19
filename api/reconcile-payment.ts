@@ -219,10 +219,44 @@ export async function reconcilePayment(
     };
   }
 
+  // P-1.18P2.7 — CENARIO A: nada a fazer.
+  //
+  // A liquidacao ja' existe (NO_OP_DUPLICATE) E a parcela ja' esta' RECEIVED.
+  // Qualquer escrita aqui seria inutil e potencialmente destrutiva: a linha de
+  // payment_settlements carrega a tarifa REAL apurada no momento da liquidacao
+  // (value - netValue), enquanto payment_installments carrega a tarifa
+  // PREVISTA no checkout. Sao numeros legitimamente diferentes, e a real e' a
+  // que vale. Reconciliar de novo nao pode tocar em nenhuma das duas.
+  //
+  // Devolve settled = true porque o pagamento ESTA' liquidado: isso permite a
+  // quem chamou reparar um appointment que tenha ficado preso, sem que nenhum
+  // registro financeiro seja reescrito.
+  const alreadyReceived = String(installment.status || '').toUpperCase() === 'RECEIVED';
+
+  if (settleRes.outcome === SettlementOutcome.NO_OP_DUPLICATE && alreadyReceived) {
+    return {
+      httpStatus: 200,
+      body: {
+        outcome: 'NO_OP_ALREADY_RECONCILED',
+        settled: true,
+        wrote: false,
+        providerPaymentId,
+        installmentNumber,
+        totalInstallments,
+        groupId: installment.group_id || null,
+        asaasStatus
+      }
+    };
+  }
+
+  // CENARIO B (liquidacao existente + parcela ainda nao RECEIVED) e primeira
+  // reconciliacao caem aqui.
+  //
   // A parcela so' e' marcada DEPOIS de a liquidacao oficial existir.
   // SettlementService nunca toca payment_installments (invariante declarada no
   // seu cabecalho), entao este passo espelha exatamente o que o webhook faz em
-  // api/asaas-webhook.ts:990. Nunca grava 'PAID'.
+  // api/asaas-webhook.ts:990. Nunca grava 'PAID'. E os valores sao os da
+  // propria linha lida acima — nenhum numero e' recalculado.
   await deps.recordPaymentSettlement(deps.supabase, {
     providerPaymentId,
     installmentNumber,
@@ -244,6 +278,7 @@ export async function reconcilePayment(
     body: {
       outcome: settleRes.outcome,
       settled: true,
+      wrote: true,
       providerPaymentId,
       installmentNumber,
       totalInstallments,

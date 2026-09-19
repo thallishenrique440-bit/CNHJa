@@ -93,7 +93,11 @@ export class InstallmentService {
         allocatedFee += instFee;
       }
 
-      const instInstructorAmount = instGross - instPlatformFee;
+      // P-1.18E.1: o instrutor recebe o LIQUIDO (service_price - comissao), nunca
+      // gross - platform_fee. Depois da P-1.18E o platform_fee e' comissao pura e
+      // o gross e' o student_charge (ja' com a taxa do gateway) — subtrair um do
+      // outro creditaria a taxa do gateway ao instrutor.
+      const instInstructorAmount = instNet;
 
       // Calculate monthly due date offset if totalInstallments > 1
       let computedDueDate: string | null = dto.dueDate || null;
@@ -186,7 +190,10 @@ export class InstallmentService {
     const instNumber = dto.installmentNumber > 0 ? dto.installmentNumber : 1;
     const totalInst = dto.totalInstallments > 0 ? dto.totalInstallments : 1;
     const paymentDate = dto.paymentDate || new Date().toISOString();
-    const instructorAmount = dto.grossAmountCents - dto.platformFeeCents;
+    // P-1.18E.1: mesma correcao do caminho de criacao. netAmountCents chega do
+    // webhook como payment_installments.net_amount, gravado na criacao como
+    // service_price - comissao. A taxa do gateway nao pertence ao instrutor.
+    const instructorAmount = dto.netAmountCents;
 
     let resolvedGroupId = dto.groupId || null;
     if (!resolvedGroupId) {
@@ -241,29 +248,26 @@ export class InstallmentService {
       console.error(`❌ [InstallmentService] Error upserting installment ${instNumber} for payment ${dto.providerPaymentId}:`, instError.message);
     }
 
-    const installmentId = instData?.id;
-    const settlementId = dto.providerSettlementId || `${dto.providerPaymentId}_inst${instNumber}`;
-
-    // 2. Insert cash flow settlement record into payment_settlements (idempotent)
-    const { error: settlementError } = await supabase
-      .from('payment_settlements')
-      .upsert({
-        installment_id: installmentId || null,
-        provider_payment_id: dto.providerPaymentId,
-        provider_settlement_id: settlementId,
-        settlement_type: 'PAYMENT',
-        gross_amount: dto.grossAmountCents,
-        net_amount: dto.netAmountCents,
-        fee_amount: dto.feeAmountCents || 0,
-        platform_fee: dto.platformFeeCents,
-        instructor_amount: instructorAmount,
-        settled_at: paymentDate,
-      }, { onConflict: 'provider_payment_id,settlement_type,provider_settlement_id' });
-
-    if (settlementError) {
-      console.error(`❌ [InstallmentService] Error inserting payment settlement for ${dto.providerPaymentId}:`, settlementError.message);
-    } else {
-      console.log(`✅ [InstallmentService] Successfully recorded cash flow settlement for payment ${dto.providerPaymentId} (installment ${instNumber}/${totalInst})`);
+    // P-1.18P2.2: a escrita em payment_settlements foi REMOVIDA daqui.
+    //
+    // Existiam dois escritores para a MESMA linha de payment_settlements — a
+    // chave (provider_payment_id, settlement_type, provider_settlement_id) e'
+    // identica nos dois caminhos, porque api/asaas-webhook.ts passa
+    // `providerSettlementId: payload.payment.id` para ambos, e o indice unico
+    // unique_settlement_idempotency garante uma unica linha.
+    //
+    // SettlementService e' a autoridade: recebe a taxa REAL do payload
+    // (value - netValue), tem idempotencia por chave de liquidacao, cria a
+    // transacao financeira e dispara a projecao do instrutor. Este metodo so'
+    // dispunha da taxa ESTIMADA, relida de payment_installments, e nao tinha
+    // idempotencia nenhuma — numa reentrega do webhook ele sobrescreveria a
+    // taxa real pela estimada, corrompendo o extrato do instrutor.
+    //
+    // A responsabilidade que permanece aqui e' exclusivamente a da PARCELA:
+    // status RECEIVED, payment_date e os demais campos de payment_installments,
+    // gravados no upsert acima.
+    if (!instError) {
+      console.log(`✅ [InstallmentService] Parcela ${instNumber}/${totalInst} do pagamento ${dto.providerPaymentId} marcada como RECEIVED (id ${instData?.id ?? 'desconhecido'}).`);
     }
   }
 
