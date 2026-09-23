@@ -52,6 +52,7 @@ const ALLOW = [
   'RefundHardeningFase11F3.unit.test.ts',
   'RefundHardeningP1201B.unit.test.ts',
   'RescheduleDirectP1204.unit.test.ts',
+  'RescheduleProposalP1205.unit.test.ts',
   'RefundOperationContract.unit.test.ts',
   'RefundOperationRepository.unit.test.ts',
   'RefundOperationRpcSecurity.unit.test.ts',

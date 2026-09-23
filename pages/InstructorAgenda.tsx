@@ -33,6 +33,11 @@ interface Lesson {
   price?: number;
   rescheduleRequestedAt?: string | null;
   rescheduledAt?: string | null;
+  // P-1.20.5 — proposta de remarcacao (appointment-level)
+  proposedDate?: string | null;
+  proposedStartTime?: string | null;
+  proposalStatus?: string | null;
+  proposedBy?: string | null;
   // Metadata for cancellation message
   dateStr?: string;
   timeStr?: string;
@@ -404,6 +409,10 @@ export const InstructorAgenda: React.FC = () => {
                 reschedule_requested_at,
                 rescheduled_at,
                 cancelled_reason,
+                proposed_date,
+                proposed_start_time,
+                proposal_status,
+                proposed_by,
                 profiles:student_id (
                     full_name,
                     avatar_url,
@@ -485,6 +494,10 @@ export const InstructorAgenda: React.FC = () => {
                         price: apt.price,
                         rescheduleRequestedAt: apt.reschedule_requested_at,
                         rescheduledAt: apt.rescheduled_at,
+                        proposedDate: apt.proposed_date,
+                        proposedStartTime: apt.proposed_start_time,
+                        proposalStatus: apt.proposal_status,
+                        proposedBy: apt.proposed_by,
                         dateStr: apt.date,
                         timeStr: timeKey,
                         isReserved: isReserved,
@@ -1067,50 +1080,108 @@ export const InstructorAgenda: React.FC = () => {
     }
   };
 
+  // ===========================================================================
+  // P-1.20.5 FASES D/E — REMARCACAO POR PROPOSTA (APPOINTMENT-LEVEL)
+  //
+  // O instrutor NAO altera mais diretamente o horario de uma aula
+  // confirmed/scheduled. O UPDATE direto que existia aqui gravava
+  // date/start_time/end_time sem autoridade server-side e com uma janela TOCTOU
+  // entre o SELECT de conflito e o UPDATE. Agora:
+  //   - propor  -> propose_reschedule  (grava proposta; horario atual intacto)
+  //   - aceitar -> accept_reschedule   (aplica o horario proposto pelo aluno)
+  //   - recusar -> reject_reschedule   (mantem o horario original)
+  //
+  // Toda operacao alcanca SOMENTE o appointment selecionado. group_id nunca
+  // amplia o escopo: remarcacao depois do aceite e' de UMA aula.
+  // ===========================================================================
+
+  const runRescheduleRpc = async (
+    fn: 'propose_reschedule' | 'accept_reschedule' | 'reject_reschedule' | 'cancel_reschedule_proposal',
+    args: Record<string, unknown>,
+    successMessage: string
+  ): Promise<boolean> => {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) throw error;
+
+    const outcome = (data || {}) as { status?: string; code?: string; reason?: string };
+
+    if (outcome.status === 'no_op') {
+      addToast('Esta aula já está neste horário.', 'info');
+      return false;
+    }
+    if (outcome.status !== 'ok') {
+      switch (outcome.code) {
+        case 'SLOT_TAKEN':
+          throw new Error('Este horário já foi ocupado. Por favor, escolha outro.');
+        case 'SLOT_NOT_IN_GRID':
+          throw new Error('Este horário não está disponível na sua agenda.');
+        case 'NEW_SLOT_IN_PAST':
+          throw new Error('Não é possível propor um horário no passado.');
+        case 'PROPOSAL_EXPIRED':
+          throw new Error('O horário proposto já passou. Peça uma nova proposta.');
+        case 'PROPOSAL_ALREADY_PENDING':
+          throw new Error('Já existe uma proposta pendente para esta aula.');
+        case 'PROPOSAL_NOT_PENDING':
+        case 'STATE_CHANGED':
+          throw new Error('Esta proposta já foi respondida. Atualize a agenda.');
+        case 'NOT_COUNTERPARTY':
+          throw new Error('Quem propôs não pode responder à própria proposta.');
+        case 'INVALID_STATUS':
+          throw new Error('Esta aula não está em um estado que permita remarcação.');
+        default:
+          throw new Error('Não foi possível concluir (' + (outcome.code || 'ERRO') + ').');
+      }
+    }
+
+    addToast(successMessage, 'success');
+    return true;
+  };
+
+  /** Recusa a proposta do aluno (ou, no caminho legado, apenas limpa o pedido). */
   const handleRefuseReschedule = async () => {
     if (!selectedLesson) return;
     setIsActionLoading(true);
     try {
-      const { error } = await supabase
-        .from('appointments')
-        .update({ 
-          reschedule_requested_at: null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', selectedLesson.id);
+      if (selectedLesson.proposalStatus === 'pending') {
+        await runRescheduleRpc(
+          'reject_reschedule',
+          { p_appointment_ids: [selectedLesson.id] },
+          'Proposta recusada. A aula permanece no horário original.'
+        );
+      } else {
+        // CAMINHO LEGADO: pedidos antigos gravados apenas em
+        // reschedule_requested_at, sem horario proposto. A coluna e' preservada
+        // por decisao explicita da P-1.20.5; este ramo some quando nao houver
+        // mais linhas antigas.
+        const { error } = await supabase
+          .from('appointments')
+          .update({ reschedule_requested_at: null, updated_at: new Date().toISOString() })
+          .eq('id', selectedLesson.id);
+        if (error) throw error;
 
-      if (error) throw error;
-      
-      // Send student notification
-      if (selectedLesson.studentId) {
-        try {
-          const comboCount = groupLessons.length > 0 ? groupLessons.length : (selectedLesson.groupId ? 2 : 1);
-          /* 
-           * [WORKAROUND TEMPORÁRIO] 
-           * Enviamos p_type como 'system' para evitar colisão de idempotência no banco de dados.
-           * O banco possui uma restrição de unicidade baseada em (type, user_id, appointment_id).
-           * Como as notificações de agendamento inicial já usam 'booking_accepted'/'booking_rejected',
-           * tentar enviar outra resposta com o mesmo tipo causaria uma violação de unicidade,
-           * ignorando o insert e não gerando o push/notificação.
-           * Em futuras evoluções de infraestrutura, novos NotificationTypes específicos de remarcação devem ser criados.
-           */
-          await supabase.rpc('create_unified_notification', {
-            p_user_id: selectedLesson.studentId,
-            p_title: '📅 Remarcação não aprovada',
-            p_message: 'Seu instrutor não aprovou a solicitação de remarcação. Sua aula permanece no horário originalmente agendado.',
-            p_type: 'system',
-            p_entity_type: comboCount > 1 ? 'package' : 'lesson',
-            p_target_screen: 'student_lessons',
-            p_combo_count: comboCount,
-            p_group_id: selectedLesson.groupId || null,
-            p_appointment_id: selectedLesson.id
-          });
-        } catch (notifErr) {
-          console.error('[Notification] Failed to send reschedule rejection notification:', notifErr);
+        if (selectedLesson.studentId) {
+          try {
+            // P-1.20.5: tipo proprio. O workaround `p_type: 'system'` foi
+            // removido — ele existia so para escapar dos indices de
+            // idempotencia, que agora isentam os tipos de remarcacao.
+            await supabase.rpc('create_unified_notification', {
+              p_user_id: selectedLesson.studentId,
+              p_title: '📅 Remarcação não aprovada',
+              p_message: 'Seu instrutor não aprovou a solicitação de remarcação. Sua aula permanece no horário originalmente agendado.',
+              p_type: 'reschedule_rejected',
+              p_entity_type: 'lesson',
+              p_target_screen: 'student_lessons',
+              p_combo_count: 1,
+              p_group_id: null,
+              p_appointment_id: selectedLesson.id
+            });
+          } catch (notifErr) {
+            console.error('[Notification] Failed to send reschedule rejection notification:', notifErr);
+          }
         }
+        addToast('Pedido de reagendamento recusado.', 'info');
       }
-      
-      addToast('Pedido de reagendamento recusado.', 'info');
+
       closeLessonModal();
       fetchAppointments();
     } catch (error: any) {
@@ -1120,108 +1191,68 @@ export const InstructorAgenda: React.FC = () => {
     }
   };
 
+  /** Aceita a proposta feita pelo ALUNO. */
+  const handleAcceptReschedule = async () => {
+    if (!selectedLesson) return;
+    setIsActionLoading(true);
+    try {
+      const ok = await runRescheduleRpc(
+        'accept_reschedule',
+        { p_appointment_ids: [selectedLesson.id] },
+        'Remarcação aprovada! A aula foi atualizada.'
+      );
+      if (ok) {
+        closeLessonModal();
+        fetchAppointments();
+      }
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  /** Retira a propria proposta (somente quem propos). */
+  const handleCancelOwnProposal = async () => {
+    if (!selectedLesson) return;
+    setIsActionLoading(true);
+    try {
+      const ok = await runRescheduleRpc(
+        'cancel_reschedule_proposal',
+        { p_appointment_ids: [selectedLesson.id] },
+        'Proposta retirada.'
+      );
+      if (ok) { closeLessonModal(); fetchAppointments(); }
+    } catch (error: any) {
+      addToast(error.message, 'error');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  /** Propoe um novo horario para UMA aula. Nao altera o horario vigente. */
   const handleConfirmReschedule = async () => {
     if (!selectedLesson || !rescheduleTime) return;
-    
+
     setIsActionLoading(true);
     try {
       const dateStr = rescheduleDate.toISOString().split('T')[0];
-      const [h, m] = rescheduleTime.split(':').map(Number);
-      const endMins = h * 60 + m + LESSON_DURATION;
-      const endTime = `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 
-      // 1. Double check past time
-      const now = new Date(Date.now() + serverTimeOffset);
-      const slotDateTime = new Date(`${dateStr}T${rescheduleTime}:00-03:00`);
-      
-      if (slotDateTime <= now) {
-        throw new Error("Não é possível agendar para um horário no passado");
+      const ok = await runRescheduleRpc(
+        'propose_reschedule',
+        {
+          p_appointment_ids: [selectedLesson.id],
+          p_new_date: dateStr,
+          p_new_start_time: rescheduleTime
+        },
+        'Proposta enviada! A aula continua no horário atual até o aluno responder.'
+      );
+
+      if (ok) {
+        setIsReschedulingModalOpen(false);
+        closeLessonModal();
+        fetchAppointments();
       }
-
-      // 2. Double check availability
-      if (!session?.user?.id) throw new Error("Sessão não encontrada.");
-      const { data: conflict } = await supabase
-        .from('appointments')
-        .select('id')
-        .eq('instructor_id', session.user.id)
-        .eq('date', dateStr)
-        .eq('start_time', rescheduleTime)
-        .in('status', ['pending', 'pending_approval', 'confirmed', 'scheduled', 'reserved', 'awaiting_payment'])
-        .neq('id', selectedLesson.id)
-        .maybeSingle();
-
-      if (conflict) {
-        throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
-      }
-
-      const { error } = await supabase
-        .from('appointments')
-        .update({ 
-          date: dateStr,
-          start_time: rescheduleTime,
-          end_time: endTime,
-          rescheduled_at: new Date().toISOString(),
-          reschedule_requested_at: null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', selectedLesson.id);
-
-      if (error) {
-        const isConflict = 
-          error.code === '23505' || 
-          error.message?.toLowerCase().includes('duplicate') || 
-          error.message?.toLowerCase().includes('unique');
-
-        if (isConflict) {
-          throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
-        }
-        throw error;
-      }
-      
-      // Send student notification
-      if (selectedLesson.studentId) {
-        try {
-          const comboCount = groupLessons.length > 0 ? groupLessons.length : (selectedLesson.groupId ? 2 : 1);
-          let formattedDate = '';
-          if (dateStr) {
-            const [y, m, d] = dateStr.split('-');
-            formattedDate = `${d}/${m}`;
-          }
-          const formattedTime = rescheduleTime ? rescheduleTime.substring(0, 5) : '';
-          let message = 'Seu instrutor aprovou sua solicitação de remarcação.';
-          if (formattedDate && formattedTime) {
-            message += ` Sua aula foi atualizada para: ${formattedDate} às ${formattedTime}.`;
-          }
-
-          /* 
-           * [WORKAROUND TEMPORÁRIO] 
-           * Enviamos p_type como 'system' para evitar colisão de idempotência no banco de dados.
-           * O banco possui uma restrição de unicidade baseada em (type, user_id, appointment_id).
-           * Como as notificações de agendamento inicial já usam 'booking_accepted'/'booking_rejected',
-           * tentar enviar outra resposta com o mesmo tipo causaria uma violação de unicidade,
-           * ignorando o insert e não gerando o push/notificação.
-           * Em futuras evoluções de infraestrutura, novos NotificationTypes específicos de remarcação devem ser criados.
-           */
-          await supabase.rpc('create_unified_notification', {
-            p_user_id: selectedLesson.studentId,
-            p_title: '📅 Remarcação aprovada',
-            p_message: message,
-            p_type: 'system',
-            p_entity_type: comboCount > 1 ? 'package' : 'lesson',
-            p_target_screen: 'student_lessons',
-            p_combo_count: comboCount,
-            p_group_id: selectedLesson.groupId || null,
-            p_appointment_id: selectedLesson.id
-          });
-        } catch (notifErr) {
-          console.error('[Notification] Failed to send reschedule approval notification:', notifErr);
-        }
-      }
-      
-      addToast('Aula reagendada com sucesso!', 'success');
-      setIsReschedulingModalOpen(false);
-      closeLessonModal();
-      fetchAppointments();
     } catch (error: any) {
       addToast(error.message, 'error');
     } finally {
@@ -1573,7 +1604,7 @@ export const InstructorAgenda: React.FC = () => {
                           </button>
                         )}
                       </span>
-                      {lesson.rescheduleRequestedAt && (
+                      {(lesson.proposalStatus === 'pending' || lesson.rescheduleRequestedAt) && (
                         <span className="text-[8px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full animate-pulse border border-amber-200">
                            Reagendamento solicitado
                         </span>
@@ -1651,7 +1682,7 @@ export const InstructorAgenda: React.FC = () => {
           ) : viewState === 'reschedule_picker' ? (
              <div className="space-y-3 w-full">
                 <Button fullWidth onClick={handleConfirmReschedule} disabled={isActionLoading || !rescheduleTime} className="bg-indigo-600 hover:bg-indigo-700 text-white">
-                   {isActionLoading ? 'Reagendando...' : 'Confirmar Reagendamento'}
+                   {isActionLoading ? 'Enviando...' : 'Enviar Proposta'}
                 </Button>
                 <Button variant="outline" fullWidth onClick={() => setViewState('details')}>
                    Voltar
@@ -1687,26 +1718,106 @@ export const InstructorAgenda: React.FC = () => {
               );
           })() : (
              <div className="space-y-3 w-full">
-                {/* Reschedule Request Actions */}
-                {selectedLesson?.rescheduleRequestedAt && (
-                    <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 space-y-2 mb-2">
-                        <Button 
-                            fullWidth 
-                            onClick={() => setViewState('reschedule_picker')}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                        >
-                            Remarcar Aula
-                        </Button>
-                        <Button 
-                            fullWidth 
-                            variant="outline" 
-                            onClick={handleRefuseReschedule}
-                            className="bg-white border-amber-200 text-amber-700 hover:bg-amber-100"
-                        >
-                            Manter Horário Atual
-                        </Button>
-                    </div>
-                )}
+                {/* P-1.20.5 — Acoes de remarcacao (sempre sobre UMA aula) */}
+                {(() => {
+                    if (!selectedLesson) return null;
+                    const isAccepted = selectedLesson.dbStatus === 'confirmed'
+                                    || selectedLesson.dbStatus === 'scheduled';
+
+                    // 1. Proposta PENDENTE
+                    if (selectedLesson.proposalStatus === 'pending') {
+                        const mine = selectedLesson.proposedBy === session?.user?.id;
+                        const pd = selectedLesson.proposedDate
+                          ? (() => { const [y, mm, dd] = selectedLesson.proposedDate!.split('-'); return `${dd}/${mm}`; })()
+                          : '';
+                        const pt = (selectedLesson.proposedStartTime || '').substring(0, 5);
+
+                        return (
+                            <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 space-y-2 mb-2">
+                                <p className="text-[11px] text-amber-800 text-center font-medium">
+                                    {mine ? 'Você propôs ' : 'O aluno propôs '}{pd} às {pt}.
+                                    {' '}O horário atual continua valendo.
+                                </p>
+                                {mine ? (
+                                    <Button
+                                        fullWidth
+                                        variant="outline"
+                                        onClick={handleCancelOwnProposal}
+                                        disabled={isActionLoading}
+                                        className="bg-white border-amber-200 text-amber-700 hover:bg-amber-100"
+                                    >
+                                        {isActionLoading ? '...' : 'Retirar proposta'}
+                                    </Button>
+                                ) : (
+                                    <>
+                                        <Button
+                                            fullWidth
+                                            onClick={handleAcceptReschedule}
+                                            disabled={isActionLoading}
+                                            className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                                        >
+                                            {isActionLoading ? '...' : 'Aceitar novo horário'}
+                                        </Button>
+                                        <Button
+                                            fullWidth
+                                            variant="outline"
+                                            onClick={handleRefuseReschedule}
+                                            disabled={isActionLoading}
+                                            className="bg-white border-amber-200 text-amber-700 hover:bg-amber-100"
+                                        >
+                                            Manter Horário Atual
+                                        </Button>
+                                    </>
+                                )}
+                            </div>
+                        );
+                    }
+
+                    // 2. Pedido LEGADO (sem horario proposto)
+                    if (selectedLesson.rescheduleRequestedAt) {
+                        return (
+                            <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 space-y-2 mb-2">
+                                <p className="text-[11px] text-amber-800 text-center font-medium">
+                                    O aluno pediu remarcação sem indicar horário. Proponha um.
+                                </p>
+                                <Button
+                                    fullWidth
+                                    onClick={() => setViewState('reschedule_picker')}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                                >
+                                    Propor novo horário
+                                </Button>
+                                <Button
+                                    fullWidth
+                                    variant="outline"
+                                    onClick={handleRefuseReschedule}
+                                    disabled={isActionLoading}
+                                    className="bg-white border-amber-200 text-amber-700 hover:bg-amber-100"
+                                >
+                                    Manter Horário Atual
+                                </Button>
+                            </div>
+                        );
+                    }
+
+                    // 3. P-1.20.5 FASE D — entrada PROPRIA do instrutor.
+                    //    Antes so existia caminho de remarcacao quando o aluno
+                    //    havia pedido (`rescheduleRequestedAt`).
+                    if (isAccepted) {
+                        return (
+                            <Button
+                                fullWidth
+                                variant="outline"
+                                onClick={() => setViewState('reschedule_picker')}
+                                className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 mb-2"
+                            >
+                                Remarcar aula
+                            </Button>
+                        );
+                    }
+
+                    return null;
+                })()}
 
                 {selectedLesson?.status !== 'free' && selectedLesson?.status !== 'blocked' && (
                     <Button 
@@ -1751,25 +1862,20 @@ export const InstructorAgenda: React.FC = () => {
 
                 <Button fullWidth variant="outline" onClick={closeLessonModal} className="py-2.5 text-sm h-10 min-h-0">Fechar</Button>
                 
-                {/* Cancel Button for Scheduled/Confirmed Lessons - Only if not started yet */}
-                {(selectedLesson?.dbStatus === 'confirmed' || selectedLesson?.dbStatus === 'scheduled') && (() => {
-                    const now = new Date(Date.now() + serverTimeOffset);
-                    const [y, m, d] = selectedLesson.dateStr!.split('-').map(Number);
-                    const [h, min] = selectedLesson.timeStr!.split(':').map(Number);
-                    const lessonStart = new Date(y, m - 1, d, h, min);
-                    
-                    if (now < lessonStart) {
-                        return (
-                            <button 
-                              onClick={() => setViewState('cancel_form')}
-                              className="w-full text-center text-xs text-red-500 font-semibold hover:text-red-600 pt-2"
-                            >
-                              Cancelar esta aula
-                            </button>
-                        );
-                    }
-                    return null;
-                })()}
+                {/*
+                  P-1.20.5 — REGRA: depois do aceite NAO existe cancelamento da aula.
+                  O bloco que ficava aqui renderizava "Cancelar esta aula" com a
+                  condicao (dbStatus === 'confirmed' || dbStatus === 'scheduled'),
+                  ou seja, EXATAMENTE nos estados em que cancelar e' proibido.
+                  Se o instrutor nao puder dar a aula, o caminho e' REMARCACAO
+                  (botao "Remarcar aula" / proposta), que nao gera reembolso,
+                  novo pagamento, nova comissao nem qualquer efeito financeiro.
+
+                  O cancelamento/reembolso dos estados ANTERIORES ao aceite
+                  continua intacto: a recusa do combo (`handleRejectLesson` ->
+                  reject-booking) e a matriz REASON_ALLOWED_STATUSES do
+                  BookingCancellationCore nao foram tocadas.
+                */}
              </div>
           )
         }
@@ -1875,12 +1981,20 @@ export const InstructorAgenda: React.FC = () => {
                 {/* STATE: DETAILS (DEFAULT) */}
                 {viewState === 'details' && (
                     <>
-                        {selectedLesson.rescheduleRequestedAt && (
+                        {(selectedLesson.proposalStatus === 'pending' || selectedLesson.rescheduleRequestedAt) && (
                             <div className="w-full mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start space-x-3 animate-pulse">
                                 <span className="text-xl">⏳</span>
                                 <div>
-                                    <p className="text-xs font-bold text-amber-800">Reagendamento Solicitado</p>
-                                    <p className="text-[10px] text-amber-700">O aluno solicitou a alteração deste horário (regra menor que 24h).</p>
+                                    <p className="text-xs font-bold text-amber-800">
+                                        {selectedLesson.proposalStatus === 'pending'
+                                          ? 'Proposta de remarcação pendente'
+                                          : 'Reagendamento Solicitado'}
+                                    </p>
+                                    <p className="text-[10px] text-amber-700">
+                                        {selectedLesson.proposalStatus === 'pending'
+                                          ? 'Esta aula continua no horário atual até a proposta ser respondida.'
+                                          : 'O aluno solicitou a alteração deste horário (regra menor que 24h).'}
+                                    </p>
                                 </div>
                             </div>
                         )}

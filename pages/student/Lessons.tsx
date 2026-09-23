@@ -37,6 +37,11 @@ interface Lesson {
   isReviewed?: boolean; 
   rescheduleRequestedAt?: Date | null;
   rescheduledAt?: Date | null;
+  // P-1.20.5 — proposta de remarcacao (appointment-level)
+  proposedDate?: string | null;
+  proposedStartTime?: string | null;
+  proposalStatus?: string | null;
+  proposedBy?: string | null;
 }
 
 interface DBAppointment {
@@ -51,6 +56,10 @@ interface DBAppointment {
   reschedule_requested_at: string | null;
   rescheduled_at: string | null;
   cancelled_reason: string | null;
+  proposed_date: string | null;
+  proposed_start_time: string | null;
+  proposal_status: string | null;
+  proposed_by: string | null;
   instructors: {
     whatsapp: string;
     meeting_point: string;
@@ -121,6 +130,9 @@ export const StudentLessons: React.FC = () => {
   // Rescheduling Flow State
   const [lessonForAction, setLessonForAction] = useState<LessonGroup | null>(null);
   const [lessonToReschedule, setLessonToReschedule] = useState<LessonGroup | null>(null);
+  // P-1.20.5: 'direct' = >24h, aplica na hora (RPC P-1.20.4).
+  //           'propose' = <=24h, cria proposta pendente para o instrutor responder.
+  const [rescheduleMode, setRescheduleMode] = useState<'direct' | 'propose'>('direct');
   const [rescheduleDate, setRescheduleDate] = useState(new Date());
   const [rescheduleTime, setRescheduleTime] = useState<string | null>(null);
   const [rescheduleBusySlots, setRescheduleBusySlots] = useState<string[]>([]);
@@ -226,7 +238,11 @@ export const StudentLessons: React.FC = () => {
           lessonCategory: category,
           isReviewed: hasReview,
           rescheduleRequestedAt: apt.reschedule_requested_at ? new Date(apt.reschedule_requested_at) : null,
-          rescheduledAt: apt.rescheduled_at ? new Date(apt.rescheduled_at) : null
+          rescheduledAt: apt.rescheduled_at ? new Date(apt.rescheduled_at) : null,
+          proposedDate: apt.proposed_date,
+          proposedStartTime: apt.proposed_start_time,
+          proposalStatus: apt.proposal_status,
+          proposedBy: apt.proposed_by
         };
       } catch (mapErr) {
         console.error('Error mapping individual lesson:', apt.id, mapErr);
@@ -318,6 +334,10 @@ export const StudentLessons: React.FC = () => {
             reschedule_requested_at,
             rescheduled_at,
             cancelled_reason,
+            proposed_date,
+            proposed_start_time,
+            proposal_status,
+            proposed_by,
             instructors (
               whatsapp,
               meeting_point,
@@ -684,116 +704,67 @@ export const StudentLessons: React.FC = () => {
   };
 
   // --- CANCELLATION LOGIC START ---
-  const handleCancelClick = (group: LessonGroup) => {
-    const now = new Date(Date.now() + serverTimeOffset);
-    // Parse start time "HH:MM"
-    const [h, m] = group.time.split(':').map(Number);
-    const lessonStart = new Date(group.date);
-    lessonStart.setHours(h, m, 0, 0);
-
-    // CRITICAL: Block if already started or passed
-    if (now >= lessonStart) {
-      addToast("Não é possível cancelar aulas que já começaram ou passaram.", "warning");
-      return;
-    }
-
-    // 1. Pending: Always allow cancel (if not passed)
-    if (group.status === 'pending') {
-      setLessonToCancel(group);
-      return;
-    }
-
-    // 2. Scheduled: Check 24h rule
-    const diffMs = lessonStart.getTime() - now.getTime();
-    const diffHours = diffMs / (1000 * 60 * 60);
-
-    if (diffHours < 24) {
-      // BLOCK: Educational Toast
-      addToast("Faltam menos de 24h. Para cancelar, contate seu instrutor diretamente pelo WhatsApp.", "warning");
-      
-      if (group.instructorWhatsapp) {
-         // Offer to open WhatsApp
-         const clean = group.instructorWhatsapp.replace(/\D/g, '');
-         const full = clean.startsWith('55') ? clean : `55${clean}`;
-         const dateStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(group.date);
-         const msg = encodeURIComponent(`Olá, preciso cancelar minha aula do dia ${dateStr} às ${group.time}, mas o app não permite com menos de 24h. Podemos conversar?`);
-         setTimeout(() => {
-            if(confirm("Deseja abrir o WhatsApp do instrutor agora?")) {
-               window.open(`https://wa.me/${full}?text=${msg}`, '_blank');
-            }
-         }, 1500);
-      }
-    } else {
-      // ALLOW: Open Modal
-      setLessonToCancel(group);
-    }
-  };
+  // P-1.20.5 FASE A: `handleCancelClick` foi REMOVIDO.
+  // A auditoria confirmou ZERO chamadores (a lista usa `handleActionClick`).
+  // Era um segundo caminho de cancelamento que nao checava `dbStatus`, ou seja,
+  // teria permitido cancelar aula ja aceita (confirmed/scheduled) — exatamente
+  // o que a regra P-1.20.5 proibe.
 
   // --- REQUEST RESCHEDULE (<24h) ---
   const [isRequestingReschedule, setIsRequestingReschedule] = useState(false);
-  const requestReschedule = async (group: LessonGroup) => {
-    if (!session?.user) return;
-    setIsRequestingReschedule(true);
-    try {
-      const { error } = await supabase
-        .from('appointments')
-        .update({ reschedule_requested_at: new Date().toISOString() })
-        .in('id', group.ids);
 
+  // P-1.20.5 FASE C: o fluxo <=24h deixou de gravar apenas `reschedule_requested_at`
+  // e passar a escolha do horario para o instrutor. Agora o ALUNO PROPOE um
+  // horario concreto e o instrutor apenas aceita ou recusa.
+  // O antigo `requestReschedule` (UPDATE direto em reschedule_requested_at +
+  // create_unified_notification chamado pelo cliente) foi removido: o cliente
+  // nao deve poder forjar o conteudo da notificacao nem escrever agenda sem
+  // validacao de grade/conflito server-side.
+
+  // --- PROPOSAL ACTIONS (P-1.20.5) ---
+  const [isResolvingProposal, setIsResolvingProposal] = useState(false);
+
+  const resolveProposal = async (group: LessonGroup, action: 'accept' | 'reject' | 'cancel') => {
+    if (!session?.user) return;
+    setIsResolvingProposal(true);
+    try {
+      const fn = action === 'accept' ? 'accept_reschedule'
+               : action === 'reject' ? 'reject_reschedule'
+               : 'cancel_reschedule_proposal';
+
+      const { data, error } = await supabase.rpc(fn, { p_appointment_ids: group.ids });
       if (error) throw error;
 
-      // Fetch student's full name to personalize the notification message
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', session.user.id)
-        .single();
-      const studentName = profileData?.full_name || 'Aluno';
-
-      // Create unified notification for the instructor
-      const title = '📅 Solicitação de remarcação';
-      const dateStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(group.date);
-      const timeStr = group.time;
-
-      const message = group.count > 1
-        ? `O aluno ${studentName} solicitou o reagendamento de um pacote de ${group.count} aulas (início em ${dateStr} às ${timeStr}).`
-        : `O aluno ${studentName} solicitou a remarcação da aula de ${dateStr} às ${timeStr}.`;
-
-      const { error: notificationError } = await supabase.rpc('create_unified_notification', {
-        p_user_id: group.instructorId,
-        p_title: title,
-        p_message: message,
-        p_type: 'booking_request', // Corresponds to NotificationType.BOOKING_RESCHEDULED (mapped to 'booking_request' for DB check constraint safety)
-        p_entity_type: group.count > 1 ? 'package' : 'lesson',
-        p_target_screen: 'instructor_agenda',
-        p_combo_count: group.count,
-        p_group_id: null,
-        p_appointment_id: group.ids[0] || null
-      });
-
-      if (notificationError) throw notificationError;
-
-      addToast("Solicitação enviada! O instrutor foi notificado.", "success");
-      setLessonForAction(null);
-      
-      // Refresh lessons
-      const { data: updatedData } = await supabase
-        .from('appointments')
-        .select('id, reschedule_requested_at')
-        .in('id', group.ids);
-      
-      if (updatedData) {
-        setRawLessons(prev => prev.map(l => {
-          const updated = updatedData.find(u => u.id === l.id);
-          if (updated) return { ...l, reschedule_requested_at: updated.reschedule_requested_at };
-          return l;
-        }));
+      const outcome = (data || {}) as { status?: string; code?: string };
+      if (outcome.status !== 'ok') {
+        if (outcome.code === 'SLOT_TAKEN') {
+          throw new Error("O horário proposto já foi ocupado. Peça uma nova proposta.");
+        }
+        if (outcome.code === 'PROPOSAL_EXPIRED') {
+          throw new Error("O horário proposto já passou. Peça uma nova proposta.");
+        }
+        if (outcome.code === 'PROPOSAL_NOT_PENDING' || outcome.code === 'STATE_CHANGED') {
+          throw new Error("Esta proposta já foi respondida. Recarregue a página.");
+        }
+        if (outcome.code === 'SLOT_NOT_IN_GRID') {
+          throw new Error("O horário proposto não está mais disponível na agenda do instrutor.");
+        }
+        throw new Error("Não foi possível concluir (" + (outcome.code || 'ERRO') + ").");
       }
-    } catch (err) {
-      console.error("Error requesting reschedule:", err);
-      addToast("Erro ao enviar solicitação. Tente novamente.", "error");
+
+      addToast(
+        action === 'accept' ? "Remarcação aceita! Sua aula foi atualizada."
+        : action === 'reject' ? "Proposta recusada. Sua aula permanece no horário original."
+        : "Proposta cancelada.",
+        action === 'reject' ? 'info' : 'success'
+      );
+      setLessonForAction(null);
+      window.location.reload();
+    } catch (err: any) {
+      console.error("Error resolving reschedule proposal:", err);
+      addToast(err.message, "error");
     } finally {
-      setIsRequestingReschedule(false);
+      setIsResolvingProposal(false);
     }
   };
 
@@ -942,8 +913,11 @@ export const StudentLessons: React.FC = () => {
       // instrutor no servidor.
       //
       // P-1.20.3 preservado: a RPC nao escreve `status` em nenhuma hipotese.
+      // P-1.20.5: mesmo picker, duas autoridades server-side distintas.
+      //   >24h  -> reschedule_appointment_direct (aplica imediatamente)
+      //   <=24h -> propose_reschedule (grava proposta; horario atual permanece)
       const { data: rpcResult, error: rpcError } = await supabase
-        .rpc('reschedule_appointment_direct', {
+        .rpc(rescheduleMode === 'propose' ? 'propose_reschedule' : 'reschedule_appointment_direct', {
           p_appointment_ids: lessonToReschedule.ids,
           p_new_date: dateKey,
           p_new_start_time: rescheduleTime
@@ -975,8 +949,11 @@ export const StudentLessons: React.FC = () => {
         if (outcome.code === 'SLOT_NOT_IN_GRID') {
           throw new Error("Este horário não está disponível na agenda do instrutor.");
         }
-        if (outcome.code === 'RESCHEDULE_PENDING') {
+        if (outcome.code === 'RESCHEDULE_PENDING' || outcome.code === 'PROPOSAL_ALREADY_PENDING') {
           throw new Error("Já existe uma solicitação de remarcação pendente para esta aula.");
+        }
+        if (outcome.code === 'NOT_OWNER') {
+          throw new Error("Esta aula não pertence a você.");
         }
         if (outcome.code === 'INVALID_STATUS' || outcome.code === 'STATE_CHANGED') {
           throw new Error("Esta aula já foi atualizada. Recarregue a página.");
@@ -989,7 +966,12 @@ export const StudentLessons: React.FC = () => {
       // duplicar a notificacao — e porque o cliente nao deve poder forjar o
       // conteudo dela.
 
-      addToast("Aula remarcada com sucesso! O instrutor foi notificado.", "success");
+      addToast(
+        rescheduleMode === 'propose'
+          ? "Proposta enviada! Sua aula continua no horário atual até o instrutor responder."
+          : "Aula remarcada com sucesso! O instrutor foi notificado.",
+        "success"
+      );
       setLessonToReschedule(null);
       setRescheduleTime(null);
       
@@ -1110,7 +1092,11 @@ export const StudentLessons: React.FC = () => {
         lessonCategory: daily[0].lessonCategory,
         isReviewed: daily[0].isReviewed,
         rescheduleRequestedAt: daily[0].rescheduleRequestedAt,
-        rescheduledAt: daily[0].rescheduledAt
+        rescheduledAt: daily[0].rescheduledAt,
+        proposedDate: daily[0].proposedDate,
+        proposedStartTime: daily[0].proposedStartTime,
+        proposalStatus: daily[0].proposalStatus,
+        proposedBy: daily[0].proposedBy
     };
 
     for (let i = 1; i < daily.length; i++) {
@@ -1120,7 +1106,11 @@ export const StudentLessons: React.FC = () => {
             currentGroup.endTime === next.time &&
             currentGroup.instructorName === next.instructorName &&
             currentGroup.status === next.status &&
-            currentGroup.lessonCategory === next.lessonCategory
+            currentGroup.lessonCategory === next.lessonCategory &&
+            // P-1.20.5: aulas com estados de proposta diferentes nunca compoem
+            // um mesmo bloco, senao uma acao de proposta vazaria para a aula ao lado.
+            (currentGroup.proposalStatus ?? null) === (next.proposalStatus ?? null) &&
+            (currentGroup.proposedBy ?? null) === (next.proposedBy ?? null)
         ) {
             currentGroup.ids.push(next.id);
             currentGroup.count += 1;
@@ -1153,7 +1143,11 @@ export const StudentLessons: React.FC = () => {
                 lessonCategory: next.lessonCategory,
                 isReviewed: next.isReviewed,
                 rescheduleRequestedAt: next.rescheduleRequestedAt,
-                rescheduledAt: next.rescheduledAt
+                rescheduledAt: next.rescheduledAt,
+                proposedDate: next.proposedDate,
+                proposedStartTime: next.proposedStartTime,
+                proposalStatus: next.proposalStatus,
+                proposedBy: next.proposedBy
             };
         }
     }
@@ -1280,9 +1274,11 @@ export const StudentLessons: React.FC = () => {
                            {group.count} aulas
                         </span>
                     )}
-                    {group.rescheduleRequestedAt && (
+                    {(group.proposalStatus === 'pending' || group.rescheduleRequestedAt) && (
                         <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full border border-amber-200 ml-1 animate-pulse">
-                           Reagendamento solicitado
+                           {group.proposalStatus === 'pending' && group.proposedBy !== session?.user?.id
+                              ? 'Nova proposta de horário'
+                              : 'Reagendamento solicitado'}
                         </span>
                     )}
                   </div>
@@ -1340,6 +1336,21 @@ export const StudentLessons: React.FC = () => {
                     <div className="flex items-center gap-2 flex-shrink-0">
                         {/* Action Button - Decision Modal */}
                         {(() => {
+                            // P-1.20.5: proposta pendente. Quem NAO propos responde;
+                            // quem propos apenas aguarda (e pode retirar a proposta).
+                            if (group.proposalStatus === 'pending') {
+                                const mine = group.proposedBy === session?.user?.id;
+                                return (
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => handleActionClick(group)}
+                                      className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-amber-200 text-amber-700 hover:bg-amber-50"
+                                    >
+                                      {mine ? 'Ver proposta' : 'Responder proposta'}
+                                    </Button>
+                                );
+                            }
+
                             if (group.rescheduleRequestedAt) {
                                 return (
                                     <span className="text-[10px] text-amber-600 font-medium italic">
@@ -1429,10 +1440,18 @@ export const StudentLessons: React.FC = () => {
           const diffMs = lessonStart.getTime() - now.getTime();
           const diffHours = diffMs / (1000 * 60 * 60);
           
-          if (diffHours < 24 && lessonForAction.status !== 'pending') {
-            return "Solicitar reagendamento?";
+          if (lessonForAction.proposalStatus === 'pending') {
+            return lessonForAction.proposedBy === session?.user?.id
+              ? "Proposta enviada"
+              : "Nova proposta de horário";
           }
-          return "Deseja cancelar ou remarcar sua aula?";
+          if (diffHours < 24 && lessonForAction.status !== 'pending') {
+            return "Propor novo horário";
+          }
+          // P-1.20.5: aula ja aceita nao pode ser cancelada pelo aluno.
+          return (lessonForAction.dbStatus === 'confirmed' || lessonForAction.dbStatus === 'scheduled')
+            ? "Deseja remarcar sua aula?"
+            : "Deseja cancelar ou remarcar sua aula?";
         })()}
         footer={null}
       >
@@ -1447,6 +1466,76 @@ export const StudentLessons: React.FC = () => {
             const diffHours = diffMs / (1000 * 60 * 60);
             const isUnder24h = diffHours < 24 && lessonForAction.status !== 'pending';
 
+            // P-1.20.5: enquanto houver proposta PENDENTE, nenhuma outra acao
+            // de remarcacao e' oferecida. O horario vigente continua valendo.
+            if (lessonForAction.proposalStatus === 'pending') {
+              const iProposed = lessonForAction.proposedBy === session?.user?.id;
+              const propDate = lessonForAction.proposedDate
+                ? (() => { const [y, mm, dd] = lessonForAction.proposedDate!.split('-'); return `${dd}/${mm}`; })()
+                : '';
+              const propTime = (lessonForAction.proposedStartTime || '').substring(0, 5);
+
+              return (
+                <>
+                  <div className="text-center mb-6">
+                    <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+                      📅
+                    </div>
+                    <p className="text-sm text-gray-700 font-medium">
+                      {iProposed
+                        ? 'Você propôs um novo horário.'
+                        : 'Seu instrutor propôs um novo horário.'}
+                    </p>
+                    <p className="text-base text-gray-900 font-semibold mt-2">
+                      {propDate} às {propTime}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-2">
+                      Sua aula continua em {lessonForAction.time} até que a proposta seja respondida.
+                    </p>
+                  </div>
+
+                  {iProposed ? (
+                    <Button
+                      fullWidth
+                      variant="outline"
+                      onClick={() => resolveProposal(lessonForAction, 'cancel')}
+                      disabled={isResolvingProposal}
+                      className="h-12 text-base"
+                    >
+                      {isResolvingProposal ? 'Cancelando...' : 'Cancelar proposta'}
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        fullWidth
+                        onClick={() => resolveProposal(lessonForAction, 'accept')}
+                        disabled={isResolvingProposal}
+                        className="h-12 text-base shadow-md shadow-blue-100"
+                      >
+                        {isResolvingProposal ? 'Processando...' : 'Aceitar novo horário'}
+                      </Button>
+                      <Button
+                        fullWidth
+                        variant="outline"
+                        onClick={() => resolveProposal(lessonForAction, 'reject')}
+                        disabled={isResolvingProposal}
+                        className="h-12 text-base border-amber-200 text-amber-700 hover:bg-amber-50"
+                      >
+                        Manter horário atual
+                      </Button>
+                    </>
+                  )}
+
+                  <button
+                    onClick={() => setLessonForAction(null)}
+                    className="w-full text-center py-2 text-sm text-gray-400"
+                  >
+                    Voltar
+                  </button>
+                </>
+              );
+            }
+
             if (isUnder24h) {
               return (
                 <>
@@ -1458,17 +1547,25 @@ export const StudentLessons: React.FC = () => {
                       Faltam menos de 24h para a aula.
                     </p>
                     <p className="text-xs text-gray-500 mt-2">
-                      Alterações neste período dependem da aprovação do instrutor. Você pode solicitar o reagendamento aqui ou falar com ele pelo WhatsApp.
+                      Escolha o novo horário que você prefere. Sua aula continua no horário atual até o instrutor aceitar.
                     </p>
                   </div>
 
                   <Button 
                     fullWidth 
-                    onClick={() => requestReschedule(lessonForAction)}
+                    onClick={() => {
+                      // P-1.20.5 FASE C: o aluno PROPOE um horario concreto.
+                      setInstructorConfig(null);
+                      setRescheduleDate(new Date());
+                      setRescheduleTime(null);
+                      setRescheduleMode('propose');
+                      setLessonToReschedule(lessonForAction);
+                      setLessonForAction(null);
+                    }}
                     disabled={isRequestingReschedule}
                     className="h-12 text-base shadow-md shadow-amber-100 bg-amber-600 hover:bg-amber-700"
                   >
-                    {isRequestingReschedule ? 'Enviando...' : 'Pedir Reagendamento'}
+                    Escolher novo horário
                   </Button>
 
                   {lessonForAction.instructorWhatsapp && (
@@ -1513,6 +1610,7 @@ export const StudentLessons: React.FC = () => {
                     setInstructorConfig(null);
                     setRescheduleDate(new Date());
                     setRescheduleTime(null);
+                    setRescheduleMode('direct');
                     setLessonToReschedule(lessonForAction);
                     setLessonForAction(null);
                   }}
@@ -1521,15 +1619,27 @@ export const StudentLessons: React.FC = () => {
                   Remarcar aula
                 </Button>
 
-                <button 
-                  onClick={() => {
-                    setLessonToCancel(lessonForAction);
-                    setLessonForAction(null);
-                  }}
-                  className="w-full text-center py-2 text-sm text-gray-400 hover:text-red-500 transition-colors"
-                >
-                  Cancelar aula
-                </button>
+                {/*
+                  P-1.20.5 FASE A — REGRA: depois que a aula esta ACEITA
+                  (confirmed/scheduled), o aluno NAO pode cancelar.
+                  Antes, este link era renderizado INCONDICIONALMENTE: a unica
+                  ramificacao do modal era temporal (isUnder24h), nunca de status.
+                  O backend ja bloqueava (Edge cancel-booking -> 409
+                  LESSON_ALREADY_ACCEPTED e a matriz REASON_ALLOWED_STATUSES do
+                  BookingCancellationCore); a UI e' que oferecia um caminho que
+                  terminava sempre em erro. Aquela protecao permanece intacta.
+                */}
+                {lessonForAction.dbStatus !== 'confirmed' && lessonForAction.dbStatus !== 'scheduled' && (
+                  <button
+                    onClick={() => {
+                      setLessonToCancel(lessonForAction);
+                      setLessonForAction(null);
+                    }}
+                    className="w-full text-center py-2 text-sm text-gray-400 hover:text-red-500 transition-colors"
+                  >
+                    Cancelar aula
+                  </button>
+                )}
               </>
             );
           })()}
@@ -1543,7 +1653,7 @@ export const StudentLessons: React.FC = () => {
           setLessonToReschedule(null);
           setRescheduleTime(null);
         }}
-        title="Escolha o novo horário"
+        title={rescheduleMode === 'propose' ? "Proponha um novo horário" : "Escolha o novo horário"}
         footer={
           <div className="flex space-x-3 w-full">
             <Button 

@@ -129,8 +129,10 @@ const ui = readFileSync('pages/student/Lessons.tsx', 'utf-8');
 const confirmBlock = ui
   .slice(ui.indexOf('const confirmReschedule'), ui.indexOf('const confirmCancellation'))
   .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
-assert(/\.rpc\('reschedule_appointment_direct'/.test(confirmBlock),
-  'Lessons.tsx: confirmReschedule chama a RPC');
+// P-1.20.5: o mesmo picker agora escolhe entre a RPC direta (>24h) e a de
+// proposta (<=24h). A chamada deixou de ser um literal e virou um ternario.
+assert(/\.rpc\(\s*rescheduleMode === 'propose' \? 'propose_reschedule' : 'reschedule_appointment_direct'/.test(confirmBlock),
+  'Lessons.tsx: confirmReschedule chama reschedule_appointment_direct no modo direto');
 assert(!/\.from\('appointments'\)[\s\S]{0,200}\.update\(/.test(confirmBlock),
   'Lessons.tsx: confirmReschedule nao faz mais UPDATE direto em appointments');
 assert(!/create_unified_notification/.test(confirmBlock),
