@@ -110,7 +110,14 @@ export class StudentHistoryAdapter {
     }
 
     if (!isCombo && item.appointmentDate && item.appointmentTime) {
-      subtitle = `${item.instructorName} • ${HistoryCardFormatter.formatAppointmentDate(item.appointmentDate, item.appointmentTime)}`;
+      // P-1.22: `appointmentTime` vem cru de `appointments.start_time` ("10:00:00").
+      // `formatLessonTimeRange` — o mesmo formatador ja usado na lista de aulas do
+      // combo e no historico do instrutor — corta para "10:00". Somente
+      // apresentacao: a origem, o fuso e o valor continuam exatamente os mesmos.
+      subtitle = `${item.instructorName} • ${HistoryCardFormatter.formatAppointmentDate(
+        item.appointmentDate,
+        HistoryCardFormatter.formatLessonTimeRange(item.appointmentTime)
+      )}`;
     }
 
     // Dates

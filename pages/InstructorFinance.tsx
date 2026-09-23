@@ -475,7 +475,12 @@ export const InstructorFinance: React.FC = () => {
                   lastSettlementDate: sortDate,
                   // P-1.21A: data/horario da aula. Dado operacional, nao financeiro.
                   lessons: entry.lessons,
-                  lessonCount: entry.lessonCount
+                  lessonCount: entry.lessonCount,
+                  // P-1.22: identifica aula avulsa x pacote. Derivado do numero de
+                  // aulas do proprio group_id — exatamente a mesma origem logica que
+                  // o historico do aluno ja usa (StudentFinanceReadService:391-392).
+                  // Nao consulta o banco, nao cria campo, nao toca em valor algum.
+                  isCombo: (entry.lessonCount ?? 0) > 1
                 };
               });
 

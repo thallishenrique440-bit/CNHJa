@@ -27,6 +27,7 @@ const ALLOW = [
   'ConstraintAndCancellationCore.unit.test.ts',
   'EligibilityScanner.unit.test.ts',
   'EligibilityService.unit.test.ts',
+  'FinanceUiCoherenceP122.unit.test.ts',
   'InstallmentFullRefundFase3114.unit.test.ts',
   'InstallmentSequenceValidation.unit.test.ts',
   'InstructorMonthlyMetrics.unit.test.ts',
