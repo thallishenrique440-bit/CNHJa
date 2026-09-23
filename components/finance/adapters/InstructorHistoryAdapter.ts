@@ -181,17 +181,30 @@ export class InstructorHistoryAdapter {
     let title = item.studentName;
     let subtitle: string | undefined = undefined;
 
+    // P-1.21A: quando o lancamento corresponde a UMA aula, a data e o horario
+    // entram no subtitulo — a mesma posicao que o historico do aluno usa
+    // (StudentHistoryAdapter: `${instructorName} • ${formatAppointmentDate(...)}`).
+    const singleLesson =
+      item.lessons && item.lessons.length === 1 ? item.lessons[0] : undefined;
+
     if (isRefund || isChargeback) {
       subtitle = isChargeback ? 'Chargeback' : 'Repasse estornado';
     } else if (isTip) {
       subtitle = 'Você recebeu uma gorjeta';
     } else if (isCombo) {
       subtitle = `Pacote • ${item.lessonCount ?? 0} aulas`;
+    } else if (singleLesson) {
+      subtitle = HistoryCardFormatter.formatAppointmentDate(
+        singleLesson.date,
+        HistoryCardFormatter.formatLessonTimeRange(singleLesson.startTime, singleLesson.endTime)
+      );
     }
 
-    // Lessons list for Combo
+    // Lessons list: pacote (varias aulas) usa a gaveta ja existente.
+    // P-1.21A: a condicao deixou de depender da flag `isCombo`, que o caminho do
+    // instrutor nunca setou — por isso as aulas nunca chegavam a ser listadas.
     let lessonItems: HistoryCardLessonItem[] | undefined = undefined;
-    if (isCombo && item.lessons && item.lessons.length > 0) {
+    if (item.lessons && item.lessons.length > 1) {
       lessonItems = item.lessons.map((l) => ({
         id: l.id,
         dateFormatted: HistoryCardFormatter.formatDateShort(l.date),
@@ -249,7 +262,7 @@ export class InstructorHistoryAdapter {
     return {
       header: {
         title,
-        subtitle: isCombo ? subtitle : undefined,
+        subtitle: isCombo ? subtitle : (singleLesson ? subtitle : undefined),
         iconEmoji,
         intent: headerIntent,
       },

@@ -472,7 +472,10 @@ export const InstructorFinance: React.FC = () => {
                   groupId: entry.groupId,
                   receivedInstallments: entry.receivedInstallments ?? entry.settlementsCount ?? 1,
                   totalInstallments: entry.totalInstallments ?? 1,
-                  lastSettlementDate: sortDate
+                  lastSettlementDate: sortDate,
+                  // P-1.21A: data/horario da aula. Dado operacional, nao financeiro.
+                  lessons: entry.lessons,
+                  lessonCount: entry.lessonCount
                 };
               });
 

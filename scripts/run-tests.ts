@@ -23,6 +23,7 @@ const TIMEOUT_MS = 60_000;
  *  sem rede externa, sem import de api/. */
 const ALLOW = [
   'CancelBookingFase3110.unit.test.ts',
+  'CommissionCnhJaP121B.unit.test.ts',
   'ConstraintAndCancellationCore.unit.test.ts',
   'EligibilityScanner.unit.test.ts',
   'EligibilityService.unit.test.ts',
@@ -30,6 +31,7 @@ const ALLOW = [
   'InstallmentSequenceValidation.unit.test.ts',
   'InstructorMonthlyMetrics.unit.test.ts',
   'InstructorStatement.unit.test.ts',
+  'InstructorStatementLessonsP121A.unit.test.ts',
   'IntegrityChecker.unit.test.ts',
   'Onda1Read.unit.test.ts',
   'PaymentStateService.unit.test.ts',

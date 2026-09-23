@@ -46,6 +46,21 @@ export interface InstructorStatementEntryDTO {
   /** P-1.19: soma do liquido das parcelas ainda NAO recebidas desta compra. */
   futureNetAmountCents?: number;
   isTip?: boolean;
+  /**
+   * P-1.21A — ENRIQUECIMENTO OPERACIONAL (nao financeiro).
+   * Aulas de `appointments` relacionadas a este lancamento, para que o
+   * instrutor consiga conciliar o recebimento com a aula que o gerou.
+   * Mesma semantica de `lessons[]` ja' usada no historico do aluno.
+   * NENHUM destes campos participa de calculo financeiro.
+   */
+  appointmentId?: string;
+  lessonCount?: number;
+  lessons?: {
+    id: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+  }[];
 }
 
 export interface InstructorCashFlowDTO {

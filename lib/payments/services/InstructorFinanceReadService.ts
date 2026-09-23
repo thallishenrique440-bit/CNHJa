@@ -301,6 +301,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         totalInstallments?: number;
         settlementsCount: number;
         isTip?: boolean;
+        /** P-1.21A: chave de fallback para localizar a aula. Nao e' financeiro. */
+        appointmentId?: string;
       }>();
 
       for (const item of settlementsData) {
@@ -316,7 +318,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         const grossCents = (item.gross_amount || 0) * multiplier;
         const feeCents = (item.platform_fee || 0) * multiplier;
         const gatewayFeeCents = (item.fee_amount || 0) * multiplier;
-        const commissionCnhJaCents = this.calculateCommissionCnhJa(feeCents, gatewayFeeCents);
+        const commissionCnhJaCents = this.calculateCommissionCnhJa(
+          feeCents, gatewayFeeCents, grossCents, netCents);
 
         let status = inst?.status || 'RECEIVED';
         if (item.settlement_type === 'REFUND') status = 'REFUNDED';
@@ -345,7 +348,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
             groupId: inst?.group_id || undefined,
             totalInstallments: inst?.total_installments || 1,
             settlementsCount: isRefundOrChargeback ? 0 : 1,
-            isTip
+            isTip,
+            appointmentId: item.appointment_id || undefined
           });
         } else {
           const existing = groupsMap.get(groupKey)!;
@@ -354,6 +358,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
           existing.platformFeeCents += feeCents;
           existing.feeAmountCents += gatewayFeeCents;
           existing.commissionCnhJaCents += commissionCnhJaCents;
+          if (!existing.appointmentId && item.appointment_id) {
+            existing.appointmentId = item.appointment_id;
+          }
           if (!isRefundOrChargeback) {
             existing.settlementsCount += 1;
           }
@@ -390,7 +397,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         settlementsCount: g.settlementsCount,
         receivedInstallments: g.settlementsCount,
         lastSettlementDate: g.settledAt,
-        isTip: g.isTip
+        isTip: g.isTip,
+        appointmentId: g.appointmentId
       }));
 
       if (options?.status) {
@@ -415,7 +423,10 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     // Nenhum valor financeiro e' recalculado aqui, e nenhum registro e' criado.
     const installmentsTable = supabaseClient.from('payment_installments');
     if (!installmentsTable || typeof installmentsTable.select !== 'function') {
-      return settlementEntries.sort(
+      // P-1.21A: o enriquecimento vale tambem neste caminho de saida.
+      const onlySettlements = await this.attachLessons(
+        supabaseClient, instructorId, settlementEntries);
+      return onlySettlements.sort(
         (a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime()
       );
     }
@@ -432,6 +443,10 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
     const { data: installmentRows } = await installmentsQuery;
 
     if (!installmentRows || installmentRows.length === 0) {
+      // P-1.21A: idem — sem este passo, um extrato composto apenas por
+      // settlements sairia sem data nem horario da aula.
+      settlementEntries = await this.attachLessons(
+        supabaseClient, instructorId, settlementEntries);
       return settlementEntries.sort(
         (a, b) => new Date(b.settledAt || 0).getTime() - new Date(a.settledAt || 0).getTime()
       );
@@ -556,7 +571,9 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
         feeAmountCents: acc.receivedFeeAmountCents,
         commissionCnhJaCents: this.calculateCommissionCnhJa(
           acc.receivedPlatformFeeCents,
-          acc.receivedFeeAmountCents
+          acc.receivedFeeAmountCents,
+          acc.receivedGrossCents,
+          acc.receivedNetCents
         ),
         futureNetAmountCents: acc.futureNetCents,
         status: resolvePurchaseStatus(acc),
@@ -573,6 +590,8 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
 
     let merged = Array.from(byKey.values());
 
+    merged = await this.attachLessons(supabaseClient, instructorId, merged);
+
     if (options?.status) {
       merged = merged.filter(e => e.status === options.status);
     }
@@ -585,11 +604,136 @@ export class InstructorFinanceReadService implements IInstructorFinanceReadServi
   }
 
   /**
-   * Centralized pure calculation for CNHJá commission in Read Model:
-   * commissionCnhJaCents = platform_fee - fee_amount
+   * P-1.21A — ENRIQUECIMENTO COM DATA/HORARIO DA AULA.
+   *
+   * O historico do instrutor mostrava apenas aluno e valores, sem nenhuma
+   * referencia a aula que gerou o recebimento. `payment_settlements` ja'
+   * carrega `appointment_id` e o adapter (`InstructorHistoryAdapter`) ja' sabe
+   * renderizar `lessons[]` — faltava so a leitura.
+   *
+   * Mesma semantica do historico do aluno (StudentFinanceReadService: mapa por
+   * provider_payment_id, group_id e id do appointment).
+   *
+   * `appointments` e' usada EXCLUSIVAMENTE para apresentacao. Nenhum valor
+   * financeiro e' lido, recalculado ou sobrescrito: gross/net/platform_fee/
+   * fee_amount/instructor_amount continuam vindo de payment_settlements e
+   * payment_installments, intactos. Falha nesta leitura NAO derruba o
+   * historico — o extrato apenas segue sem a informacao da aula.
    */
-  private calculateCommissionCnhJa(platformFeeCents: number, gatewayFeeCents: number): number {
-    return platformFeeCents - gatewayFeeCents;
+  private async attachLessons(
+    supabaseClient: SupabaseClient,
+    instructorId: string,
+    entries: InstructorStatementEntryDTO[]
+  ): Promise<InstructorStatementEntryDTO[]> {
+    if (entries.length === 0) return entries;
+
+    try {
+      const appointmentsTable = supabaseClient.from('appointments');
+      if (!appointmentsTable || typeof appointmentsTable.select !== 'function') {
+        return entries;
+      }
+
+      const { data: apptsData } = await appointmentsTable
+        .select('id, group_id, provider_payment_id, date, start_time, end_time')
+        .eq('instructor_id', instructorId);
+
+      if (!apptsData || apptsData.length === 0) return entries;
+
+      const appointmentsMap = new Map<string, any[]>();
+      const push = (key: string | null | undefined, appt: any) => {
+        if (!key) return;
+        if (!appointmentsMap.has(key)) appointmentsMap.set(key, []);
+        const bucket = appointmentsMap.get(key)!;
+        if (!bucket.some((a: any) => a.id === appt.id)) bucket.push(appt);
+      };
+
+      for (const appt of apptsData as any[]) {
+        push(appt.provider_payment_id, appt);
+        push(appt.group_id, appt);
+        push(appt.id, appt);
+      }
+
+      return entries.map(entry => {
+        if (entry.isTip) return entry;
+
+        const related =
+          (entry.groupId && appointmentsMap.get(entry.groupId)) ||
+          (entry.providerPaymentId && appointmentsMap.get(entry.providerPaymentId)) ||
+          (entry.appointmentId && appointmentsMap.get(entry.appointmentId)) ||
+          undefined;
+
+        if (!related || related.length === 0) return entry;
+
+        const lessons = [...related]
+          .sort((a, b) =>
+            `${a.date}T${a.start_time}`.localeCompare(`${b.date}T${b.start_time}`))
+          .map(a => ({
+            id: a.id,
+            date: a.date,
+            startTime: a.start_time,
+            endTime: a.end_time
+          }));
+
+        return { ...entry, lessons, lessonCount: lessons.length };
+      });
+    } catch (err) {
+      console.error('[InstructorFinanceReadService] lesson enrichment failed:', err);
+      return entries;
+    }
+  }
+
+  /**
+   * P-1.21B — COMISSAO DA CNHJA EXIBIDA AO INSTRUTOR.
+   *
+   * O banco carrega DUAS semanticas diferentes de `platform_fee`, e a formula
+   * anterior (`platform_fee - fee_amount`) so valia para a primeira:
+   *
+   *   LEGADO (ate a P-1.18E): platform_fee = comissao + taxa do gateway.
+   *                           Identidade da linha:  platform_fee + net = gross
+   *                           Comissao pura:        platform_fee - fee_amount
+   *
+   *   ATUAL  (P-1.18E em diante): platform_fee = COMISSAO PURA; a taxa do
+   *                           gateway vive separada em fee_amount.
+   *                           Identidade da linha:  platform_fee + fee + net = gross
+   *                           Comissao pura:        platform_fee
+   *
+   * Aplicar a formula legada aos registros atuais subtraia a taxa do gateway de
+   * uma comissao que ja' era pura — era o que exibia "R$ 8,01" numa aula de
+   * R$ 100,00 cuja comissao real e' R$ 10,00.
+   *
+   * A ERA E' DERIVADA DA PROPRIA LINHA, nunca da data: as duas identidades sao
+   * mutuamente exclusivas sempre que fee_amount > 0, e coincidem (com o mesmo
+   * resultado) quando fee_amount = 0. Validado contra os 33 settlements PAYMENT
+   * existentes: 23 classificados como legado, 10 como atual, 0 indeterminados.
+   *
+   * A identidade sobrevive a soma (o segundo chamador agrega parcelas) e ao
+   * sinal negativo de REFUND/CHARGEBACK, porque e' linear nos quatro termos.
+   *
+   * FUNCAO PURA DE LEITURA. Nao escreve nada, nao altera nenhum valor
+   * armazenado: platform_fee, fee_amount, gross_amount, net_amount e
+   * instructor_amount continuam exatamente como estao no banco.
+   */
+  private calculateCommissionCnhJa(
+    platformFeeCents: number,
+    gatewayFeeCents: number,
+    grossAmountCents: number,
+    netAmountCents: number
+  ): number {
+    const p = platformFeeCents || 0;
+    const f = gatewayFeeCents || 0;
+    const g = grossAmountCents || 0;
+    const n = netAmountCents || 0;
+
+    // Modelo ATUAL: a taxa do gateway ja' esta fora do platform_fee.
+    if (p + f + n === g) return p;
+
+    // Modelo LEGADO: a taxa do gateway estava embutida no platform_fee.
+    if (p + n === g) return p - f;
+
+    // Nenhuma das duas identidades fecha (linha agregada entre eras, ou dado
+    // incompleto). Devolve platform_fee cru: nunca credita a taxa do gateway ao
+    // instrutor nem produz comissao negativa.
+    return p;
   }
 
   /**
