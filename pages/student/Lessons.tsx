@@ -1374,7 +1374,15 @@ export const StudentLessons: React.FC = () => {
                                       onClick={() => handleActionClick(group)}
                                       className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-blue-200 text-blue-600 hover:bg-blue-50 hover:border-blue-300"
                                     >
-                                      Remarcar / Cancelar
+                                      {/*
+                                        P-1.20.5: aula ja aceita (confirmed/scheduled)
+                                        nao oferece mais cancelamento — so remarcacao.
+                                        Apenas o rotulo muda; a acao continua sendo a
+                                        mesma `handleActionClick`.
+                                      */}
+                                      {(group.dbStatus === 'confirmed' || group.dbStatus === 'scheduled')
+                                        ? 'Remarcar aula'
+                                        : 'Remarcar / Cancelar'}
                                     </Button>
                                 );
                             }

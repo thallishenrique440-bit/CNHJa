@@ -1683,7 +1683,10 @@ export const StudentInstructorProfile: React.FC = () => {
              <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-1">Horários disponíveis</h2>
              <div className="mb-4">
                <p className="text-xs text-gray-500">
-                 Selecione os horários desejados. Descontos progressivos são aplicados automaticamente.
+                 Selecione os horários desejados.
+               </p>
+               <p className="text-xs text-gray-500 mt-1">
+                 Importante: se o instrutor não aceitar ou recusar a solicitação, o valor da aula será devolvido. A taxa de processamento corresponde ao serviço de pagamento do Asaas.
                </p>
                <p className="text-xs text-gray-400 mt-1">
                  Em caso de dúvidas, você pode falar diretamente com o instrutor pelo WhatsApp.
@@ -1784,7 +1787,11 @@ export const StudentInstructorProfile: React.FC = () => {
 
         <div className="px-6 py-6 space-y-4 pb-12">
           <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Promoções deste instrutor</h2>
-          
+
+          <p className="text-xs text-gray-500">
+            Descontos progressivos: os descontos são aplicados automaticamente conforme a quantidade de aulas selecionadas.
+          </p>
+
           {instructor.discounts.length === 0 ? (
              <div className="text-center py-6 bg-gray-50 rounded-xl border border-gray-100 border-dashed">
                 <p className="text-gray-400 text-sm">Nenhuma promoção ativa no momento.</p>

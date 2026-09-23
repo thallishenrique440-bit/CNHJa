@@ -230,10 +230,10 @@ export const StudentFinance: React.FC = () => {
           <Shield className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
           <div className="flex-1">
             <h3 className="font-bold text-gray-900 text-xs flex items-center gap-1">
-              🛡️ Sua segurança em primeiro lugar
+              🛡️ Segurança e transparência no seu pagamento
             </h3>
             <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
-              Sempre que um reembolso for devido, ele será processado automaticamente pelo <span className="font-semibold text-gray-800">Asaas</span>, sem necessidade de solicitação.
+              Se o instrutor não aceitar ou recusar sua solicitação, o valor da aula será devolvido automaticamente. A taxa de processamento cobrada pelo <span className="font-semibold text-gray-800">Asaas</span> não é devolvida. Após o aceite do instrutor, alterações de horário são tratadas como remarcação, sem novo pagamento.
             </p>
           </div>
         </div>
