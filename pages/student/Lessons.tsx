@@ -926,100 +926,68 @@ export const StudentLessons: React.FC = () => {
         throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
       }
       
-      // If it's a group, we need to update all appointments in sequence
-      // For simplicity, we'll assume they are back-to-back slots
-      const updates = lessonToReschedule.ids.map((id, index) => {
-        const [h, m] = rescheduleTime.split(':').map(Number);
-        const startTime = new Date(rescheduleDate);
-        startTime.setHours(h, m + (index * LESSON_DURATION), 0, 0);
-        const startTimeStr = `${String(startTime.getHours()).padStart(2, '0')}:${String(startTime.getMinutes()).padStart(2, '0')}:00`;
-        
-        const endTime = new Date(rescheduleDate);
-        endTime.setHours(h, m + ((index + 1) * LESSON_DURATION), 0, 0);
-        const endTimeStr = `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}:00`;
-
-        // P-1.20.3: `status` deixou de ser escrito aqui, de proposito.
-        //
-        // Antes esta remarcacao gravava `status: 'pending_approval'`, o que
-        // devolvia uma aula JA' ACEITA para a fila de aprovacao. O modulo B de
-        // supabase/functions/check-expired-bookings (cron de 1 em 1 minuto)
-        // seleciona exatamente `status = 'pending_approval'` + `payment_status =
-        // 'paid'` e, quando o horario da aula chega sem aceite, chama
-        // BookingCancellationCore com reason='auto_expired' — ou seja, uma
-        // remarcacao virava ESTORNO.
-        //
-        // Omitir o campo preserva o status vigente seja ele qual for
-        // (`confirmed`, `scheduled` ou um `pending_approval` legitimo de aula
-        // ainda nao aceita). Nao ha' mapeamento nem forcamento de estado.
-        return supabase
-          .from('appointments')
-          .update({
-            date: dateKey,
-            start_time: startTimeStr,
-            end_time: endTimeStr,
-            rescheduled_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', id);
-      });
-
-      const results = await Promise.all(updates);
-      const error = results.find(r => r.error)?.error;
-      if (error) {
-        const isConflict = 
-          error.code === '23505' || 
-          error.message?.toLowerCase().includes('duplicate') || 
-          error.message?.toLowerCase().includes('unique');
-
-        if (isConflict) {
-          throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
-        }
-        throw error;
-      }
-
-      // P-1.20.3: remarcacao com mais de 24h e' efetiva na hora e NAO depende de
-      // aceite. O instrutor e' apenas notificado — mesmo RPC ja' usado em
-      // requestReschedule, sem criar nenhum sistema de notificacao novo.
-      try {
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('id', session?.user?.id || '')
-          .single();
-        const studentName = profileData?.full_name || 'Aluno';
-
-        const [ny, nm, nd] = dateKey.split('-').map(Number);
-        const novaDataStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' })
-          .format(new Date(ny, nm - 1, nd));
-        const novaHoraStr = rescheduleTime;
-        const antigaDataStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' })
-          .format(lessonToReschedule.date);
-        const antigaHoraStr = lessonToReschedule.time;
-        const qtd = lessonToReschedule.ids.length;
-
-        const message = qtd > 1
-          ? `O aluno ${studentName} remarcou um pacote de ${qtd} aulas de ${antigaDataStr} às ${antigaHoraStr} para ${novaDataStr} às ${novaHoraStr}.`
-          : `O aluno ${studentName} remarcou a aula de ${antigaDataStr} às ${antigaHoraStr} para ${novaDataStr} às ${novaHoraStr}.`;
-
-        const { error: notificationError } = await supabase.rpc('create_unified_notification', {
-          p_user_id: lessonToReschedule.instructorId,
-          p_title: '📅 Aula remarcada',
-          p_message: message,
-          p_type: 'booking_request', // mesma convencao de requestReschedule (constraint do banco)
-          p_entity_type: qtd > 1 ? 'package' : 'lesson',
-          p_target_screen: 'instructor_agenda',
-          p_combo_count: qtd,
-          p_group_id: null,
-          p_appointment_id: lessonToReschedule.ids[0] || null
+      // P-1.20.4 — A REMARCACAO PASSOU A SER SERVER-SIDE.
+      //
+      // Antes, este bloco fazia um UPDATE direto de `date`, `start_time`,
+      // `end_time` e `rescheduled_at` para cada aula do grupo. Nenhuma dessas
+      // colunas e protegida pelo trigger `check_appointments_update_security`
+      // (que cobre apenas as 7 colunas financeiras) e a policy
+      // `Users can update their own appointments` tem `WITH CHECK` nulo —
+      // ou seja, propriedade, status, regra das 24h e conflito eram verificados
+      // SOMENTE aqui, no cliente.
+      //
+      // Alem disso, o `check_appointment_conflict` acima e o UPDATE eram duas
+      // chamadas separadas (janela TOCTOU). A RPC faz validacao, checagem de
+      // conflito e escrita na MESMA transacao, e emite a notificacao do
+      // instrutor no servidor.
+      //
+      // P-1.20.3 preservado: a RPC nao escreve `status` em nenhuma hipotese.
+      const { data: rpcResult, error: rpcError } = await supabase
+        .rpc('reschedule_appointment_direct', {
+          p_appointment_ids: lessonToReschedule.ids,
+          p_new_date: dateKey,
+          p_new_start_time: rescheduleTime
         });
 
-        if (notificationError) {
-          console.error("Error notifying instructor about reschedule:", notificationError);
-        }
-      } catch (notifErr) {
-        // Notificacao e' complementar: a remarcacao ja' foi efetivada acima.
-        console.error("Error notifying instructor about reschedule:", notifErr);
+      if (rpcError) throw rpcError;
+
+      const outcome = (rpcResult || {}) as { status?: string; code?: string; reason?: string };
+
+      if (outcome.status === 'no_op') {
+        addToast("Esta aula já está neste horário.", "info");
+        setLessonToReschedule(null);
+        setRescheduleTime(null);
+        return;
       }
+
+      if (outcome.status !== 'ok') {
+        // Mesma mensagem que o caminho anterior exibia para o 23505, agora a
+        // partir de um codigo de negocio em vez do erro bruto do indice.
+        if (outcome.code === 'SLOT_TAKEN') {
+          throw new Error("Este horário já foi ocupado. Por favor, escolha outro.");
+        }
+        if (outcome.code === 'UNDER_24H') {
+          throw new Error("Faltam menos de 24h para a aula. Use a solicitação de remarcação.");
+        }
+        if (outcome.code === 'NEW_SLOT_IN_PAST') {
+          throw new Error("Não é possível reagendar para um horário no passado.");
+        }
+        if (outcome.code === 'SLOT_NOT_IN_GRID') {
+          throw new Error("Este horário não está disponível na agenda do instrutor.");
+        }
+        if (outcome.code === 'RESCHEDULE_PENDING') {
+          throw new Error("Já existe uma solicitação de remarcação pendente para esta aula.");
+        }
+        if (outcome.code === 'INVALID_STATUS' || outcome.code === 'STATE_CHANGED') {
+          throw new Error("Esta aula já foi atualizada. Recarregue a página.");
+        }
+        throw new Error("Não foi possível remarcar a aula (" + (outcome.code || 'ERRO') + ").");
+      }
+
+      // A notificacao do instrutor e emitida pela propria RPC. O bloco que
+      // chamava `create_unified_notification` daqui foi removido para nao
+      // duplicar a notificacao — e porque o cliente nao deve poder forjar o
+      // conteudo dela.
 
       addToast("Aula remarcada com sucesso! O instrutor foi notificado.", "success");
       setLessonToReschedule(null);
