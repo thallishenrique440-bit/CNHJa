@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id, date, start_time, created_at, payment_status')
-      .or('status.in.(reserved,pending_approval,awaiting_payment,cancelling),and(status.in.(cancelled,expired),payment_status.in.(paid,refund_requested))')
+      .or('status.in.(reserved,pending_approval,awaiting_payment),and(status.in.(cancelled,expired),payment_status.in.(paid,refund_requested))')
 
     if (fetchError) {
       throw fetchError
@@ -110,7 +110,10 @@ Deno.serve(async (req) => {
         console.log(`✅ Reconciling Group ${groupId}: Asaas is refunded (status: ${asaasStatus}).`);
         action = 'repaired_refunded';
 
-        // Update appointments payment_status to 'refunded' and transition 'cancelling' -> 'cancelled' if needed
+        // P-1.20.1B: only `payment_status` is reconciled here. The appointment's
+        // business status is owned by BookingCancellationCore, which now writes a
+        // terminal status only after the refund is COMPLETED. The old
+        // `cancelling -> cancelled` repair is gone with the `cancelling` state.
         const { data: aptsToUpdate } = await supabaseAdmin
           .from('appointments')
           .select('id, status')
@@ -123,11 +126,9 @@ Deno.serve(async (req) => {
           if (apt.status === 'completed') {
             continue;
           }
-          const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
           await supabaseAdmin
             .from('appointments')
             .update({
-              status: newStatus,
               payment_status: 'refunded',
               updated_at: new Date().toISOString()
             })

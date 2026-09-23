@@ -1,3 +1,13 @@
+// =============================================================================
+// ARQUIVO GERADO AUTOMATICAMENTE — NAO EDITAR
+//
+// Fonte: lib/payments/RefundOperationTypes.ts
+// Gerador: scripts/sync-shared.ts  (P-1.20.1B)
+//
+// Edite a fonte e rode `npx tsx scripts/sync-shared.ts`.
+// `npx tsx scripts/sync-shared.ts --check` falha se este arquivo divergir.
+// =============================================================================
+
 export type RefundOperationStatus =
   | 'REQUESTED'
   | 'PENDING'
@@ -49,3 +59,4 @@ export interface ClaimRefundOperationResult {
   operation: RefundOperationRecord;
   claimed: boolean;
 }
+

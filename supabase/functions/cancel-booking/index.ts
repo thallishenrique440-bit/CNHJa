@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
+import { asaasFetch } from '../_shared/asaasClient.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -71,7 +72,8 @@ Deno.serve(async (req) => {
       throw new Error('Invalid actor')
     }
 
-    // Validation: 24h rule validation (only for student)
+    // Validation: 24h rule (student only). After P-1.20.1B this can only be
+    // reached for a NOT-YET-ACCEPTED lesson; the accepted case is refused above.
     if (actor === 'student') {
       const timeStr = appointment.start_time.includes(':') 
         ? appointment.start_time.split(':').slice(0, 2).join(':') 
@@ -87,13 +89,55 @@ Deno.serve(async (req) => {
     }
 
     // 4. Delegate to BookingCancellationCore SSOT with explicit SINGLE_APPOINTMENT scope
+    // P-1.20.1B — R2: once the instructor has accepted, the lesson can only be
+    // RESCHEDULED. Neither actor may cancel it. Checked here for a clear
+    // business message; the Core enforces it again for callers that skip this
+    // function. `cancel_reason` is accepted but not yet persisted (P-1.20.6).
+    if (['confirmed', 'scheduled'].includes(appointment.status)) {
+      return new Response(
+        JSON.stringify({
+          error: 'Esta aula ja foi aceita pelo instrutor e nao pode mais ser cancelada. Utilize a remarcacao.',
+          code: 'LESSON_ALREADY_ACCEPTED',
+          status: appointment.status
+        }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     const result = await BookingCancellationCore.processCancellation({
       appointmentId: appointment_id,
       reason: actor === 'instructor' ? 'instructor_rejected' : 'student_cancelled',
       scope: 'SINGLE_APPOINTMENT',
       initiatedBy: user.id,
-      adminClient
+      adminClient,
+      httpFetch: asaasFetch
     });
+
+    // D2 — `pending_refund` NAO PODE SAIR COMO 2xx.
+    //
+    // `pending_refund` significa: o estorno nao atingiu COMPLETED e o
+    // agendamento foi DELIBERADAMENTE deixado intacto. Respondendo 200, o
+    // `invokeSecureFunction` de `lib/functions.ts` nao preenche `error`, e
+    // `pages/student/Lessons.tsx:1047-1058` -- que nao le `status` -- removia a
+    // aula da lista e exibia "Aula cancelada e horario liberado.". Falso
+    // sucesso, com o dinheiro ainda retido.
+    //
+    // Devolvendo 409 o front entra no caminho de erro que JA EXISTE, sem
+    // qualquer alteracao em `Lessons.tsx`. O campo `error` e' o que o wrapper
+    // le para montar a mensagem; os demais campos ficam para diagnostico.
+    if (result.status === 'pending_refund') {
+      return new Response(
+        JSON.stringify({
+          error: result.message,
+          code: 'REFUND_PENDING',
+          status: result.status,
+          refund_status: result.refundStatus || null,
+          payment_status: result.paymentStatus,
+          count: result.processedCount
+        }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     return new Response(
       JSON.stringify({
@@ -107,9 +151,10 @@ Deno.serve(async (req) => {
 
   } catch (error: any) {
     console.error('Error in cancel-booking:', error)
+    const isBusinessRefusal = error?.name === 'CancellationNotAllowedError';
     return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: error.message, code: isBusinessRefusal ? 'CANCELLATION_NOT_ALLOWED' : undefined }),
+      { status: isBusinessRefusal ? 409 : 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
 })

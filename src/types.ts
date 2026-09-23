@@ -22,6 +22,12 @@ export type AppointmentStatus =
   | 'rejected'
   | 'no_show'
   | 'awaiting_payment'
+  /**
+   * @deprecated P-1.20.1B — no longer written by any code path. Kept only
+   * because rows created by the previous engine may still carry it until the
+   * migration 20260923_p1201b_04_drop_cancelling_status.sql is applied.
+   * Remove this member together with that migration.
+   */
   | 'cancelling';
 
 export type TransactionType =

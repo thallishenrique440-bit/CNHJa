@@ -1,5 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { RefundOperationClaimLostError, RefundOperationNotFoundError, RefundOperationPersistenceError, RefundOperationTransitionError } from './RefundOperationErrors.js';
+import { RefundOperationClaimLostError, RefundOperationNotFoundError, RefundOperationPersistenceError, RefundOperationTransitionError, RefundOperationVersionConflictError } from './RefundOperationErrors.js';
 import { canTransitionRefund } from './RefundStateMachine.js';
 import {
   ClaimRefundOperationResult,
@@ -66,8 +66,27 @@ export class RefundOperationRepository {
   }
 
   /**
-   * Durable claim. This phase only claims the operation; it deliberately does
-   * not call Asaas or mark sent_at. UNKNOWN is never claimable for a new POST.
+   * P-1.20.1B — CLAIM IS THE TRANSITION `REQUESTED -> PENDING`.
+   *
+   * Before this phase the claim only stamped owner/lease and left the row in
+   * REQUESTED; the Core then issued a SEPARATE transition to PENDING using the
+   * version it had captured BEFORE the claim. That version was already stale,
+   * the CAS matched zero rows and every paid cancellation died with a false
+   * "owned by another worker". Folding the transition into the claim makes that
+   * defect structurally unrepresentable: there is no intermediate version to
+   * get wrong, and no second lock.
+   *
+   * There is exactly ONE claim mechanism: a single atomic CAS `UPDATE`. The
+   * previous RPC-then-fallback pair had divergent semantics (the RPC left
+   * REQUESTED, the fallback wrote PENDING) and the RPC additionally pinned
+   * `version = 1`, which made any released operation impossible to re-claim.
+   *
+   * `sent_at` is stamped here, together with PENDING, because from this moment
+   * on the operation MAY have reached the gateway. A crash after this point
+   * must never be read as "nothing was sent".
+   *
+   * The returned record carries the NEW version. Callers must thread that value
+   * into the next transition and must never compute `version + 1` themselves.
    */
   static async claim(
     supabase: SupabaseClient,
@@ -75,60 +94,94 @@ export class RefundOperationRepository {
     ownerId: string,
     leaseUntil: string
   ): Promise<ClaimRefundOperationResult> {
-    try {
-      const { data, error } = await supabase.rpc('claim_refund_operation', {
-        p_operation_id: operationId,
-        p_owner_id: ownerId,
-        p_lease_until: leaseUntil
-      });
-      if (!error) {
-        const claimedOperation = Array.isArray(data) ? data[0] : data;
-        if (claimedOperation) {
-          return { operation: claimedOperation as RefundOperationRecord, claimed: true };
-        }
-      }
-    } catch {
-      // RPC fallback to direct CAS update
-    }
+    let current = await this.get(supabase, operationId);
 
-    // Direct atomic CAS claim update
-    const currentRes = await supabase.from('refund_operations').select('*').eq('id', operationId).maybeSingle();
-    if (currentRes.error) throw new RefundOperationPersistenceError('Failed to inspect refund operation before claim', currentRes.error);
-    if (!currentRes.data) throw new RefundOperationNotFoundError(operationId);
-
-    let current = currentRes.data as RefundOperationRecord;
-
-    // Handle PENDING lease expiration if expired
+    // Recovery, in this order, so that no operation is structurally unrecoverable:
+    //  - PENDING with an expired lease  -> UNKNOWN (only external evidence may close it)
+    //  - REQUESTED holding a dead claim -> released back to an unowned REQUESTED
     if (current.status === 'PENDING') {
       current = await this.handleExpiredPending(supabase, current);
     }
+    if (current.status === 'REQUESTED' && current.owner_id) {
+      current = await this.releaseStaleRequestedClaim(supabase, current);
+    }
 
-    // ONLY REQUESTED status can be claimed
-    if (current.status !== 'REQUESTED') {
+    // Only an unowned REQUESTED operation may be claimed.
+    if (current.status !== 'REQUESTED' || current.owner_id) {
       return { operation: current, claimed: false };
     }
 
-    const { data: updated, error: updateErr } = await supabase
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
       .from('refund_operations')
       .update({
+        status: 'PENDING',
         owner_id: ownerId,
         lease_until: leaseUntil,
-        status: 'PENDING',
+        sent_at: nowIso,
+        attempt: (Number(current.attempt) || 0) + 1,
         version: current.version + 1,
-        updated_at: new Date().toISOString()
+        updated_at: nowIso
       })
       .eq('id', operationId)
       .eq('version', current.version)
       .eq('status', 'REQUESTED')
+      .is('owner_id', null)
       .select('*')
       .maybeSingle();
 
-    if (updateErr || !updated) {
-      const recheck = await supabase.from('refund_operations').select('*').eq('id', operationId).maybeSingle();
-      return { operation: (recheck.data as RefundOperationRecord) || current, claimed: false };
+    if (error) throw new RefundOperationPersistenceError('Failed to claim refund operation', error);
+
+    if (!data) {
+      // Lost the race to a concurrent worker. Not an error: the other worker owns it.
+      const recheck = await this.get(supabase, operationId);
+      return { operation: recheck, claimed: false };
     }
 
-    return { operation: updated as RefundOperationRecord, claimed: true };
+    return { operation: data as RefundOperationRecord, claimed: true };
+  }
+
+  /**
+   * P-1.20.1B: releases a claim stranded on a REQUESTED row.
+   *
+   * With the claim folded into the transition this state is no longer produced,
+   * but rows written by the previous code exist and a future defect could
+   * recreate it. Without this, such a row can never be claimed again and the
+   * money it represents is frozen forever. Only a lease that has ALREADY
+   * expired is released; a live lease means a real worker is holding it.
+   */
+  static async releaseStaleRequestedClaim(
+    supabase: SupabaseClient,
+    operation: RefundOperationRecord
+  ): Promise<RefundOperationRecord> {
+    if (operation.status !== 'REQUESTED' || !operation.owner_id) return operation;
+
+    const leaseExpired = !operation.lease_until
+      || new Date(operation.lease_until).getTime() <= Date.now();
+    if (!leaseExpired) return operation;
+
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('refund_operations')
+      .update({
+        owner_id: null,
+        lease_until: null,
+        version: operation.version + 1,
+        updated_at: nowIso,
+        metadata: {
+          ...(operation.metadata || {}),
+          stale_claim_released_at: nowIso,
+          stale_claim_released_from: operation.owner_id
+        }
+      })
+      .eq('id', operation.id)
+      .eq('version', operation.version)
+      .eq('status', 'REQUESTED')
+      .select('*')
+      .maybeSingle();
+
+    if (!error && data) return data as RefundOperationRecord;
+    return await this.get(supabase, operation.id);
   }
 
   /**
@@ -151,6 +204,9 @@ export class RefundOperationRepository {
           .update({
             status: 'UNKNOWN',
             unknown_since: new Date().toISOString(),
+            // P-1.20.1B: the reaper writes a version too, so a concurrent
+            // owner-scoped transition cannot silently overwrite this decision.
+            version: operation.version + 1,
             updated_at: new Date().toISOString(),
             metadata: {
               ...(operation.metadata || {}),
@@ -159,6 +215,7 @@ export class RefundOperationRepository {
             }
           })
           .eq('id', operation.id)
+          .eq('version', operation.version)
           .eq('status', 'PENDING')
           .select('*')
           .maybeSingle();
@@ -201,7 +258,9 @@ export class RefundOperationRepository {
 
     if (!data || data.length === 0) return 0;
 
-    return data.reduce((sum, op) => {
+    // Explicitly annotated: the generated Deno copy is typechecked with
+    // different inference settings and would otherwise fail on implicit `any`.
+    return data.reduce((sum: number, op: any) => {
       const amt = op.completed_amount_cents !== null && op.completed_amount_cents !== undefined
         ? Number(op.completed_amount_cents)
         : Number(op.requested_amount_cents);
@@ -230,7 +289,15 @@ export class RefundOperationRepository {
       .select('*')
       .maybeSingle();
     if (error) throw new RefundOperationPersistenceError('Failed to transition refund operation', error);
-    if (!data) throw new RefundOperationClaimLostError(operationId);
+    if (!data) {
+      // P-1.20.1B: a CAS miss has two very different causes and they must not
+      // share one message. Re-read the row and report the real one.
+      const actual = await this.get(supabase, operationId);
+      if (actual.version !== expectedVersion) {
+        throw new RefundOperationVersionConflictError(operationId, expectedVersion, actual.version);
+      }
+      throw new RefundOperationClaimLostError(operationId);
+    }
     return data as RefundOperationRecord;
   }
 
@@ -270,7 +337,7 @@ export class RefundOperationRepository {
     fields: Record<string, unknown> = {}
   ): Promise<RefundOperationRecord> {
     const current = await this.get(supabase, operationId);
-    if (!canTransitionRefund(current.status, status, { source: 'gateway', complete: status === 'COMPLETED' })) {
+    if (!canTransitionRefund(current.status, status, { source: 'webhook', complete: status === 'COMPLETED' })) {
       throw new RefundOperationTransitionError(`Invalid gateway refund transition ${current.status} -> ${status}`);
     }
     const { data, error } = await supabase
@@ -282,7 +349,10 @@ export class RefundOperationRepository {
       .maybeSingle();
 
     if (error) throw new RefundOperationPersistenceError('Failed to reconcile transition refund operation', error);
-    if (!data) throw new RefundOperationClaimLostError(operationId);
+    if (!data) {
+      const actual = await this.get(supabase, operationId);
+      throw new RefundOperationVersionConflictError(operationId, expectedVersion, actual.version);
+    }
     return data as RefundOperationRecord;
   }
 }

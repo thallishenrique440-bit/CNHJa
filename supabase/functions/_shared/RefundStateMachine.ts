@@ -1,3 +1,13 @@
+// =============================================================================
+// ARQUIVO GERADO AUTOMATICAMENTE — NAO EDITAR
+//
+// Fonte: lib/payments/RefundStateMachine.ts
+// Gerador: scripts/sync-shared.ts  (P-1.20.1B)
+//
+// Edite a fonte e rode `npx tsx scripts/sync-shared.ts`.
+// `npx tsx scripts/sync-shared.ts --check` falha se este arquivo divergir.
+// =============================================================================
+
 export type RefundState = 'NONE' | 'REQUESTED' | 'PENDING' | 'UNKNOWN' | 'COMPLETED' | 'PARTIALLY_COMPLETED' | 'DENIED' | 'CONFLICT';
 export type RefundEvidence = { source: 'provider_refunds' | 'payment' | 'webhook' | 'local'; complete: boolean; status?: string; amountCents?: number; eventId?: string | null; observedAt?: string };
 const terminal = new Set<RefundState>(['COMPLETED', 'DENIED', 'CONFLICT']);

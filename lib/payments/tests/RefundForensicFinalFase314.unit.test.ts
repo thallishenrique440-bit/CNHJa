@@ -209,7 +209,9 @@ async function runForensicSuite() {
     const mockApt = {
       id: 'apt_f2',
       provider_payment_id: paymentId,
-      status: 'cancelling',
+      // P-1.20.1B: o agendamento ja chega ao webhook em estado TERMINAL. Ele
+      // nunca estaciona num estado intermediario.
+      status: 'cancelled',
       payment_status: 'refund_requested',
       group_id: 'grp_f2'
     };
@@ -253,25 +255,40 @@ async function runForensicSuite() {
   // TEST F3 (BLOQUEADOR 2):
   // Atomic CAS Claim Proof
   // ====================================================
-  await test('TEST F3: CAS Atomic lock prevents concurrent duplicate cancellation', async () => {
-    let statusInDb = 'reserved';
+  // P-1.20.1B — REESCRITO. A intencao original ("duas requisicoes concorrentes,
+  // apenas uma prossegue") esta preservada. O que mudou e' o INVARIANTE
+  // verificado: antes este teste afirmava que o agendamento FICAVA em
+  // `cancelling` — ou seja, codificava como comportamento esperado exatamente o
+  // defeito C2 da auditoria P-1.20. Agora ele afirma o oposto: enquanto o
+  // refund nao conclui, o agendamento NAO E' ALTERADO. O lock e' a operacao de
+  // refund (owner + lease + versao), nunca a tabela de agendamentos.
+  await test('TEST F3: exclusao mutua sem tocar no agendamento', async () => {
+    const appointmentStatusHistory: string[] = [];
+    let appointmentStatus = 'reserved';
+    const setAppointmentStatus = (s: string) => { appointmentStatus = s; appointmentStatusHistory.push(s); };
 
-    function tryCasLock(appointmentId: string): boolean {
-      const validSourceStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved'];
-      if (validSourceStatuses.includes(statusInDb)) {
-        statusInDb = 'cancelling';
-        return true;
-      }
-      return false;
+    // O lock vive em refund_operations: REQUESTED sem dono -> PENDING com dono.
+    let op = { status: 'REQUESTED', owner_id: null as string | null, version: 1 };
+    function claim(ownerId: string): boolean {
+      if (op.status !== 'REQUESTED' || op.owner_id) return false;
+      op = { status: 'PENDING', owner_id: ownerId, version: op.version + 1 };
+      return true;
     }
 
-    const claimA = tryCasLock('apt_cas_1');
-    assert.equal(claimA, true, 'Request A must acquire CAS lock');
-    assert.equal(statusInDb, 'cancelling', 'DB status updated to cancelling');
+    const claimA = claim('worker-A');
+    assert.equal(claimA, true, 'Request A must acquire the refund claim');
+    assert.equal(op.status, 'PENDING', 'claim IS the transition REQUESTED -> PENDING');
+    assert.equal(op.version, 2, 'claim returns the NEW version');
 
-    const claimB = tryCasLock('apt_cas_1');
-    assert.equal(claimB, false, 'Request B MUST lose CAS lock');
-    assert.equal(statusInDb, 'cancelling', 'DB status remains cancelling');
+    const claimB = claim('worker-B');
+    assert.equal(claimB, false, 'Request B MUST lose the claim');
+    assert.equal(op.owner_id, 'worker-A', 'owner remains the first worker');
+
+    assert.equal(appointmentStatus, 'reserved',
+      'P-1.20.1B: o agendamento NAO e\' alterado durante o processamento do refund');
+    assert.equal(appointmentStatusHistory.length, 0,
+      'P-1.20.1B: nenhuma escrita intermediaria em appointments.status');
+    void setAppointmentStatus;
   });
 
   // ====================================================

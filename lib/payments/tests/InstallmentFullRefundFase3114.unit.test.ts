@@ -124,10 +124,13 @@ async function simulateSyncPaymentStatus(
 
   if (isFullRefund) {
     // 1. Update appointments
+    // P-1.20.1B: o webhook reconcilia DINHEIRO, nao estado de agendamento.
+    // O reparo `cancelling -> cancelled` existia so porque o Core estacionava o
+    // agendamento em `cancelling` antes de chamar o gateway. Ele ja chega aqui
+    // coerente, entao apenas `payment_status` e' tocado.
     for (const apt of groupApts) {
       if (apt.status === 'completed') continue;
       apt.payment_status = 'refunded';
-      if (apt.status === 'cancelling') apt.status = 'cancelled';
     }
 
     // 2. Call InstallmentService without installmentNumber limit

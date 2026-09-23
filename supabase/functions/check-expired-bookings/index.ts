@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
+import { asaasFetch } from '../_shared/asaasClient.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -57,7 +58,8 @@ Deno.serve(async (req) => {
         const res = await BookingCancellationCore.processCancellation({
           appointmentId: booking.id,
           reason: 'auto_expired',
-          adminClient: supabaseAdmin
+          adminClient: supabaseAdmin,
+          httpFetch: asaasFetch
         });
 
         return { id: booking.id, status: 'expired_success', result: res };
@@ -121,7 +123,8 @@ Deno.serve(async (req) => {
         const res = await BookingCancellationCore.processCancellation({
           appointmentId: booking.id,
           reason: 'auto_expired',
-          adminClient: supabaseAdmin
+          adminClient: supabaseAdmin,
+          httpFetch: asaasFetch
         });
 
         return { id: booking.id, status: 'expired_success', result: res };

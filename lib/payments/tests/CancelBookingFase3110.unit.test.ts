@@ -92,14 +92,22 @@ async function runCancelBookingPhase3110Tests() {
 
   // TEST D: Retry / Idempotency check
   console.log('\n📌 TEST D: Retry of cancellation');
-  const isAlreadyCancelledOrCancelling = (status: string) =>
-    ['cancelled', 'cancelling', 'expired'].includes(status);
-  check(isAlreadyCancelledOrCancelling('cancelled') === true, 'status=cancelled is recognized as already processed');
-  check(isAlreadyCancelledOrCancelling('cancelling') === true, 'status=cancelling is recognized as in-progress');
-  check(isAlreadyCancelledOrCancelling('expired') === true, 'status=expired is recognized as non-cancellable');
+  // P-1.20.1B: `cancelling` deixou de existir. A intencao do teste (reconhecer
+  // um agendamento ja processado) e' preservada sobre os estados TERMINAIS, que
+  // agora sao os unicos que o motor escreve.
+  const isAlreadyProcessed = (status: string) =>
+    ['cancelled', 'expired'].includes(status);
+  check(isAlreadyProcessed('cancelled') === true, 'status=cancelled is recognized as already processed');
+  check(isAlreadyProcessed('expired') === true, 'status=expired is recognized as non-cancellable');
+  check(isAlreadyProcessed('cancelling') === false, 'P-1.20.1B: `cancelling` nao e\' mais um estado do modelo');
 
   // TEST E: Concurrent cancellation CAS lock
   console.log('\n📌 TEST E: Concurrent cancellation CAS protection');
+  // P-1.20.1B: o CAS continua existindo, mas agora ele e' a ESCRITA TERMINAL.
+  // Antes, o primeiro worker levava o agendamento a um estado intermediario
+  // (`cancelling`) ANTES de falar com o gateway, e uma falha posterior deixava a
+  // linha presa para sempre. Agora o unico CAS sobre `appointments` leva direto
+  // de um estado elegivel para o estado terminal, depois de o refund concluir.
   let currentStatus = 'pending';
   function simulateCAS(expectedStatus: string, newStatus: string): boolean {
     if (currentStatus === expectedStatus) {
@@ -108,10 +116,11 @@ async function runCancelBookingPhase3110Tests() {
     }
     return false;
   }
-  const casCaller1 = simulateCAS('pending', 'cancelling');
-  const casCaller2 = simulateCAS('pending', 'cancelling');
-  check(casCaller1 === true, 'First caller successfully transitions pending -> cancelling');
+  const casCaller1 = simulateCAS('pending', 'cancelled');
+  const casCaller2 = simulateCAS('pending', 'cancelled');
+  check(casCaller1 === true, 'First caller successfully transitions pending -> cancelled (terminal)');
   check(casCaller2 === false, 'Second caller fails CAS transition and is rejected');
+  check(currentStatus === 'cancelled', 'P-1.20.1B: o agendamento nunca passa por um estado intermediario');
 
   // TEST F: Pending refund status verification
   console.log('\n📌 TEST F: Pending refund status verification (installments & settlements)');

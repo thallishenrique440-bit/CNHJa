@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { NotificationService } from '../_shared/NotificationService.ts'
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
+import { asaasFetch } from '../_shared/asaasClient.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -141,21 +142,42 @@ Deno.serve(async (req) => {
           reason: "start_time_passed"
         }));
 
+        // D5/RR2 — a mensagem afirmava "O reembolso foi processado
+        // automaticamente." INCONDICIONALMENTE. Era alcancavel sem COMPLETED por
+        // tres caminhos: (a) o Core devolve `pending_refund` e o resultado era
+        // descartado; (b) o Core lanca (DENIED, gateway nao confirmado) e o
+        // catch engolia; (c) recusa de negocio, tambem engolida.
+        //
+        // Agora o resultado e' capturado e a mensagem descreve o que de fato
+        // aconteceu. O contrato HTTP (400 + LESSON_EXPIRED) NAO muda.
+        let expirationResult: any = null;
+        let expirationError: any = null;
         try {
           console.log(`⏰ [approve-booking] Lesson ${apt.id} start time passed. Delegating auto-expiration to BookingCancellationCore...`);
-          await BookingCancellationCore.processCancellation({
+          expirationResult = await BookingCancellationCore.processCancellation({
             appointmentId: appointment.id,
             reason: 'auto_expired',
-            adminClient
+            adminClient,
+            httpFetch: asaasFetch
           });
         } catch (cancelErr) {
+          expirationError = cancelErr;
           console.error('❌ Error executing auto_expired in approve-booking via Core:', cancelErr);
         }
 
+        const refundCompleted = !expirationError
+          && (expirationResult?.status === 'expired' || expirationResult?.status === 'cancelled');
+
+        const expirationMessage = refundCompleted
+          ? 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O reembolso foi processado automaticamente.'
+          : 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O estorno ainda NÃO foi confirmado pelo gateway e está pendente de reconciliação.';
+
         return new Response(
           JSON.stringify({ 
-            error: 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O reembolso foi processado automaticamente.', 
-            code: 'LESSON_EXPIRED' 
+            error: expirationMessage, 
+            code: 'LESSON_EXPIRED',
+            refund_completed: refundCompleted,
+            refund_status: expirationResult?.refundStatus || null
           }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )

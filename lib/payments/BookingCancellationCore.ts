@@ -1,8 +1,14 @@
+declare const Deno: any;
+
 import { NotificationService } from '../NotificationService.js';
 import { RefundOperationRepository } from './RefundOperationRepository.js';
 import { buildRefundOperationKey, RefundOperationKeyInput } from './RefundOperationKey.js';
+import { RefundOperationRecord } from './RefundOperationTypes.js';
 
 export type CancellationReason = 'instructor_rejected' | 'auto_expired' | 'student_cancelled';
+
+/** Minimal shape of `fetch`, so this module stays runtime agnostic. */
+export type HttpFetch = (url: string, init?: any) => Promise<any>;
 
 export interface CancellationParams {
   appointmentId: string;
@@ -12,21 +18,91 @@ export interface CancellationParams {
   adminClient: any;
   asaasApiKey?: string;
   asaasApiUrl?: string;
+  /**
+   * P-1.20.1B: HTTP client used to reach Asaas. Edge Functions inject
+   * `asaasFetch` (timeout + backoff, retries disabled for POST /refund).
+   * Omitted, the platform `fetch` is used. This keeps the Core identical in
+   * both runtimes without dragging `asaasClient.ts` into the generated copy.
+   */
+  httpFetch?: HttpFetch;
 }
 
 export interface CancellationResult {
   success: boolean;
   alreadyProcessed: boolean;
   reason: CancellationReason;
-  status: 'cancelled' | 'expired';
+  /**
+   * P-1.20.1B: `pending_refund` means the appointment was DELIBERATELY left
+   * untouched because the refund has not reached a terminal COMPLETED state.
+   * The appointment is never parked in an intermediate status.
+   */
+  status: 'cancelled' | 'expired' | 'pending_refund';
   paymentStatus: 'refunded' | 'released' | 'failed' | 'refund_requested';
   isPaid: boolean;
   processedCount: number;
   groupId?: string;
+  refundStatus?: string;
   message: string;
 }
 
-// Technical lock in memory to prevent concurrent duplicate execution
+/**
+ * P-1.20.1B — ELIGIBILITY MATRIX `reason x status`.
+ *
+ * Business rule R2: once the instructor has accepted (`confirmed`/`scheduled`)
+ * the lesson can only be RESCHEDULED. Neither the student nor the instructor
+ * may cancel it, and no refund exists for that case. Enforced here, in the
+ * Core, because the Core is the single point every entrypoint goes through
+ * (cancel-booking, reject-booking x2, approve-booking, check-expired-bookings).
+ * The UI is ergonomics, not security.
+ */
+export const REASON_ALLOWED_STATUSES: Record<CancellationReason, string[]> = {
+  instructor_rejected: ['pending', 'pending_approval', 'awaiting_payment', 'reserved'],
+  student_cancelled: ['pending', 'pending_approval', 'awaiting_payment', 'reserved'],
+  auto_expired: ['pending', 'pending_approval', 'awaiting_payment', 'reserved']
+};
+
+/** Statuses that mean "the instructor already accepted". Never cancellable. */
+export const ACCEPTED_STATUSES = ['confirmed', 'scheduled'];
+
+/**
+ * Business-level refusal, distinct from a technical failure. Entrypoints map it
+ * to HTTP 409 so the caller sees a rule, not a stack trace.
+ */
+export class CancellationNotAllowedError extends Error {
+  public readonly appointmentStatus: string;
+  public readonly reason: CancellationReason;
+
+  constructor(reason: CancellationReason, appointmentStatus: string, message: string) {
+    super(message);
+    this.name = 'CancellationNotAllowedError';
+    this.reason = reason;
+    this.appointmentStatus = appointmentStatus;
+  }
+}
+
+/** Reads an env var under Deno or Node without assuming either exists. */
+function getEnvVar(name: string): string {
+  try {
+    if (typeof Deno !== 'undefined' && (Deno as any).env) return (Deno as any).env.get(name) || '';
+  } catch (_) { /* not Deno */ }
+  try {
+    if (typeof process !== 'undefined' && process.env) return process.env[name] || '';
+  } catch (_) { /* not Node */ }
+  return '';
+}
+
+/**
+ * Lease granted to the worker that claims a refund operation. Long enough to
+ * cover the Asaas round trip (asaasFetch: 15s timeout, backoff), short enough
+ * that a dead worker is reaped quickly.
+ */
+const REFUND_LEASE_MS = 120_000;
+
+/**
+ * Best-effort, per-isolate short circuit against a double click. It is NOT the
+ * financial lock: `refund_operations` is, and it is the only one. This set is
+ * in-memory, released in `finally`, and never touches the database.
+ */
 const activeCancellationLocks = new Set<string>();
 
 export class BookingCancellationCore {
@@ -36,8 +112,9 @@ export class BookingCancellationCore {
   static async processCancellation(params: CancellationParams): Promise<CancellationResult> {
     const { appointmentId, reason, initiatedBy, adminClient } = params;
 
-    const asaasApiKey = params.asaasApiKey || process.env.ASAAS_API_KEY || '';
-    const asaasApiUrl = params.asaasApiUrl || process.env.ASAAS_API_URL || 'https://sandbox.asaas.com/api/v3';
+    const asaasApiKey = params.asaasApiKey || getEnvVar('ASAAS_API_KEY') || '';
+    const asaasApiUrl = params.asaasApiUrl || getEnvVar('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+    const httpFetch: HttpFetch = params.httpFetch || ((globalThis as any).fetch as HttpFetch);
 
     // 1. Fetch target appointment
     const { data: appointment, error: fetchError } = await adminClient
@@ -122,9 +199,21 @@ export class BookingCancellationCore {
         }
       }
 
-      const allowedStatuses = ['pending', 'pending_approval', 'awaiting_payment', 'reserved', 'confirmed', 'scheduled'];
+      // P-1.20.1B: eligibility is a function of the reason, not a flat list.
+      const allowedStatuses = REASON_ALLOWED_STATUSES[reason] || [];
       if (!allowedStatuses.includes(appointment.status)) {
-        throw new Error(`Invalid status change: Cannot cancel appointment with status '${appointment.status}'`);
+        if (ACCEPTED_STATUSES.includes(appointment.status)) {
+          throw new CancellationNotAllowedError(
+            reason,
+            appointment.status,
+            'Esta aula ja foi aceita pelo instrutor e nao pode mais ser cancelada. Use a remarcacao.'
+          );
+        }
+        throw new CancellationNotAllowedError(
+          reason,
+          appointment.status,
+          `Agendamento em estado nao cancelavel (status atual: ${appointment.status}).`
+        );
       }
 
       // 4. Fetch Appointments To Cancel (P0-02 Scope Strict Enforcement)
@@ -161,41 +250,42 @@ export class BookingCancellationCore {
 
       const paymentId = appointment.provider_payment_id || appointment.payment_intent_id;
 
-      // 4.5. Atomic State Lock: Transition target appointment(s) to 'cancelling' in DB
-      const targetIds = appointmentsToCancel.map((a: any) => a.id);
-      const { data: lockedApts, error: lockErr } = await adminClient
-        .from('appointments')
-        .update({ status: 'cancelling', updated_at: new Date().toISOString() })
-        .in('id', targetIds)
-        .in('status', allowedStatuses)
-        .select('id');
-
-      if (lockErr || !lockedApts || lockedApts.length < targetIds.length) {
-        console.warn(`[BookingCancellationCore] Atomic DB lock transition failed or already acquired by another worker for ${lockKey}`);
-        return {
-          success: true,
-          alreadyProcessed: true,
-          reason,
-          status: reason === 'instructor_rejected' ? 'cancelled' : (reason === 'auto_expired' ? 'expired' : 'cancelled'),
-          paymentStatus: appointment.payment_status || 'released',
-          isPaid: appointment.payment_status === 'refunded',
-          processedCount: 0,
-          groupId: appointment.group_id || appointment.id,
-          message: 'Cancellation currently in progress or already processed by another worker.'
-        };
-      }
+      // 4.5. P-1.20.1B — THE `cancelling` LOCK IS GONE.
+      //
+      // The appointment used to be flipped to `status = 'cancelling'` here,
+      // BEFORE any gateway call, as an improvised distributed lock held across
+      // network I/O with no owner, no lease and no release. Any failure after
+      // this point stranded the row forever: `cancelling` is excluded from no
+      // unique index, is unknown to `getDerivedStatus`, and nothing reverts it.
+      //
+      // `refund_operations` is now the only financial lock. Its `operation_key`
+      // is unique and deterministic and its claim carries owner + lease, which
+      // is everything this block was trying to approximate. The appointment
+      // keeps its real business status until the refund is COMPLETED.
+      //
+      // The unpaid path has no refund operation, so its terminal write in step 8
+      // carries its own CAS (`.in('status', allowedStatuses)`), which is atomic
+      // and idempotent on its own.
 
       // 5. Asaas Gateway Integration with Durable RefundOperation & Integer Cents Math
       let isPaid = false;
       let isRefundRequestedOrConfirmed = false;
       let isRefundConfirmed = false;
+      let refundOperation: RefundOperationRecord | null = null;
+      /**
+       * P-1.20.1B: true only once the gateway has actually told us what this
+       * payment is. Before, a failed `GET /payments/{id}` left `isPaid = false`
+       * and the booking was cancelled as if it had never been paid -- silently
+       * keeping the student's money. Not knowing is not the same as not paid.
+       */
+      let gatewayStateKnown = false;
 
       if (paymentId && asaasApiKey) {
         console.log(`[BookingCancellationCore] Consulting Asaas payment details for ${paymentId} (reason: ${reason})`);
         const paymentUrl = `${asaasApiUrl}/payments/${paymentId}`;
         
         try {
-          const paymentRes = await fetch(paymentUrl, {
+          const paymentRes = await httpFetch(paymentUrl, {
             method: 'GET',
             headers: {
               'access_token': asaasApiKey,
@@ -209,6 +299,7 @@ export class BookingCancellationCore {
             const asaasStatus = (paymentData.status || '').toUpperCase();
 
             isPaid = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'PARTIALLY_REFUNDED'].includes(asaasStatus);
+            gatewayStateKnown = true;
 
             if (isPaid) {
               // P1-01: Calculate requested amount strictly in integer cents using appointment.price
@@ -304,40 +395,47 @@ export class BookingCancellationCore {
               op = await RefundOperationRepository.handleExpiredPending(adminClient, op);
 
               if (op.status === 'UNKNOWN') {
-                console.warn(`⚠️ [BookingCancellationCore] Operation ${op.id} is in UNKNOWN state. Direct POST /refund is BLOCKED. Pending reconciliation.`);
+                // Ambiguous: the gateway may already have refunded. Only external
+                // evidence may close it. Never POST again.
+                console.warn(`[BookingCancellationCore] Operation ${op.id} is UNKNOWN. POST /refund BLOCKED, awaiting reconciliation.`);
                 isRefundRequestedOrConfirmed = true;
               } else if (op.status === 'COMPLETED' || op.status === 'PARTIALLY_COMPLETED') {
-                console.log(`✅ [BookingCancellationCore] Operation ${op.id} already completed.`);
+                console.log(`[BookingCancellationCore] Operation ${op.id} already completed.`);
                 isRefundRequestedOrConfirmed = true;
                 isRefundConfirmed = op.status === 'COMPLETED';
-              } else if (op.status === 'DENIED') {
-                console.warn(`⚠️ [BookingCancellationCore] Operation ${op.id} was DENIED. Skipping POST retry.`);
+              } else if (op.status === 'DENIED' || op.status === 'CONFLICT') {
+                console.warn(`[BookingCancellationCore] Operation ${op.id} is ${op.status}. Skipping POST retry.`);
                 isRefundRequestedOrConfirmed = true;
               } else if (op.status === 'REQUESTED') {
-                // Claim operation durably
+                // P-1.20.1B: the claim IS the transition REQUESTED -> PENDING and
+                // it stamps `sent_at`. There is no second transition to PENDING
+                // and therefore no stale version to get wrong.
                 const ownerId = `worker-${crypto.randomUUID()}`;
-                const leaseUntil = new Date(Date.now() + 60000).toISOString();
+                const leaseUntil = new Date(Date.now() + REFUND_LEASE_MS).toISOString();
                 const claimRes = await RefundOperationRepository.claim(adminClient, op.id, ownerId, leaseUntil);
 
                 if (!claimRes.claimed) {
-                  console.log(`ℹ️ [BookingCancellationCore] Operation ${op.id} claim lost. Handled by concurrent worker.`);
+                  console.log(`[BookingCancellationCore] Operation ${op.id} claim lost. Handled by a concurrent worker.`);
                   isRefundRequestedOrConfirmed = true;
+                  op = claimRes.operation;
+                  isRefundConfirmed = op.status === 'COMPLETED';
                 } else {
-                  // Transition REQUESTED -> PENDING
-                  await RefundOperationRepository.transition(adminClient, op.id, ownerId, claimRes.operation.version, 'PENDING', { sent_at: new Date().toISOString() });
+                  // VERSION RULE: `op` always holds the record returned by the
+                  // LAST successful operation. Nothing is ever computed as
+                  // `version + 1` from here on.
+                  op = claimRes.operation;
 
-                  // Issue POST /refund call to Asaas
                   const refundUrl = `${asaasApiUrl}/payments/${paymentId}/refund`;
                   const refundPayload: Record<string, any> = {
                     value: Number((requestedAmountCents / 100).toFixed(2)),
-                    description: reason === 'instructor_rejected' ? 'Cancelamento por recusa do instrutor' : (reason === 'student_cancelled' ? 'Cancelamento de aula pelo aluno' : 'Cancelamento por expiração de solicitação')
+                    description: reason === 'instructor_rejected' ? 'Cancelamento por recusa do instrutor' : (reason === 'student_cancelled' ? 'Cancelamento de aula pelo aluno' : 'Cancelamento por expiracao de solicitacao')
                   };
                   if (splitRefundsPayload.length > 0) {
                     refundPayload.splitRefunds = splitRefundsPayload;
                   }
 
                   try {
-                    const refundRes = await fetch(refundUrl, {
+                    const refundRes = await httpFetch(refundUrl, {
                       method: 'POST',
                       headers: {
                         'access_token': asaasApiKey,
@@ -348,7 +446,7 @@ export class BookingCancellationCore {
 
                     if (refundRes.ok) {
                       const refundResData = await refundRes.json().catch(() => ({}));
-                      await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version + 1, 'COMPLETED', {
+                      op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version, 'COMPLETED', {
                         completed_amount_cents: requestedAmountCents,
                         provider_refund_id: refundResData.id || null,
                         completed_at: new Date().toISOString()
@@ -359,33 +457,41 @@ export class BookingCancellationCore {
                       const errText = await refundRes.text();
                       const is4xx = refundRes.status >= 400 && refundRes.status < 500;
                       if (is4xx) {
-                        await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version + 1, 'DENIED', {
+                        // The gateway refused. Deterministic, terminal.
+                        op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version, 'DENIED', {
                           denial_reason: errText
                         });
                         throw new Error(`Asaas refund failed (HTTP ${refundRes.status}): ${errText}`);
                       } else {
-                        await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version + 1, 'UNKNOWN', {
+                        // 5xx: the refund MAY have been applied. Never assume it was not.
+                        op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version, 'UNKNOWN', {
                           unknown_since: new Date().toISOString()
                         });
                         throw new Error(`Asaas gateway server error (HTTP ${refundRes.status}): ${errText}`);
                       }
                     }
                   } catch (netErr: any) {
+                    // Timeout / socket error: also ambiguous. Re-read before writing,
+                    // because the reaper may already have moved the row to UNKNOWN.
                     const currentOp = await RefundOperationRepository.get(adminClient, op.id);
                     if (currentOp.status === 'PENDING') {
-                      await RefundOperationRepository.transition(adminClient, op.id, ownerId, currentOp.version, 'UNKNOWN', {
+                      op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, currentOp.version, 'UNKNOWN', {
                         unknown_since: new Date().toISOString()
                       });
+                    } else {
+                      op = currentOp;
                     }
                     throw netErr;
                   }
                 }
               }
+
+              refundOperation = op;
             } else {
               // UNPAID payment cancellation
               console.log(`[BookingCancellationCore] Deleting pending Asaas payment ${paymentId}`);
               const cancelUrl = `${asaasApiUrl}/payments/${paymentId}`;
-              const cancelRes = await fetch(cancelUrl, {
+              const cancelRes = await httpFetch(cancelUrl, {
                 method: 'DELETE',
                 headers: {
                   'access_token': asaasApiKey,
@@ -402,6 +508,60 @@ export class BookingCancellationCore {
           console.error(`⚠️ Gateway operation warning for payment ${paymentId}:`, gatewayErr?.message || gatewayErr);
           if (isPaid && !isRefundRequestedOrConfirmed) throw gatewayErr;
         }
+      }
+
+      // ======================================================================
+      // P-1.20.1B — TERMINAL GATE
+      //
+      // For a PAID booking, nothing downstream (installments, ledger, the
+      // appointment itself) is written until the refund operation has reached
+      // COMPLETED. Before this phase the appointment was flipped to `cancelled`
+      // whatever the gateway said, which allowed "cancelled with the money
+      // never returned" and, worse, left rows stranded in `cancelling`.
+      //
+      // The appointment is NEVER parked in an intermediate state: it either
+      // keeps its real business status, or it reaches a terminal one.
+      // ======================================================================
+      // D3 — SEM CONFIRMACAO DO GATEWAY, NADA E' ESCRITO.
+      //
+      // A condicao anterior exigia `asaasApiKey` e, por isso, deixava aberta
+      // exatamente a falha que este guard deveria fechar: com a secret ausente
+      // ou vazia, o bloco do gateway acima nem executa, `isPaid` fica `false`,
+      // este guard nao dispara e o fluxo seguia como se a aula nunca tivesse
+      // sido paga -- cancelando o agendamento, marcando as parcelas como
+      // CANCELLED e gravando `payment_status: 'released'`, com o dinheiro do
+      // aluno retido no gateway.
+      //
+      // Agora basta existir `paymentId`: se o estado do pagamento nao foi
+      // confirmado, falha explicita. Nao se inventa estado de pagamento, e
+      // "nao saber" nunca e' tratado como "nao foi pago".
+      if (paymentId && !gatewayStateKnown) {
+        throw new Error(
+          `Nao foi possivel confirmar o estado do pagamento ${paymentId} no gateway` +
+          `${asaasApiKey ? '' : ' (ASAAS_API_KEY ausente ou vazia)'}. ` +
+          `Nenhuma alteracao foi feita no agendamento.`
+        );
+      }
+
+      if (isPaid && refundOperation && (refundOperation.status === 'DENIED' || refundOperation.status === 'CONFLICT')) {
+        throw new Error(`Estorno recusado pelo gateway (${refundOperation.status}) para o pagamento ${paymentId}. O agendamento permanece inalterado.`);
+      }
+
+      if (isPaid && !isRefundConfirmed) {
+        const refundStatus = refundOperation?.status || 'UNKNOWN';
+        console.warn(`[BookingCancellationCore] Refund for ${paymentId} is not COMPLETED (state: ${refundStatus}). Appointment left untouched.`);
+        return {
+          success: false,
+          alreadyProcessed: false,
+          reason,
+          status: 'pending_refund',
+          paymentStatus: 'refund_requested',
+          isPaid: true,
+          processedCount: 0,
+          groupId: appointment.group_id || appointment.id,
+          refundStatus,
+          message: 'Estorno em processamento. O agendamento permanece inalterado ate a confirmacao do gateway.'
+        };
       }
 
       // 6. Update payment_installments table (SSOT)
@@ -508,14 +668,38 @@ export class BookingCancellationCore {
       }
 
       const cancelIds = appointmentsToCancel.map((a: any) => a.id);
-      const { error: updateError } = await adminClient
+      // P-1.20.1B: the terminal write carries its own CAS. This single statement
+      // is atomic and idempotent, which is all the `cancelling` lock ever
+      // provided — without the corruptible intermediate state.
+      const { data: cancelledApts, error: updateError } = await adminClient
         .from('appointments')
         .update(updateData)
-        .in('id', cancelIds);
+        .in('id', cancelIds)
+        .in('status', allowedStatuses)
+        .select('id');
 
       if (updateError) {
-        console.error(`❌ Error updating appointments table:`, updateError.message);
+        console.error(`Error updating appointments table:`, updateError.message);
         throw updateError;
+      }
+
+      const effectivelyCancelled = Array.isArray(cancelledApts) ? cancelledApts.length : 0;
+      if (effectivelyCancelled === 0) {
+        // Another worker finished first. The refund is already terminal, so this
+        // is success, not failure.
+        console.log(`[BookingCancellationCore] Appointments already in a terminal state for ${lockKey}.`);
+        return {
+          success: true,
+          alreadyProcessed: true,
+          reason,
+          status: targetStatus,
+          paymentStatus,
+          isPaid,
+          processedCount: 0,
+          groupId: appointment.group_id || appointment.id,
+          refundStatus: refundOperation?.status,
+          message: 'Cancelamento ja processado por outro worker.'
+        };
       }
 
       // 9. Send Notifications
@@ -564,8 +748,9 @@ export class BookingCancellationCore {
         status: targetStatus,
         paymentStatus,
         isPaid,
-        processedCount: appointmentsToCancel.length,
+        processedCount: effectivelyCancelled,
         groupId,
+        refundStatus: refundOperation?.status,
         message: 'Cancelamento e estorno processados com sucesso.'
       };
 

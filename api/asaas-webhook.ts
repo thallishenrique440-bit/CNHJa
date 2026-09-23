@@ -1192,11 +1192,15 @@ export default async function handler(req: Request, res: Response) {
       // Update appointments and transactions based on reconciled scope
       if (Array.isArray(apts) && apts.length > 0) {
         for (const apt of apts) {
-          const newStatus = apt.status === 'cancelling' ? 'cancelled' : apt.status;
+          // P-1.20.1B: the webhook reconciles MONEY, not booking state. The
+          // `cancelling -> cancelled` repair that used to live here existed only
+          // because the Core parked appointments in `cancelling` before calling
+          // the gateway. It no longer does: the terminal status is written by the
+          // Core once the refund is COMPLETED, so by the time this event arrives
+          // the appointment is already coherent.
           await supabaseAdmin
             .from('appointments')
             .update({
-              status: newStatus,
               payment_status: isPartialRefundEvent ? 'refund_requested' : 'refunded',
               updated_at: new Date().toISOString()
             })

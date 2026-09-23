@@ -611,7 +611,10 @@ async function runTests() {
     // -------------------------------------------------------------
 
     // TEST 22 (Bloqueador 1 / TEST A): CAS Lock Concurrence
-    console.log('\n📌 TEST 22 (Bloqueador 1 / TEST A): Concurrent cancellation process loses CAS lock when status becomes cancelling');
+    console.log('\n📌 TEST 22 (Bloqueador 1 / TEST A): a segunda execucao concorrente perde o CAS');
+    // P-1.20.1B: o CAS sobre `appointments` e' agora a escrita TERMINAL
+    // (elegivel -> cancelled/expired), executada apos o refund COMPLETED.
+    // O estado intermediario `cancelling` nao existe mais.
     {
       const runA = `cas_${Date.now()}`;
       const mockApt = {
@@ -624,7 +627,7 @@ async function runTests() {
       };
       const mockClient = createMockAdminClient({ appointment: mockApt });
 
-      // First execution claims lock (pending -> cancelling) and proceeds
+      // First execution wins the terminal CAS (pending -> cancelled) and proceeds
       let postCount = 0;
       globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = url.toString();
@@ -648,8 +651,8 @@ async function runTests() {
       assert(resA.success === true, 'First process acquired lock and completed cancellation');
       assert(postCount === 1, `First process made 1 POST /refund call (actual: ${postCount})`);
 
-      // Second execution attempts cancellation on now-'cancelling' appointment
-      // Since 'cancelling' is excluded from source statuses, zero rows are updated
+      // Second execution attempts cancellation on an already-terminal appointment
+      // Since a terminal status is excluded from the eligible source statuses, zero rows are updated
       let postCountSecond = 0;
       globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = url.toString();

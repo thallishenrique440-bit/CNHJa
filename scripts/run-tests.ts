@@ -50,6 +50,7 @@ const ALLOW = [
   'RefundBlockersFase31177.unit.test.ts',
   'RefundCorrectionsFase31175.unit.test.ts',
   'RefundHardeningFase11F3.unit.test.ts',
+  'RefundHardeningP1201B.unit.test.ts',
   'RefundOperationContract.unit.test.ts',
   'RefundOperationRepository.unit.test.ts',
   'RefundOperationRpcSecurity.unit.test.ts',
@@ -144,6 +145,22 @@ function main(): void {
     console.error('\nClassifique cada um (allow ou deny) antes de executar o runner.');
     process.exit(2);
   }
+
+  // P-1.20.1B: guarda de divergencia. supabase/functions/_shared e' GERADO a
+  // partir de lib/payments. Se divergir, a producao roda codigo diferente do
+  // que foi revisado -- foi exatamente assim que o defeito do claim sobreviveu.
+  console.log('\n--- GUARDA: _shared x lib/payments ---');
+  const sync = spawnSync(process.execPath,
+    [resolve(process.cwd(), 'node_modules/tsx/dist/cli.mjs'), 'scripts/sync-shared.ts', '--check'],
+    { encoding: 'utf-8', env: sanitizedEnv(), timeout: TIMEOUT_MS });
+  const syncOut = `${sync.stdout || ''}${sync.stderr || ''}`;
+  if (sync.status !== 0) {
+    console.error(syncOut);
+    console.error('\nABORTADO — supabase/functions/_shared divergente de lib/payments.');
+    console.error('Rode: npx tsx scripts/sync-shared.ts');
+    process.exit(2);
+  }
+  console.log('  ok — _shared sincronizado com lib/payments');
 
   console.log('\n--- ALLOW-LIST (sera executada) ---');
   ALLOW.forEach((f, i) => console.log(`  ${String(i + 1).padStart(2)}. ${f}`));

@@ -477,31 +477,37 @@ export async function runAllTests() {
     assert(completed.status === 'COMPLETED', 'Scenario 7: Out-of-order refund transitions directly to COMPLETED');
   }
 
-  // Scenario 8: Concurrent cancellation attempts (Distributed DB Atomic Lock)
+  // Scenario 8: Concurrent cancellation attempts (CAS atomico)
+  //
+  // P-1.20.1B: a intencao — "dois workers, apenas um vence" — e' preservada.
+  // O que mudou e' ONDE o CAS acontece. Antes, o vencedor gravava o estado
+  // intermediario `cancelling` ANTES de chamar o gateway; qualquer falha depois
+  // disso prendia a linha para sempre. Agora o unico CAS sobre `appointments`
+  // e' a escrita TERMINAL, executada apos o refund estar COMPLETED. Tambem
+  // mudou o status de partida: `confirmed` significa aula ja aceita e nao e'
+  // mais cancelavel (R2), entao o cenario usa `pending_approval`.
   {
     const mockDb = createMockSupabase({
       appointments: [
-        { id: 'apt_8', status: 'confirmed', provider_payment_id: 'pay_800', price: 80 }
+        { id: 'apt_8', status: 'pending_approval', provider_payment_id: 'pay_800', price: 80 }
       ]
     });
 
-    // Worker 1 acquires lock
     const { data: lock1 } = await mockDb.from('appointments')
-      .update({ status: 'cancelling' })
+      .update({ status: 'cancelled' })
       .in('id', ['apt_8'])
-      .in('status', ['confirmed'])
+      .in('status', ['pending_approval'])
       .select('id');
 
-    assert(lock1 && lock1.length === 1, 'Scenario 8: Worker 1 successfully acquired atomic lock');
+    assert(lock1 && lock1.length === 1, 'Scenario 8: Worker 1 venceu o CAS terminal');
 
-    // Worker 2 attempts same lock
     const { data: lock2 } = await mockDb.from('appointments')
-      .update({ status: 'cancelling' })
+      .update({ status: 'cancelled' })
       .in('id', ['apt_8'])
-      .in('status', ['confirmed'])
+      .in('status', ['pending_approval'])
       .select('id');
 
-    assert(!lock2 || lock2.length === 0, 'Scenario 8: Worker 2 failed to acquire lock (atomic isolation verified)');
+    assert(!lock2 || lock2.length === 0, 'Scenario 8: Worker 2 perdeu o CAS (isolamento atomico verificado)');
   }
 
   // Scenario 9: Partial refund on single appointment isolates installment refunding
