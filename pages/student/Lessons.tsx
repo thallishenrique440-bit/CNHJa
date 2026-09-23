@@ -938,13 +938,26 @@ export const StudentLessons: React.FC = () => {
         endTime.setHours(h, m + ((index + 1) * LESSON_DURATION), 0, 0);
         const endTimeStr = `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}:00`;
 
+        // P-1.20.3: `status` deixou de ser escrito aqui, de proposito.
+        //
+        // Antes esta remarcacao gravava `status: 'pending_approval'`, o que
+        // devolvia uma aula JA' ACEITA para a fila de aprovacao. O modulo B de
+        // supabase/functions/check-expired-bookings (cron de 1 em 1 minuto)
+        // seleciona exatamente `status = 'pending_approval'` + `payment_status =
+        // 'paid'` e, quando o horario da aula chega sem aceite, chama
+        // BookingCancellationCore com reason='auto_expired' — ou seja, uma
+        // remarcacao virava ESTORNO.
+        //
+        // Omitir o campo preserva o status vigente seja ele qual for
+        // (`confirmed`, `scheduled` ou um `pending_approval` legitimo de aula
+        // ainda nao aceita). Nao ha' mapeamento nem forcamento de estado.
         return supabase
           .from('appointments')
           .update({
             date: dateKey,
             start_time: startTimeStr,
             end_time: endTimeStr,
-            status: 'pending_approval',
+            rescheduled_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
           .eq('id', id);
@@ -964,7 +977,51 @@ export const StudentLessons: React.FC = () => {
         throw error;
       }
 
-      addToast("Aula reagendada com sucesso! Aguarde a aprovação do instrutor.", "success");
+      // P-1.20.3: remarcacao com mais de 24h e' efetiva na hora e NAO depende de
+      // aceite. O instrutor e' apenas notificado — mesmo RPC ja' usado em
+      // requestReschedule, sem criar nenhum sistema de notificacao novo.
+      try {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', session?.user?.id || '')
+          .single();
+        const studentName = profileData?.full_name || 'Aluno';
+
+        const [ny, nm, nd] = dateKey.split('-').map(Number);
+        const novaDataStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' })
+          .format(new Date(ny, nm - 1, nd));
+        const novaHoraStr = rescheduleTime;
+        const antigaDataStr = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' })
+          .format(lessonToReschedule.date);
+        const antigaHoraStr = lessonToReschedule.time;
+        const qtd = lessonToReschedule.ids.length;
+
+        const message = qtd > 1
+          ? `O aluno ${studentName} remarcou um pacote de ${qtd} aulas de ${antigaDataStr} às ${antigaHoraStr} para ${novaDataStr} às ${novaHoraStr}.`
+          : `O aluno ${studentName} remarcou a aula de ${antigaDataStr} às ${antigaHoraStr} para ${novaDataStr} às ${novaHoraStr}.`;
+
+        const { error: notificationError } = await supabase.rpc('create_unified_notification', {
+          p_user_id: lessonToReschedule.instructorId,
+          p_title: '📅 Aula remarcada',
+          p_message: message,
+          p_type: 'booking_request', // mesma convencao de requestReschedule (constraint do banco)
+          p_entity_type: qtd > 1 ? 'package' : 'lesson',
+          p_target_screen: 'instructor_agenda',
+          p_combo_count: qtd,
+          p_group_id: null,
+          p_appointment_id: lessonToReschedule.ids[0] || null
+        });
+
+        if (notificationError) {
+          console.error("Error notifying instructor about reschedule:", notificationError);
+        }
+      } catch (notifErr) {
+        // Notificacao e' complementar: a remarcacao ja' foi efetivada acima.
+        console.error("Error notifying instructor about reschedule:", notifErr);
+      }
+
+      addToast("Aula remarcada com sucesso! O instrutor foi notificado.", "success");
       setLessonToReschedule(null);
       setRescheduleTime(null);
       
