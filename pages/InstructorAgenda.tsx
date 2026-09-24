@@ -1025,16 +1025,29 @@ export const InstructorAgenda: React.FC = () => {
     if (!selectedLesson) return;
     setIsActionLoading(true);
     try {
-      const { error } = await supabase
+      // AP-03: CAS explicito. Sem o filtro por status, um duplo clique
+      // reescrevia a linha e movia updated_at; e a transicao so' e' valida a
+      // partir de uma aula aceita. O trigger de banco recusa o resto, mas o
+      // CAS transforma a segunda chamada em no-op silencioso em vez de erro.
+      const { data: updated, error } = await supabase
         .from('appointments')
         .update({ 
           status: 'completed',
           reschedule_requested_at: null,
           updated_at: new Date().toISOString()
         })
-        .eq('id', selectedLesson.id);
+        .eq('id', selectedLesson.id)
+        .in('status', ['confirmed', 'scheduled'])
+        .select('id');
 
       if (error) throw error;
+
+      if (!updated || updated.length === 0) {
+        addToast('Esta aula nao esta mais em um estado que permita finalizacao.', 'warning');
+        closeLessonModal();
+        fetchAppointments();
+        return;
+      }
       
       addToast('Aula finalizada com sucesso!', 'success');
       closeLessonModal();
@@ -1059,16 +1072,26 @@ export const InstructorAgenda: React.FC = () => {
 
     setIsActionLoading(true);
     try {
-      const { error } = await supabase
+      // AP-03: mesmo CAS de handleFinalizeLesson.
+      const { data: updated, error } = await supabase
         .from('appointments')
         .update({ 
           status: 'no_show',
           reschedule_requested_at: null,
           updated_at: new Date().toISOString()
         })
-        .eq('id', selectedLesson.id);
+        .eq('id', selectedLesson.id)
+        .in('status', ['confirmed', 'scheduled'])
+        .select('id');
 
       if (error) throw error;
+
+      if (!updated || updated.length === 0) {
+        addToast('Esta aula nao esta mais em um estado que permita registrar falta.', 'warning');
+        closeLessonModal();
+        fetchAppointments();
+        return;
+      }
       
       addToast('Falta registrada com sucesso!', 'success');
       closeLessonModal();

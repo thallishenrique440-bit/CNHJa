@@ -61,6 +61,7 @@ const ALLOW = [
   'RefundOperationRpcSecurity.unit.test.ts',
   'RefundOperationTransition.unit.test.ts',
   'RefundReconciliationFase31.unit.test.ts',
+  'StatusAuthorityAP03AP11.unit.test.ts',
   'SettlementService.unit.test.ts',
   'SyncPaymentStatusRefundFix.unit.test.ts',
   'Wave2Hardening.concurrency.test.ts',

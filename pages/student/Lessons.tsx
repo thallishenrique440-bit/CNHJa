@@ -669,21 +669,33 @@ export const StudentLessons: React.FC = () => {
          }
        }
 
-       // 1.5 Update Appointment Status to 'completed'
-       const { error: statusError } = await supabase
-         .from('appointments')
-         .update({ 
-           status: 'completed',
-           updated_at: new Date().toISOString()
-         })
-         .in('id', lessonIds);
-       
-       if (statusError) throw statusError;
+       // 1.5 AP-03 — o ALUNO NAO marca a aula como concluida.
+       //
+       // Antes desta correcao havia aqui um
+       //   supabase.from('appointments').update({ status: 'completed' })
+       //            .in('id', lessonIds)
+       // executado com o JWT do aluno, em lote e sem CAS. `completed` e' o
+       // gatilho de liberacao do repasse ao instrutor — nao e' decisao do
+       // aluno. O trigger de banco passa a recusar essa transicao
+       // (migration 20260924_ap03_ap11_appointments_status_transition_guard).
+       //
+       // A conclusao continua acontecendo por dois caminhos legitimos, ambos
+       // preservados: o instrutor finaliza em InstructorAgenda, e a RPC
+       // auto_complete_lessons (cron, */5 * * * *) conclui as aulas cujo
+       // horario ja passou.
+       //
+       // O fluxo do aluno — avaliacao e gorjeta — nao depende do status: a
+       // policy de INSERT em `reviews` exige apenas auth.uid() = student_id
+       // e perfil completo, nunca status = 'completed' (verificado em
+       // pg_policy, 2026-09-24).
 
        // 3. Update Local State (Optimistic UI)
+       // AP-03: o estado local tambem deixa de afirmar 'completed'. Marcar a
+       // avaliacao como feita e' o que esconde o prompt de review; o status
+       // real chega no proximo fetch, vindo de quem tem autoridade sobre ele.
        setRawLessons(prev => prev.map(l => 
           lessonIds.includes(l.id)
-             ? { ...l, reviews: (shouldCreateReview && rating > 0) ? [{ id: 'new' }] : [], status: 'completed' } 
+             ? { ...l, reviews: (shouldCreateReview && rating > 0) ? [{ id: 'new' }] : [] }
              : l
        ));
        

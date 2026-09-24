@@ -11,9 +11,19 @@
  *   ATUAL  <=>  platform_fee + fee_amount + net_amount = gross_amount
  *   LEGADO <=>  platform_fee + net_amount             = gross_amount
  *
- * A tabela FIXTURES abaixo e' a copia literal dos 33 settlements PAYMENT
- * existentes em producao (consulta somente leitura em 2026-09-23):
- * 23 legados (2026-08-10 -> 2026-09-19) e 10 atuais (2026-09-17 -> 2026-09-23).
+ * AP-09 — as fixtures deixaram de ser producao.
+ *
+ * Ate 2026-09-24 a tabela FIXTURES deste arquivo era, nas palavras do proprio
+ * cabecalho, "a copia literal dos 33 settlements PAYMENT existentes em
+ * producao", com as datas reais das transacoes. Isso violava a regra de nao
+ * usar dado financeiro real como fixture e, pior, amarrava o teste a um estado
+ * de banco que sera integralmente descartado no reset (AP-10).
+ *
+ * As linhas agora vem de lib/payments/tests/fixtures/syntheticFinanceFixtures,
+ * onde cada cenario e' DERIVADO dos invariantes do produto (comissao de 10%,
+ * repasse de 90%, gross-up da tarifa, gorjeta sem comissao) em vez de lido do
+ * banco. A cobertura contabil e' equivalente: as duas eras, aula avulsa, meia
+ * aula, combo, combo parcelado, valor impar com arredondamento e gorjeta.
  *
  * NADA neste arquivo escreve no banco. A funcao sob teste e' pura.
  */
@@ -31,48 +41,14 @@ const service = new InstructorFinanceReadService();
 const commission = (p: number, f: number, g: number, n: number): number =>
   (service as any).calculateCommissionCnhJa(p, f, g, n);
 
-/** [data, gross, fee, platform_fee, net, era esperada, comissao esperada] */
-type Row = [string, number, number, number, number, 'legado' | 'atual', number];
+import {
+  SYNTHETIC_SETTLEMENTS,
+  assertFixturesAreCoherent,
+  type SyntheticSettlement,
+} from './fixtures/syntheticFinanceFixtures.js';
 
-const FIXTURES: Row[] = [
-  // ---- 10 linhas legadas de R$100 (taxa embutida no platform_fee) ----------
-  ['2026-08-10', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-08-11', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-08-11', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-08-12', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-08-12', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-08-12', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-08-12', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-09-11', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-09-16', 10149, 149, 1149, 9000, 'legado', 1000],
-  ['2026-09-17', 10149, 149, 1149, 9000, 'legado', 1000],
-  // ---- gorjeta (platform_fee = 0), ja' no modelo atual --------------------
-  ['2026-09-17',  1000, 199,    0,  801, 'atual',     0],
-  // ---- transicao P-1.18E: 13 linhas legadas de meia aula / pacote ---------
-  ['2026-09-18',  5186, 192,  686, 4500, 'legado',  494],
-  ['2026-09-18',  5186, 192,  686, 4500, 'legado',  494],
-  ['2026-09-18',  5186, 192,  686, 4500, 'legado',  494],
-  ['2026-09-18',  5374, 199,  874, 4500, 'legado',  675],
-  ['2026-09-18',  5189, 193,  689, 4500, 'legado',  496],
-  ['2026-09-18',  5374, 199,  874, 4500, 'legado',  675],
-  ['2026-09-18', 13519, 453, 1819,11700, 'legado', 1366],
-  ['2026-09-18',  5376, 199,  876, 4500, 'legado',  677],
-  ['2026-09-18',  5374, 199,  874, 4500, 'legado',  675],
-  ['2026-09-19',  5189, 193,  689, 4500, 'legado',  496],
-  ['2026-09-19',  5186, 192,  686, 4500, 'legado',  494],
-  ['2026-09-19',  5186, 192,  686, 4500, 'legado',  494],
-  ['2026-09-19',  5186, 192,  686, 4500, 'legado',  494],
-  // ---- 9 linhas ja' no modelo atual --------------------------------------
-  ['2026-09-19',  5193, 193,  500, 4500, 'atual',   500],
-  ['2026-09-22', 10199, 199, 1000, 9000, 'atual',  1000],
-  ['2026-09-22', 10199, 199, 1000, 9000, 'atual',  1000],
-  ['2026-09-22', 10199, 199, 1000, 9000, 'atual',  1000],
-  ['2026-09-22', 10199, 199, 1000, 9000, 'atual',  1000],
-  ['2026-09-22', 10199, 199, 1000, 9000, 'atual',  1000],
-  ['2026-09-23', 13199, 199, 1300,11700, 'atual',  1300],
-  ['2026-09-23', 10199, 199, 1000, 9000, 'atual',  1000],
-  ['2026-09-23', 10199, 199, 1000, 9000, 'atual',  1000],
-];
+/** Conjunto congelado e sintetico. Ver o modulo de fixtures. */
+const FIXTURES: readonly SyntheticSettlement[] = SYNTHETIC_SETTLEMENTS;
 
 async function run() {
   console.log('\n======================================================');
@@ -89,9 +65,17 @@ async function run() {
   assert(commission(1149, 149, 10149, 9000) === 1000,
     'B. legado: platform_fee=1149 (comissao+taxa) -> comissao pura = 1000');
 
-  // ---- C/D) TODAS as linhas de producao ----------------------------------
+  // ---- C/D) TODOS os cenarios sinteticos ---------------------------------
+  // Guarda de sanidade das proprias fixtures: se isto falhar, o defeito esta
+  // na fixture, nao na funcao sob teste.
+  const fixtureProblems = assertFixturesAreCoherent();
+  assert(fixtureProblems.length === 0,
+    `fixtures coerentes com a era que declaram${fixtureProblems.length ? ': ' + fixtureProblems.join(' | ') : ''}`);
+
   let legados = 0, atuais = 0, erros = 0;
-  for (const [d, g, f, p, n, era, esperado] of FIXTURES) {
+  for (const row of FIXTURES) {
+    const { scenario, grossAmount: g, feeAmount: f, platformFee: p,
+            netAmount: n, expectedEra: era, expectedCommission: esperado } = row;
     const isAtual = p + f + n === g;
     const isLegado = p + n === g;
     if (isAtual && !isLegado) atuais++;
@@ -100,18 +84,23 @@ async function run() {
 
     const classificada = isAtual && !isLegado ? 'atual' : 'legado';
     if (classificada !== era || commission(p, f, g, n) !== esperado) {
-      console.error(`      linha ${d} g=${g} f=${f} p=${p} n=${n}: ` +
+      console.error(`      ${scenario} g=${g} f=${f} p=${p} n=${n}: ` +
         `era=${classificada} (esperado ${era}), comissao=${commission(p, f, g, n)} (esperado ${esperado})`);
       erros++;
     }
   }
-  assert(erros === 0, 'C/D. as 33 linhas de producao classificam e calculam corretamente');
-  assert(legados === 23, `C. exatamente 23 linhas legadas (obtido ${legados})`);
-  assert(atuais === 10, `D. exatamente 10 linhas atuais (obtido ${atuais})`);
+  const nAtuais = FIXTURES.filter(r => r.expectedEra === 'atual').length;
+  const nLegados = FIXTURES.filter(r => r.expectedEra === 'legado').length;
+  assert(erros === 0, `C/D. os ${FIXTURES.length} cenarios sinteticos classificam e calculam corretamente`);
+  assert(legados === nLegados, `C. ${nLegados} cenarios legados (obtido ${legados})`);
+  assert(atuais === nAtuais, `D. ${nAtuais} cenarios atuais (obtido ${atuais})`);
+  assert(FIXTURES.length > 0, 'o conjunto de fixtures nao esta vazio');
 
   // as duas identidades nunca colidem quando ha taxa de gateway
-  const ambiguas = FIXTURES.filter(([, g, f, p, n]) =>
-    f > 0 && (p + f + n === g) && (p + n === g));
+  const ambiguas = FIXTURES.filter(r =>
+    r.feeAmount > 0 &&
+    (r.platformFee + r.feeAmount + r.netAmount === r.grossAmount) &&
+    (r.platformFee + r.netAmount === r.grossAmount));
   assert(ambiguas.length === 0,
     'as duas identidades sao mutuamente exclusivas com fee_amount > 0');
 

@@ -4,6 +4,7 @@
  */
 
 import { assert } from 'console';
+import { SYNTHETIC_IDS } from './fixtures/syntheticFinanceFixtures.js';
 
 function check(condition: boolean, msg: string) {
   if (!condition) {
@@ -73,11 +74,18 @@ async function runConstraintAndCancellationTests() {
   const statusScenario3 = determineTargetPaymentStatus(false, false);
   check(statusScenario3 === 'released', `isPaid=false, isRefundConfirmed=false -> payment_status is 'released'`);
 
-  // TEST 3: Verification of Case pay_7urnp7nvjx677zh0 (READ-ONLY)
-  console.log('\n📌 TEST 3: Case Verification (pay_7urnp7nvjx677zh0 - Pure Verification, No Writes)');
+  // TEST 3: cenario REFUND_REQUESTED (puro, sem escrita)
+  //
+  // AP-09: este bloco usava o appointment 9a8d3879-... e o
+  // provider_payment_id pay_7urnp7... de PRODUCAO — o primeiro deles e' um
+  // dos 5 registros de teste protegidos. A funcao sob teste e' pura e nao
+  // consulta o banco: os identificadores eram decorativos. Foram trocados
+  // por identificadores sinteticos para que o teste sobreviva ao reset do
+  // banco (AP-10) e nao carregue dado real no repositorio.
+  console.log('\n📌 TEST 3: Cenario REFUND_REQUESTED (verificacao pura, sem escrita)');
   const caseData = {
-    appointmentId: '9a8d3879-26f3-4c50-8a79-ed61de5b1fe8',
-    providerPaymentId: 'pay_7urnp7nvjx677zh0',
+    appointmentId: SYNTHETIC_IDS.appointment,
+    providerPaymentId: SYNTHETIC_IDS.providerPayment,
     asaasStatus: 'REFUND_REQUESTED'
   };
 
@@ -85,7 +93,7 @@ async function runConstraintAndCancellationTests() {
   const isRefundConfirmedCase = caseData.asaasStatus === 'REFUNDED';
   const expectedStatusCase = determineTargetPaymentStatus(isPaidCase, isRefundConfirmedCase);
 
-  check(expectedStatusCase === 'refund_requested', `Case pay_7urnp7nvjx677zh0 evaluates correctly to payment_status = 'refund_requested' without violating constraint`);
+  check(expectedStatusCase === 'refund_requested', `Cenario REFUND_REQUESTED resolve para payment_status = 'refund_requested' sem violar a constraint`);
 
   console.log('\n====================================================');
   console.log('✅ ALL CONSTRAINT AND CANCELLATION TESTS PASSED!');
