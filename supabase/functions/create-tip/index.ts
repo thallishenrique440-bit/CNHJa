@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getAsaasEnvironment } from '../_shared/AsaasEnvironment.ts';
 
 declare const Deno: any;
 
@@ -135,7 +136,8 @@ Deno.serve(async (req: Request) => {
     if (!asaasKey) {
       throw new Error('ASAAS_API_KEY não configurada no servidor.');
     }
-    const asaasUrl = Deno.env.get("ASAAS_API_URL") || 'https://sandbox.asaas.com/api/v3';
+    // AP-04: ambiente explicito e coerente; sem fallback para sandbox.
+    const asaasUrl = getAsaasEnvironment({ requireApiKey: true }).apiUrl;
 
     let providerCustomerId = profile.provider_customer_id;
     if (!providerCustomerId || profile.provider_name !== 'asaas') {

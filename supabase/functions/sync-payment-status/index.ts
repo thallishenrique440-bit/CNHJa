@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { NotificationService } from '../_shared/NotificationService.ts'
 import { asaasFetch, getAsaasRefundState } from '../_shared/asaasClient.ts'
+import { getAsaasEnvironment } from '../_shared/AsaasEnvironment.ts'
 import { InstallmentService } from '../_shared/InstallmentService.ts'
 
 const supabaseAdmin = createClient(
@@ -83,7 +84,14 @@ Deno.serve(async (req) => {
 
       // Check Asaas payment status
       const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || '';
-      const asaasApiUrl = Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+      // AP-04: ambiente explicito e coerente; sem fallback para sandbox.
+      let asaasApiUrl: string;
+      try {
+        asaasApiUrl = getAsaasEnvironment().apiUrl;
+      } catch (envErr: any) {
+        console.error(`❌ ${envErr?.message ?? envErr} Asaas sync aborted for group ${groupId}.`);
+        return { groupId, status: 'error_asaas_environment', details: String(envErr?.message ?? envErr) };
+      }
 
       if (!asaasApiKey) {
         console.error(`❌ ASAAS_API_KEY is not defined in Edge Function. Skipping Asaas sync for group ${groupId}.`);

@@ -4,6 +4,7 @@ import { NotificationService } from '../NotificationService.js';
 import { RefundOperationRepository } from './RefundOperationRepository.js';
 import { buildRefundOperationKey, RefundOperationKeyInput } from './RefundOperationKey.js';
 import { RefundOperationRecord } from './RefundOperationTypes.js';
+import { resolveAsaasEnvironment } from './AsaasEnvironment.js';
 
 export type CancellationReason = 'instructor_rejected' | 'auto_expired' | 'student_cancelled';
 
@@ -113,7 +114,9 @@ export class BookingCancellationCore {
     const { appointmentId, reason, initiatedBy, adminClient } = params;
 
     const asaasApiKey = params.asaasApiKey || getEnvVar('ASAAS_API_KEY') || '';
-    const asaasApiUrl = params.asaasApiUrl || getEnvVar('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
+    // AP-04: sem fallback. `params.asaasApiUrl` e' injecao explicita (testes);
+    // caso contrario o ambiente e' resolvido e validado (lanca se incoerente).
+    const asaasApiUrl = params.asaasApiUrl || resolveAsaasEnvironment((name) => getEnvVar(name)).apiUrl;
     const httpFetch: HttpFetch = params.httpFetch || ((globalThis as any).fetch as HttpFetch);
 
     // 1. Fetch target appointment

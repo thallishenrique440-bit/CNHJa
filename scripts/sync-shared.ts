@@ -36,6 +36,7 @@ export const GENERATED_FILES = [
   'RefundOperationKey.ts',
   'RefundOperationRepository.ts',
   'BookingCancellationCore.ts',
+  'AsaasEnvironment.ts', // AP-04: fonte unica do ambiente Asaas
 ];
 
 /**

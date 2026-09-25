@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { asaasFetch } from '../_shared/asaasClient.ts';
+import { getAsaasEnvironment } from '../_shared/AsaasEnvironment.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -140,12 +141,14 @@ Deno.serve(async (req: Request) => {
     }
 
     // Obter as credenciais da API do Asaas a partir do Deno env
-    const asaasApiUrl = Deno.env.get('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
     const asaasApiKey = Deno.env.get('ASAAS_API_KEY');
 
     if (!asaasApiKey) {
       throw new Error('Chave de API do Asaas (ASAAS_API_KEY) não está configurada neste ambiente.');
     }
+
+    // AP-04: ambiente explicito e coerente; sem fallback para sandbox.
+    const asaasApiUrl = getAsaasEnvironment({ requireApiKey: true }).apiUrl;
 
     // PASSO 9: Executar POST /accounts
     const asaasPayload: any = {

@@ -2,6 +2,9 @@ import { AsaasProvider } from '../AsaasProvider.js';
 import { InstallmentService } from '../InstallmentService.js';
 
 process.env.ASAAS_API_KEY = 'test_asaas_key_123';
+// AP-04: ambiente Asaas explicito (sem fallback). provider.request e' mockado neste teste (sem rede).
+process.env.ASAAS_ENV = 'sandbox';
+process.env.ASAAS_API_URL = 'https://sandbox.asaas.com/api/v3';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {

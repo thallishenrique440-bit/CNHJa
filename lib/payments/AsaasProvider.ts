@@ -1,4 +1,5 @@
 import { IPaymentProvider } from './IPaymentProvider.js';
+import { getAsaasEnvironment } from './AsaasEnvironment.js';
 
 const MAX_INSTALLMENTS = 4;
 import {
@@ -179,8 +180,10 @@ export class AsaasProvider implements IPaymentProvider {
     if (!key) {
       throw new Error('ASAAS_API_KEY environment variable is required');
     }
-    this.apiKey = key;
-    this.apiUrl = process.env.ASAAS_API_URL || 'https://sandbox.asaas.com/api/v3';
+    // AP-04: ambiente explicito (ASAAS_ENV + ASAAS_API_URL coerentes), sem fallback.
+    const asaasEnv = getAsaasEnvironment({ requireApiKey: true });
+    this.apiKey = asaasEnv.apiKey as string;
+    this.apiUrl = asaasEnv.apiUrl;
   }
 
   /**
@@ -733,7 +736,8 @@ ${JSON.stringify(splitRule, null, 2)}`);
     const secret = process.env.ASAAS_WEBHOOK_SECRET;
     const receivedToken = payload.headers['asaas-access-token'];
 
-    if (secret && receivedToken !== secret) {
+    // AP-04: fail-closed. Sem ASAAS_WEBHOOK_SECRET o webhook e' rejeitado.
+    if (!secret || receivedToken !== secret) {
       throw new Error('Invalid Asaas access token signature');
     }
 

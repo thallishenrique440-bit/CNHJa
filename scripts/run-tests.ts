@@ -64,6 +64,7 @@ const ALLOW = [
   'StatusAuthorityAP03AP11.unit.test.ts',
   'InsertAuthorityAP01.unit.test.ts',
   'MinimalExposureAP02.unit.test.ts',
+  'AsaasEnvironmentAP04.unit.test.ts',
   'SettlementService.unit.test.ts',
   'SyncPaymentStatusRefundFix.unit.test.ts',
   'Wave2Hardening.concurrency.test.ts',

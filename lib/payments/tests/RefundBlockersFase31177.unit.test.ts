@@ -4,6 +4,10 @@ import { InstallmentService } from '../InstallmentService.js';
 import { buildRefundOperationKey } from '../RefundOperationKey.js';
 import { RefundOperationRecord } from '../RefundOperationTypes.js';
 
+// AP-04: ambiente Asaas explicito (sem fallback). O fetch e' mockado nos testes; nenhuma chamada real.
+process.env.ASAAS_ENV = process.env.ASAAS_ENV || 'sandbox';
+process.env.ASAAS_API_URL = process.env.ASAAS_API_URL || 'https://sandbox.asaas.com/api/v3';
+
 const assert = (value: boolean, message: string) => {
   if (!value) {
     console.error(`❌ FAIL: ${message}`);

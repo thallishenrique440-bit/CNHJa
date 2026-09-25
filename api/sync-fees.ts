@@ -17,6 +17,7 @@ import { createClient } from '@supabase/supabase-js';
 import { parseAsaasFees } from '../lib/payments/AsaasFeeParser.js';
 import { planGatewayFeeSync, untouchedRanges } from '../lib/payments/GatewayFeeSyncPlanner.js';
 import { applyGatewayFeeSync, readCurrentFeeRows, syncAgeDays } from '../lib/payments/GatewayFeeSyncService.js';
+import { resolveAsaasEnvironment } from '../lib/payments/AsaasEnvironment.js';
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
@@ -46,7 +47,14 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: 'ASAAS_API_KEY is not defined in the server.', ratesPreserved: true });
     }
 
-    const asaasApiUrl = (process.env.ASAAS_API_URL || 'https://sandbox.asaas.com/api/v3').replace(/\/$/, '');
+    // AP-04: ambiente explicito e coerente; sem fallback para sandbox.
+    let asaasApiUrl: string;
+    try {
+      asaasApiUrl = resolveAsaasEnvironment((name) => process.env[name], { requireApiKey: true }).apiUrl;
+    } catch (envErr: any) {
+      console.error(`[SyncFees] Ambiente Asaas invalido. Tarifa vigente preservada. ${envErr?.message ?? envErr}`);
+      return res.status(500).json({ error: 'Asaas environment misconfigured.', ratesPreserved: true });
+    }
 
     // ---- 1. Consulta ao Asaas ---------------------------------------------
     let asaasData: any;
