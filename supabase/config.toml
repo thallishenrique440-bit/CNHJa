@@ -1,7 +1,7 @@
 project_id = "ohftsqsxymtrclnpadam"
 
 [functions.create-booking]
-verify_jwt = false
+verify_jwt = true
 
 [functions.create-asaas-account]
 verify_jwt = false

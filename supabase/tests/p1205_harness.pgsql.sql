@@ -45,7 +45,17 @@ CREATE TABLE public.appointments (
   reschedule_requested_at timestamptz,
   rescheduled_at timestamptz,
   provider_name text DEFAULT 'asaas',
-  provider_payment_id text
+  provider_payment_id text,
+  -- Colunas do modelo de proposta (migration 20260923_p1205_01). Presentes em
+  -- producao e lidas pelo trigger de INSERT do AP-01. A p1205_01 usa
+  -- ADD COLUMN IF NOT EXISTS, entao declara-las aqui e' compativel com ela.
+  proposed_date date,
+  proposed_start_time time,
+  proposed_end_time time,
+  proposed_by uuid,
+  proposal_status text,
+  proposal_created_at timestamptz,
+  proposal_resolved_at timestamptz
 );
 
 CREATE UNIQUE INDEX idx_unique_active_slot ON public.appointments (instructor_id, date, start_time)
