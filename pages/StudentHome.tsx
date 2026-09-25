@@ -28,7 +28,8 @@ interface Instructor {
   id: string;
   public_id: string | null;
   base_price: number;
-  whatsapp: string | null;
+  // AP-02: a vitrine nao recebe mais o numero, apenas se ele existe.
+  has_whatsapp: boolean;
   meeting_point: string | null;
   credential_number: string | null;
   categories: string[] | null;
@@ -177,20 +178,20 @@ export const StudentHome: React.FC = () => {
       // 1. Query only "Active" instructors
       // Definition of Active: Has a base_price set (> 0) and has categories defined.
       const { data, error } = await supabase
-        .from('instructors')
+        // AP-02: vitrine via instructors_public (sem whatsapp/provider_*).
+        // Nome, cidade e foto ja vem na propria view (JOIN interno com profiles).
+        .from('instructors_public')
         .select(`
           id,
           public_id,
           base_price,
-          whatsapp,
+          has_whatsapp,
           meeting_point,
           categories,
           credential_number,
-          profiles!inner (
-            full_name,
-            city,
-            avatar_url
-          ),
+          full_name,
+          city,
+          avatar_url,
           instructor_vehicles (
             type,
             model,
@@ -210,16 +211,22 @@ export const StudentHome: React.FC = () => {
       if (error) throw error;
       
       if (data) {
+        // AP-02: preserva o formato `inst.profiles` usado pelo resto da tela.
+        const normalized = (data as any[]).map(({ full_name, city, avatar_url, ...inst }) => ({
+          ...inst,
+          profiles: { full_name, city, avatar_url },
+        }));
+
         // Enforce professional profile completeness rule (Etapa A)
         // Decoupling visibility from the payouts_enabled field
-        const completeInstructors = (data as any[]).filter(inst => {
+        const completeInstructors = normalized.filter(inst => {
           // 1. Basic profile valid (profiles exists and has full_name and city fill)
           const hasBasicProfile = inst.profiles && 
             typeof inst.profiles.full_name === 'string' && inst.profiles.full_name.trim() !== '' &&
             typeof inst.profiles.city === 'string' && inst.profiles.city.trim() !== '';
 
           // 2. Whatsapp preenchido
-          const hasWhatsapp = inst.whatsapp && typeof inst.whatsapp === 'string' && inst.whatsapp.trim() !== '';
+          const hasWhatsapp = inst.has_whatsapp === true;
 
           // 3. Credencial preenchida
           const hasCredential = inst.credential_number && typeof inst.credential_number === 'string' && inst.credential_number.trim() !== '';

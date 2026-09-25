@@ -414,8 +414,11 @@ export const StudentInstructorProfile: React.FC = () => {
 
       try {
         // 1. Fetch Instructor Basic Info
+        // AP-02: vitrine via instructors_public. O WhatsApp nao vem mais da
+        // tabela: e' buscado abaixo pela RPC get_instructor_whatsapp, que so
+        // o entrega a aluno autenticado. Nome/cidade/foto vem na propria view.
         const { data, error } = await supabase
-          .from('instructors')
+          .from('instructors_public')
           .select(`
             id,
             public_id,
@@ -426,18 +429,16 @@ export const StudentInstructorProfile: React.FC = () => {
             lunch_start_slot,
             lunch_duration,
             lunch_active,
-            whatsapp,
+            has_whatsapp,
             credential_number,
             meeting_point,
             meeting_point_lat,
             meeting_point_lng,
             meeting_point_place_id,
             categories,
-            profiles (
-              full_name,
-              city,
-              avatar_url
-            ),
+            full_name,
+            city,
+            avatar_url,
             instructor_categories (
               category,
               day_price,
@@ -472,7 +473,7 @@ export const StudentInstructorProfile: React.FC = () => {
             rating,
             comment,
             created_at,
-            profiles:student_id (
+            profiles:profiles_public!student_id (
               full_name
             )
           `)
@@ -554,9 +555,18 @@ export const StudentInstructorProfile: React.FC = () => {
           // Calculate Rating
           const { formattedRating, reviewsCount, formattedReviewsCount } = calculateInstructorRating(formattedReviews);
 
-          // Handle profiles relation which might be an array or single object
-          // Supabase types often infer arrays for joined relations
-          const profileData = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
+          // AP-02: identidade publica do instrutor vem achatada na view.
+          const profileData = { full_name: data.full_name, city: data.city, avatar_url: data.avatar_url };
+
+          // AP-02: numero so para aluno autenticado (a RPC devolve NULL para
+          // qualquer outro chamador). Sem numero, o botao nao aparece.
+          let whatsappNumber = '';
+          if (data.has_whatsapp) {
+            const { data: wa, error: waError } = await supabase
+              .rpc('get_instructor_whatsapp', { p_instructor_id: data.id });
+            if (waError) console.error('Error fetching instructor whatsapp:', waError);
+            whatsappNumber = typeof wa === 'string' ? wa : '';
+          }
 
           // Map Category Prices
           const catPrices: CategoryPrice[] = (data.instructor_categories || []).map((c: any) => ({
@@ -571,7 +581,7 @@ export const StudentInstructorProfile: React.FC = () => {
             name: profileData?.full_name || 'Instrutor',
             city: profileData?.city || 'Cidade não informada',
             photoUrl: profileData?.avatar_url || null,
-            whatsapp: data.whatsapp || '',
+            whatsapp: whatsappNumber,
             credential: data.credential_number || 'N/A',
             defaultLocation: data.meeting_point || 'Local a combinar',
             meetingPointLat: data.meeting_point_lat || null,
@@ -1293,7 +1303,7 @@ export const StudentInstructorProfile: React.FC = () => {
           rating,
           comment,
           created_at,
-          profiles:student_id (
+          profiles:profiles_public!student_id (
             full_name
           )
         `)

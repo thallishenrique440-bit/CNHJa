@@ -15,8 +15,9 @@ export const InstructorShortLink: React.FC = () => {
       }
 
       try {
+        // AP-02: rota publica (sem login) -> view de vitrine, nao a tabela.
         const { data, error } = await supabase
-          .from('instructors')
+          .from('instructors_public')
           .select('id')
           .eq('public_id', publicId)
           .single();

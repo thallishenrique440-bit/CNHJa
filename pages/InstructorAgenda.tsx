@@ -413,19 +413,33 @@ export const InstructorAgenda: React.FC = () => {
                 proposed_start_time,
                 proposal_status,
                 proposed_by,
-                profiles:student_id (
+                profiles:profiles_public!student_id (
                     full_name,
-                    avatar_url,
-                    phone,  
-                    experience_level,
-                    cnh_process_type,
-                    email
+                    avatar_url
                 )
             `)
             .eq('instructor_id', session.user.id)
             .eq('date', dateStr);
 
         if (error) throw error;
+
+        // AP-02: telefone, experiencia e tipo de processo do aluno nao vem mais
+        // de profiles. A RPC get_student_contact_for_appointment so os entrega
+        // ao instrutor da aula e so em aula paga/aceita; para as demais volta
+        // vazio e a tela mostra o mesmo fallback de antes.
+        const CONTACT_STATUSES = ['pending_approval', 'confirmed', 'scheduled', 'completed', 'no_show'];
+        await Promise.all((data || [])
+          .filter((apt: any) => apt.student_id && CONTACT_STATUSES.includes(apt.status))
+          .map(async (apt: any) => {
+            const { data: contact, error: contactError } = await supabase
+              .rpc('get_student_contact_for_appointment', { p_appointment_id: apt.id });
+            if (contactError) {
+              console.error('Error fetching student contact:', contactError);
+              return;
+            }
+            const row = Array.isArray(contact) ? contact[0] : contact;
+            if (row) apt.profiles = { ...(apt.profiles || {}), ...row };
+          }));
 
         const newAppointments: Record<string, Lesson> = {};
 

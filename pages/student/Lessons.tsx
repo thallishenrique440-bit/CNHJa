@@ -69,8 +69,6 @@ interface DBAppointment {
     profiles: {
       full_name: string;
       avatar_url: string;
-      experience_level: string;
-      cnh_process_type: string;
     };
     instructor_vehicles: {
       type: string;
@@ -160,6 +158,9 @@ export const StudentLessons: React.FC = () => {
   // Pending Review State
   const [pendingReviewAptId, setPendingReviewAptId] = useState<string | null>(null);
   const hasPromptedReview = React.useRef(false);
+  // AP-02: WhatsApp do instrutor vem da RPC get_instructor_whatsapp (a view
+  // publica nao o expoe). Cache por instrutor para nao repetir a cada refresh.
+  const instructorWhatsappCache = React.useRef<Record<string, string>>({});
 
   const [rawLessons, setRawLessons] = useState<DBAppointment[]>([]);
   const [refreshCounter, setRefreshCounter] = useState(0);
@@ -338,18 +339,15 @@ export const StudentLessons: React.FC = () => {
             proposed_start_time,
             proposal_status,
             proposed_by,
-            instructors (
-              whatsapp,
+            instructors:instructors_public!instructor_id (
+              id,
               meeting_point,
               meeting_point_lat,
               meeting_point_lng,
               meeting_point_place_id,
-              profiles (
-                full_name,
-                avatar_url,
-                experience_level,
-                cnh_process_type
-              ),
+              has_whatsapp,
+              full_name,
+              avatar_url,
               instructor_vehicles (
                 type,
                 model
@@ -365,7 +363,36 @@ export const StudentLessons: React.FC = () => {
         if (error) throw error;
 
         if (data) {
-          setRawLessons(data as unknown as DBAppointment[]);
+          // AP-02: busca o WhatsApp de cada instrutor ainda nao conhecido.
+          const cache = instructorWhatsappCache.current;
+          const pending = Array.from(new Set(
+            (data as any[])
+              .map(apt => apt.instructors)
+              .filter((inst: any) => inst?.id && inst.has_whatsapp && !(inst.id in cache))
+              .map((inst: any) => inst.id as string)
+          ));
+          await Promise.all(pending.map(async (instructorId) => {
+            const { data: wa, error: waError } = await supabase
+              .rpc('get_instructor_whatsapp', { p_instructor_id: instructorId });
+            if (waError) console.error('Error fetching instructor whatsapp:', waError);
+            cache[instructorId] = typeof wa === 'string' ? wa : '';
+          }));
+
+          // Preserva o formato DBAppointment usado pelo resto da tela.
+          const normalized = (data as any[]).map(apt => {
+            const inst = apt.instructors;
+            if (!inst) return apt;
+            const { full_name, avatar_url, has_whatsapp, ...rest } = inst;
+            return {
+              ...apt,
+              instructors: {
+                ...rest,
+                whatsapp: cache[inst.id] || '',
+                profiles: { full_name, avatar_url },
+              },
+            };
+          });
+          setRawLessons(normalized as unknown as DBAppointment[]);
         }
       } catch (err: any) {
         console.error('Error fetching lessons:', err);
@@ -806,8 +833,9 @@ export const StudentLessons: React.FC = () => {
       try {
         // Fetch instructor config if not already fetched
         if (!instructorConfig) {
+          // AP-02: grade publica do instrutor via view de vitrine.
           const { data: instData } = await supabase
-            .from('instructors')
+            .from('instructors_public')
             .select('has_night_lessons, work_saturday_afternoon')
             .eq('id', lessonToReschedule.instructorId)
             .single();
