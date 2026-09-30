@@ -18,3 +18,8 @@ verify_jwt = false
 [functions.auto-complete-lessons]
 verify_jwt = false
 
+# N-03: declarado explicitamente, alinhado ao publicado (v33, verify_jwt=false).
+# O handler autentica por conta propria (auth.getUser + apt.student_id).
+[functions.create-tip]
+verify_jwt = false
+

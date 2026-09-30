@@ -43,6 +43,17 @@ Deno.serve(async (req: Request) => {
 
     if (instructorError) throw instructorError;
 
+    // N-06: somente instrutor cria subconta Asaas. Sem linha em instructors
+    // (ex.: aluno autenticado), recusa ANTES de ler o payload e de qualquer
+    // chamada ao Asaas.
+    if (!instructor) {
+      console.warn(`[create-asaas-account] 403: user ${user.id} has no instructors record`);
+      return new Response(
+        JSON.stringify({ error: 'Somente instrutores podem criar conta de recebimento.', code: 'NOT_INSTRUCTOR' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // PASSO 5: Se provider_account_id existir: retornar sucesso imediatamente
     if (instructor?.provider_account_id) {
       console.log(`Instructor ${user.id} already has an Asaas account: ${instructor.provider_account_id}`);

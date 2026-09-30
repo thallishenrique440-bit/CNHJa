@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 import { asaasFetch } from '../_shared/asaasClient.ts'
+import { requireCronAuth } from '../_shared/cronAuth.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -8,17 +9,9 @@ const supabaseAdmin = createClient(
 )
 
 Deno.serve(async (req) => {
-  // Security check: Validate Authorization header
-  const authHeader = req.headers.get('Authorization')
-  const cronSecret = Deno.env.get('CRON_SECRET')
-
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    console.error("❌ Unauthorized: Invalid CRON_SECRET")
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
+  // F1-08: CRON_SECRET obrigatorio (fail-closed) e comparado em tempo constante.
+  const denied = await requireCronAuth(req, 'check-expired-bookings')
+  if (denied) return denied
 
   try {
     console.log("⏰ Starting check-expired-bookings cron job...")

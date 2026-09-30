@@ -1,89 +1,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { requireCronAuth } from '../_shared/cronAuth.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 )
 
-async function logSecretTelemetry(authHeader: string | null, cronSecret: string) {
-  const encoder = new TextEncoder();
-  const expectedHeader = `Bearer ${cronSecret}`;
-  const actualHeader = authHeader ?? '';
-
-  const hashBufferActual = await crypto.subtle.digest('SHA-256', encoder.encode(actualHeader));
-  const hashBufferExpected = await crypto.subtle.digest('SHA-256', encoder.encode(expectedHeader));
-
-  const hashActual = Array.from(new Uint8Array(hashBufferActual)).map(b => b.toString(16).padStart(2, '0')).join('');
-  const hashExpected = Array.from(new Uint8Array(hashBufferExpected)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-  let firstMismatchIndex = -1;
-  let actualMismatchCharacter: Record<string, unknown> | string | null = null;
-  let expectedMismatchCharacter: Record<string, unknown> | string | null = null;
-  const maxLen = Math.max(actualHeader.length, expectedHeader.length);
-
-  for (let i = 0; i < maxLen; i++) {
-    const a = actualHeader[i];
-    const e = expectedHeader[i];
-    if (a !== e) {
-      firstMismatchIndex = i;
-      actualMismatchCharacter = a ? { char: a === ' ' ? 'SPACE' : a === '\r' ? 'CR' : a === '\n' ? 'LF' : a === '\t' ? 'TAB' : a, code: a.charCodeAt(0) } : 'END_OF_STRING';
-      expectedMismatchCharacter = e ? { char: e === ' ' ? 'SPACE' : e === '\r' ? 'CR' : e === '\n' ? 'LF' : e === '\t' ? 'TAB' : e, code: e.charCodeAt(0) } : 'END_OF_STRING';
-      break;
-    }
-  }
-
-  const mask = (str: string) => {
-    if (str.length <= 8) return '***';
-    return `${str.slice(0, 4)}...${str.slice(-4)}`;
-  };
-
-  const hasBOM = (str: string) => str.charCodeAt(0) === 0xFEFF || str.includes('\uFEFF');
-
-  const telemetry = {
-    actualHeaderLength: actualHeader.length,
-    expectedHeaderLength: expectedHeader.length,
-    actualHeaderMasked: mask(actualHeader),
-    expectedHeaderMasked: mask(expectedHeader),
-    actualHashSha256: hashActual,
-    expectedHashSha256: hashExpected,
-    exactMatch: actualHeader === expectedHeader,
-    trimmedMatch: actualHeader.trim() === expectedHeader.trim(),
-    caseInsensitiveMatch: actualHeader.toLowerCase() === expectedHeader.toLowerCase(),
-    hasBearerPrefix: actualHeader.startsWith('Bearer '),
-    hasLowerBearerPrefix: actualHeader.toLowerCase().startsWith('bearer '),
-    actualHasCR: actualHeader.includes('\r'),
-    actualHasLF: actualHeader.includes('\n'),
-    actualHasTAB: actualHeader.includes('\t'),
-    actualHasSpace: actualHeader.includes(' '),
-    actualHasQuotes: actualHeader.includes('"') || actualHeader.includes("'"),
-    actualHasBOM: hasBOM(actualHeader),
-    secretHasCR: cronSecret.includes('\r'),
-    secretHasLF: cronSecret.includes('\n'),
-    secretHasTAB: cronSecret.includes('\t'),
-    secretHasSpace: cronSecret.includes(' '),
-    secretHasQuotes: cronSecret.includes('"') || cronSecret.includes("'"),
-    secretHasBOM: hasBOM(cronSecret),
-    firstMismatchIndex,
-    actualMismatchCharacter,
-    expectedMismatchCharacter,
-  };
-
-  console.error("🔍 [TELEMETRY_DIAGNOSTIC]", JSON.stringify(telemetry, null, 2));
-}
-
 Deno.serve(async (req) => {
-  // 1. Security check: Validate Authorization header if CRON_SECRET is defined
-  const authHeader = req.headers.get('Authorization')
-  const cronSecret = Deno.env.get('CRON_SECRET')
-
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    await logSecretTelemetry(authHeader, cronSecret);
-    console.error("❌ Unauthorized: Invalid CRON_SECRET")
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
+  // 1. F1-07/F1-08: CRON_SECRET obrigatorio (fail-closed), comparacao em tempo
+  // constante e log somente booleano. A telemetria que expunha hash, tamanho e
+  // caractere divergente do segredo foi removida.
+  const denied = await requireCronAuth(req, 'notification-worker')
+  if (denied) return denied
 
   try {
     console.log("⏰ [NotificationWorker] Starting notification queue processing cycle (EDGE_CRON)...")

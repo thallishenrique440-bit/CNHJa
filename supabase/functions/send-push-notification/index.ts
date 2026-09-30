@@ -1,9 +1,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { requireBearerSecret } from '../_shared/cronAuth.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+// F1-06: funcao interna, chamada apenas pelo notification-worker (servidor a
+// servidor, via functions.invoke com a chave service_role). Sem CORS: nenhum
+// navegador deve chama-la.
+const jsonHeaders = { 'Content-Type': 'application/json' }
 
 interface WebhookPayload {
   notification_id?: string
@@ -97,9 +98,18 @@ async function getFirebaseAccessToken(serviceAccount: any): Promise<string> {
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+  // F1-06: somente o backend. `verify_jwt` nao basta — a chave anon publica e'
+  // um JWT valido. Exige `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>`,
+  // comparado em tempo constante e ANTES de ler o corpo. Chave ausente no
+  // ambiente -> 500 (fail-closed).
+  const denied = await requireBearerSecret(req, 'send-push-notification', 'SUPABASE_SERVICE_ROLE_KEY')
+  if (denied) return denied
+
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ success: false, error: 'Method Not Allowed' }), {
+      headers: jsonHeaders,
+      status: 405,
+    })
   }
 
   try {
@@ -111,7 +121,7 @@ Deno.serve(async (req) => {
     if (!notificationId) {
       console.warn('[PUSH DISPATCHER] Ignored: No notification_id provided in the payload', payload);
       return new Response(JSON.stringify({ success: false, error: 'No notification_id provided' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: jsonHeaders,
         status: 200,
       })
     }
@@ -133,7 +143,7 @@ Deno.serve(async (req) => {
     if (notifError || !notification) {
       console.error(`[PUSH DISPATCHER] Failed to fetch notification ${notificationId}:`, notifError);
       return new Response(JSON.stringify({ success: false, error: 'Notification not found' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: jsonHeaders,
         status: 404,
       })
     }
@@ -155,7 +165,7 @@ Deno.serve(async (req) => {
 
     if (!tokensData || tokensData.length === 0) {
       return new Response(JSON.stringify({ success: true, message: 'Notification exists, but no active FCM tokens found for the user.', results: [] }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: jsonHeaders,
         status: 200,
       })
     }
@@ -241,14 +251,14 @@ Deno.serve(async (req) => {
     const results = await Promise.all(dispatchPromises)
 
     return new Response(JSON.stringify({ success: true, message: 'Push notifications dispatched successfully', results }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
       status: 200,
     })
 
   } catch (error: any) {
     console.error('[PUSH DISPATCHER FATAL] Error during push dispatching process:', error)
     return new Response(JSON.stringify({ success: false, error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
       status: 500,
     })
   }
