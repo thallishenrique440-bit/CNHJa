@@ -63,6 +63,7 @@ interface InstructorProfileData {
   priceNight: number; // Legacy Fallback
   hasNightLessons: boolean;
   workSaturdayAfternoon: boolean; // New Field
+  onVacation: boolean; // AP-05/A
   lunchStartSlot: string;
   lunchDuration: number;
   lunchActive: boolean;
@@ -430,6 +431,7 @@ export const StudentInstructorProfile: React.FC = () => {
             lunch_duration,
             lunch_active,
             has_whatsapp,
+            on_vacation,
             credential_number,
             meeting_point,
             meeting_point_lat,
@@ -595,6 +597,7 @@ export const StudentInstructorProfile: React.FC = () => {
             priceNight: data.night_price || basePrice,
             hasNightLessons: !!data.has_night_lessons,
             workSaturdayAfternoon: !!data.work_saturday_afternoon,
+            onVacation: data.on_vacation === true,
             lunchStartSlot: data.lunch_start_slot || '12:00',
             lunchDuration: data.lunch_duration || 2,
             lunchActive: !!data.lunch_active,
@@ -618,6 +621,8 @@ export const StudentInstructorProfile: React.FC = () => {
   // --- FETCH AVAILABILITY FOR SELECTED DATE ---
   useEffect(() => {
      if (!instructor?.id || !session?.user?.id) return;
+     // AP-05/A: em ferias nao ha horarios a oferecer (o banco tambem os nega).
+     if (instructor.onVacation) return;
 
      const fetchAvailability = async () => {
          const dateKey = getDateKey(selectedDate);
@@ -950,6 +955,12 @@ export const StudentInstructorProfile: React.FC = () => {
   const handleBook = async (ignoreTooClose = false) => {
     // 1. Validação básica de estado local
     if (!instructor) return;
+
+    // AP-05/A: sem nova reserva para instrutor em ferias (API e banco tambem recusam).
+    if (instructor.onVacation) {
+      addToast('Este instrutor está em férias no momento e não está aceitando novas aulas.', 'warning');
+      return;
+    }
     
     if (selectedSlots.length === 0) {
       addToast("Por favor, selecione pelo menos um horário para iniciar.", 'warning');
@@ -1094,6 +1105,14 @@ export const StudentInstructorProfile: React.FC = () => {
       if (!response.ok) {
         if (data.errorCode === 'TOO_CLOSE') {
           setIsTooCloseModalOpen(true);
+          setIsProcessingPayment(false);
+          return;
+        }
+        // AP-05/A: o instrutor entrou em ferias depois que a tela foi aberta.
+        if (data.code === 'INSTRUCTOR_ON_VACATION') {
+          setInstructor(prev => (prev ? { ...prev, onVacation: true } : prev));
+          setSelectedSlots([]);
+          addToast(data.error || 'Este instrutor está em férias no momento e não está aceitando novas aulas.', 'warning');
           setIsProcessingPayment(false);
           return;
         }
@@ -1688,7 +1707,18 @@ export const StudentInstructorProfile: React.FC = () => {
           </div>
         )}
 
-        {!showPreviewBanner && (
+        {!showPreviewBanner && instructor.onVacation && (
+          <div className="px-6 pb-6 pt-4" data-testid="instructor-vacation-notice">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-center">
+              <p className="text-base font-bold text-amber-800">🏖️ Instrutor em férias</p>
+              <p className="text-xs text-amber-700 mt-1">
+                Este instrutor não está aceitando novas aulas no momento. Os horários voltam a aparecer quando ele retornar.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!showPreviewBanner && !instructor.onVacation && (
           <div className="px-6 pb-6 pt-4">
              <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-1">Horários disponíveis</h2>
              <div className="mb-4">
@@ -1875,7 +1905,7 @@ export const StudentInstructorProfile: React.FC = () => {
         </div>
         <Button 
           onClick={() => handleBook()} 
-          disabled={selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || isSuccess || showPreviewBanner}
+          disabled={selectedSlots.length === 0 || !selectedLessonCategory || isProcessingPayment || isSuccess || showPreviewBanner || instructor.onVacation}
           className={`shadow-lg transition-all duration-300 px-8 py-3 ${
             isSuccess 
               ? 'bg-green-600 hover:bg-green-700 border-transparent text-white shadow-green-200' 
@@ -1895,6 +1925,8 @@ export const StudentInstructorProfile: React.FC = () => {
             ? 'Processando...' 
             : showPreviewBanner
               ? 'Preview'
+              : instructor.onVacation
+                ? 'Em férias'
               : selectedSlots.length > 0 
                 ? 'Pagar agora'
                 : 'Agendar'

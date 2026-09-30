@@ -115,6 +115,8 @@ export const InstructorAgenda: React.FC = () => {
   const { addToast } = useToast();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [nightLessonsEnabled, setNightLessonsEnabled] = useState(false);
+  // AP-05/A — indicador visual; a agenda do instrutor segue funcionando normalmente.
+  const [onVacation, setOnVacation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [showIncompleteProfileModal, setShowIncompleteProfileModal] = useState(false);
@@ -185,11 +187,12 @@ export const InstructorAgenda: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('instructors')
-          .select('has_night_lessons, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active')
+          .select('has_night_lessons, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, on_vacation')
           .eq('id', session.user.id)
           .single();
         
         if (data) {
+          setOnVacation(data.on_vacation === true);
           setNightLessonsEnabled(!!data.has_night_lessons);
           setWorkSaturdayAfternoon(!!data.work_saturday_afternoon);
           setTempWorkSaturdayAfternoon(!!data.work_saturday_afternoon);
@@ -1151,6 +1154,10 @@ export const InstructorAgenda: React.FC = () => {
         case 'SLOT_TAKEN':
           throw new Error('Este horário já foi ocupado. Por favor, escolha outro.');
         case 'SLOT_NOT_IN_GRID':
+          // AP-05/A: durante as ferias nenhuma aula e' remarcada.
+          if (outcome.reason === 'instructor_on_vacation') {
+            throw new Error('Você está em férias. Saia das férias para remarcar aulas; a aula original foi mantida.');
+          }
           throw new Error('Este horário não está disponível na sua agenda.');
         case 'NEW_SLOT_IN_PAST':
           throw new Error('Não é possível propor um horário no passado.');
@@ -1451,6 +1458,15 @@ export const InstructorAgenda: React.FC = () => {
             <span>Configurar agenda</span>
           </button>
         </div>
+
+        {onVacation && (
+          <div
+            data-testid="agenda-vacation-banner"
+            className="mx-2 mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold"
+          >
+            🏖️ Em férias — novos alunos não podem agendar. Suas aulas já marcadas continuam normalmente.
+          </div>
+        )}
 
         <div className="mt-2">
           <DateSelector 

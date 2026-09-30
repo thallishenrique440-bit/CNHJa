@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
 import { CitySelect, isValidCity } from '../components/CitySelect';
 import { GooglePlacesInput } from '../components/GooglePlacesInput';
@@ -102,6 +103,12 @@ export const InstructorProfile: React.FC = () => {
   const [meetingPointPlaceId, setMeetingPointPlaceId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // AP-05/A — ferias (liga/desliga manual). Estado vem da propria linha em
+  // instructors; a troca e' feita SOMENTE pela RPC set_instructor_vacation.
+  const [onVacation, setOnVacation] = useState(false);
+  const [showVacationModal, setShowVacationModal] = useState(false);
+  const [savingVacation, setSavingVacation] = useState(false);
+
   const profileUrl = `${window.location.origin}/i/${publicId}`;
 
   const handleCopy = () => {
@@ -144,6 +151,7 @@ export const InstructorProfile: React.FC = () => {
           .maybeSingle();
 
         if (instructor) {
+          setOnVacation(instructor.on_vacation === true);
           setPublicId(instructor.public_id || '');
           setCredential(instructor.credential_number || '');
           setWhatsapp(instructor.whatsapp || '');
@@ -488,6 +496,30 @@ export const InstructorProfile: React.FC = () => {
   const handleLogout = async () => {
     await signOut();
     navigate('/welcome');
+  };
+
+  /** AP-05/A: confirma e aplica a troca de ferias pela RPC (nunca por UPDATE direto). */
+  const handleConfirmVacation = async () => {
+    const next = !onVacation;
+    setSavingVacation(true);
+    try {
+      const { data, error } = await supabase.rpc('set_instructor_vacation', { p_active: next });
+      if (error) throw error;
+      const current = data?.on_vacation === true;
+      setOnVacation(current);
+      setShowVacationModal(false);
+      addToast(
+        current
+          ? 'Você está em férias. Novos alunos não poderão agendar aulas com você.'
+          : 'Você saiu das férias. Sua disponibilidade voltou ao normal.',
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Error toggling vacation:', err);
+      addToast('Não foi possível alterar o modo férias. Tente novamente.', 'error');
+    } finally {
+      setSavingVacation(false);
+    }
   };
 
   const handleViewAsStudent = () => {
@@ -938,6 +970,19 @@ export const InstructorProfile: React.FC = () => {
             {saving ? 'Salvando...' : 'Salvar alterações'}
           </Button>
           
+          {/* AP-05/A — Ferias: exclusivo do instrutor, junto das acoes de conta */}
+          <button
+            onClick={() => setShowVacationModal(true)}
+            data-testid="vacation-toggle"
+            className={`w-full flex items-center justify-center space-x-2 font-semibold py-3 rounded-xl border transition-colors ${
+              onVacation
+                ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <span>{onVacation ? '🏖️ Sair das férias' : '🏖️ Entrar em férias'}</span>
+          </button>
+
           <button 
             onClick={handleLogout} 
             className="w-full flex items-center justify-center space-x-2 text-red-500 font-semibold py-3 rounded-xl hover:bg-red-50 transition-colors"
@@ -966,6 +1011,33 @@ export const InstructorProfile: React.FC = () => {
       </div>
 
       <InstructorBottomNav />
+
+      <Modal
+        isOpen={showVacationModal}
+        onClose={() => { if (!savingVacation) setShowVacationModal(false); }}
+        title={onVacation ? 'Sair das férias' : 'Entrar em férias'}
+        footer={
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              fullWidth
+              onClick={() => setShowVacationModal(false)}
+              disabled={savingVacation}
+            >
+              Cancelar
+            </Button>
+            <Button fullWidth onClick={handleConfirmVacation} disabled={savingVacation}>
+              {savingVacation ? 'Salvando...' : 'Confirmar'}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-gray-600 leading-relaxed">
+          {onVacation
+            ? 'Ao sair das férias, sua disponibilidade volta ao normal e novos alunos poderão agendar aulas com você novamente. Nenhuma aula já existente é alterada.'
+            : 'Você está entrando em férias. Suas aulas já marcadas continuarão normalmente, mas novos alunos não poderão agendar aulas com você enquanto estiver em férias.'}
+        </p>
+      </Modal>
       
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
     </div>

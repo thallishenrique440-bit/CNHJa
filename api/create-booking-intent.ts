@@ -183,13 +183,25 @@ export default async function handler(req: any, res: any) {
     // 1. Fetch instructor details (including generic provider details)
     const { data: instructor, error: instructorError } = await supabase
       .from('instructors')
-      .select('provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons, base_price, night_price')
+      .select('provider_account_id, provider_wallet_id, provider_name, work_saturday_afternoon, lunch_start_slot, lunch_duration, lunch_active, has_night_lessons, base_price, night_price, on_vacation')
       .eq('id', instructorId)
       .single();
 
     if (instructorError) {
       console.error('[ERROR] Instructor details fetch error:', instructorError);
       return res.status(400).json({ error: 'Instructor details not found.' });
+    }
+
+    // AP-05/A — defesa antecipada: NOVA reserva para instrutor em ferias.
+    // Fica antes de qualquer escrita (inclusive da limpeza 3.6), para nunca
+    // mexer em reserva existente. Checkouts ja criados antes das ferias nao
+    // passam por aqui: sao concluidos por webhook/UPDATE, que nao consulta
+    // on_vacation. O trigger de INSERT no banco e' a barreira definitiva.
+    if (instructor?.on_vacation === true) {
+      return res.status(409).json({
+        error: 'Este instrutor está em férias no momento e não está aceitando novas aulas.',
+        code: 'INSTRUCTOR_ON_VACATION'
+      });
     }
 
     // Resolve the payment provider via the orchestration layer
@@ -575,6 +587,14 @@ providerInstance=${paymentProvider.getProviderName()}`);
       .select();
 
     if (dbError) {
+      // AP-05/A: o instrutor entrou em ferias entre a checagem acima e o INSERT.
+      if (typeof dbError.message === 'string' && dbError.message.includes('INSTRUCTOR_ON_VACATION')) {
+        return res.status(409).json({
+          error: 'Este instrutor está em férias no momento e não está aceitando novas aulas.',
+          code: 'INSTRUCTOR_ON_VACATION'
+        });
+      }
+
       // Check for unique constraint violation (Postgres code 23505)
       if (dbError.code === '23505') {
         return res.status(409).json({ 

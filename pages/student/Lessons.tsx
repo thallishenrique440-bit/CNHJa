@@ -774,7 +774,7 @@ export const StudentLessons: React.FC = () => {
       const { data, error } = await supabase.rpc(fn, { p_appointment_ids: group.ids });
       if (error) throw error;
 
-      const outcome = (data || {}) as { status?: string; code?: string };
+      const outcome = (data || {}) as { status?: string; code?: string; reason?: string };
       if (outcome.status !== 'ok') {
         if (outcome.code === 'SLOT_TAKEN') {
           throw new Error("O horário proposto já foi ocupado. Peça uma nova proposta.");
@@ -786,6 +786,7 @@ export const StudentLessons: React.FC = () => {
           throw new Error("Esta proposta já foi respondida. Recarregue a página.");
         }
         if (outcome.code === 'SLOT_NOT_IN_GRID') {
+          if (outcome.reason === 'instructor_on_vacation') throw new Error("O instrutor está em férias e não é possível remarcar agora. Sua aula continua no horário original.");
           throw new Error("O horário proposto não está mais disponível na agenda do instrutor.");
         }
         throw new Error("Não foi possível concluir (" + (outcome.code || 'ERRO') + ").");
@@ -831,6 +832,20 @@ export const StudentLessons: React.FC = () => {
       const dateKey = rescheduleDate.toISOString().split('T')[0];
       
       try {
+        // AP-05/A: remarcacao durante ferias nao e' permitida. O banco recusa
+        // de qualquer forma (grade e trigger); aqui so evitamos abrir o fluxo.
+        // A aula original nao e' alterada.
+        const { data: vacationData } = await supabase
+          .from('instructors_public')
+          .select('on_vacation')
+          .eq('id', lessonToReschedule.instructorId)
+          .maybeSingle();
+        if (vacationData?.on_vacation === true) {
+          addToast('O instrutor está em férias e não é possível remarcar agora. Sua aula continua no horário original.', 'warning');
+          setLessonToReschedule(null);
+          return;
+        }
+
         // Fetch instructor config if not already fetched
         if (!instructorConfig) {
           // AP-02: grade publica do instrutor via view de vitrine.
@@ -963,7 +978,13 @@ export const StudentLessons: React.FC = () => {
           p_new_start_time: rescheduleTime
         });
 
-      if (rpcError) throw rpcError;
+      if (rpcError) {
+        // AP-05/A: o trigger de ferias recusa a remarcacao efetiva.
+        if (rpcError.message?.includes('INSTRUCTOR_ON_VACATION')) {
+          throw new Error("O instrutor está em férias e não é possível remarcar agora. Sua aula continua no horário original.");
+        }
+        throw rpcError;
+      }
 
       const outcome = (rpcResult || {}) as { status?: string; code?: string; reason?: string };
 
@@ -987,6 +1008,7 @@ export const StudentLessons: React.FC = () => {
           throw new Error("Não é possível reagendar para um horário no passado.");
         }
         if (outcome.code === 'SLOT_NOT_IN_GRID') {
+          if (outcome.reason === 'instructor_on_vacation') throw new Error("O instrutor está em férias e não é possível remarcar agora. Sua aula continua no horário original.");
           throw new Error("Este horário não está disponível na agenda do instrutor.");
         }
         if (outcome.code === 'RESCHEDULE_PENDING' || outcome.code === 'PROPOSAL_ALREADY_PENDING') {

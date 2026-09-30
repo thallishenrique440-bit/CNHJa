@@ -285,6 +285,58 @@ N-01 e N-02 permanecem registrados e **fora do escopo**, sem alteração.
 **Bloqueadores fechados até aqui:** F1-01 (BL-01), F1-04, F1-05, C-08. **C-09 parcialmente fechado** (`anon` desarmado; `authenticated` mantém INSERT/UPDATE/DELETE por desenho).
 
 
+## 0.8 ATUALIZAÇÃO 2026-09-25 — AP-05 / TRILHA A (FÉRIAS) — IMPLEMENTADO LOCALMENTE
+
+> Acrescentado em 2026-09-25. Nada das seções anteriores foi removido. **Trilha B (exclusão de conta) não foi tocada.**
+
+### 0.8.1 Estado
+
+| Estado | Situação |
+|---|---|
+| Implementado localmente | ✅ migration + API + 6 telas |
+| Testado | ✅ bateria SQL efêmera + bateria estática |
+| Migration preparada | ✅ `supabase/migrations/20260925_ap05a_instructor_vacation.sql` |
+| Migration aplicada em produção | ❌ **NÃO** |
+| Deploy (Vercel / Edge) | ❌ **NÃO** |
+| Validado em produção | ❌ **NÃO** |
+
+### 0.8.2 Decisões aprovadas pelo proprietário (Trilha A)
+
+| # | Tema | Decisão |
+|---|---|---|
+| 1 | Remarcação durante férias | **NÃO.** Como o modelo é liga/desliga (sem datas), enquanto as férias estão ativas **toda** remarcação das aulas do instrutor é recusada — aluno e instrutor, nos 3 caminhos (proposta, aceite, direta). A aula original nunca é alterada nem cancelada por isso. |
+| 2 | Checkout iniciado antes das férias | **SIM, pode concluir.** A barreira é só na **criação** de nova appointment; nenhum caminho de pagamento/confirmação consulta `on_vacation`. |
+| 3 | Link direto / link curto | Perfil acessível, aviso **"Instrutor em férias"**, **sem horários**, **sem nova reserva**. |
+| 4 | Modelo | **Liga/desliga manual.** Sem data de início/fim nesta etapa. |
+| 5 | Titularidade | Férias é **exclusivo do instrutor**. |
+| 6 | Localização do botão | Aba **Perfil** do instrutor, junto de "Sair da conta". |
+| 7 | Aluno | **Não vê** o botão Férias em nenhuma hipótese. |
+| 8 | Camadas | Proteção obrigatória em **UI + API + banco**. |
+| 9 | Vitrine | Instrutor em férias **sai da listagem** (a linha permanece no banco); segue acessível por link direto. |
+| 10 | "Excluir conta" | **Não adicionado nesta etapa.** O botão não existia; entra com o fluxo real na Trilha B (evita repetir F3-02). |
+
+### 0.8.3 Camadas implementadas
+
+- **Banco:** `instructors.on_vacation` / `vacation_changed_at`; guarda de coluna (client não altera por INSERT/UPDATE direto); RPC `set_instructor_vacation(p_active)` (`SECURITY DEFINER`, `search_path` explícito, só o próprio instrutor, `FOR UPDATE` da própria linha); histórico em tabela própria `instructor_vacation_events` (imutável, RLS fail-closed, sem acesso de client, sem FK — ver §0.8.5); autoridade de INSERT (AP-01 preservado) recusa nova aula para instrutor em férias **para qualquer role, inclusive `service_role`**, exceto bloqueio de horário sem aluno; `get_instructor_availability` devolve todos os horários como indisponíveis para terceiros; `reschedule_grid_violation` com motivo `instructor_on_vacation`; trigger `BEFORE UPDATE OF date, start_time` recusa remarcação efetiva; `instructors_public` expõe `on_vacation`.
+- **API:** `create-booking-intent` responde **409 `INSTRUCTOR_ON_VACATION`** antes de qualquer escrita; o erro do trigger (corrida) também vira 409.
+- **UI:** botão Férias com confirmação no perfil do instrutor; indicador "Em férias" na agenda; vitrine filtra; perfil público mostra o aviso e esconde a grade; remarcação do aluno com pré-checagem e mensagens.
+
+### 0.8.5 Bloqueador encontrado pelo Work e corrigido (2026-09-25)
+
+**Causa:** a primeira versão gravava o histórico em `security_audit_logs` com `environment='database'` e `event_type` `instructor_vacation_on/off`. Produção tem `chk_security_audit_environment` (`production|preview|development`) e `chk_security_audit_event_type` (`LOGIN_FAILED|UNAUTHORIZED_ACCESS|BANK_INFO_CHANGE|ROLE_CHANGE`), que recusam esses valores — o instrutor não conseguiria ligar férias. O harness não reproduzia os CHECKs, por isso a bateria passava (41/41); com os CHECKs reais o Work obteve 21 PASS / 20 FAIL.
+
+**Correção (opção A aprovada):** tabela própria `public.instructor_vacation_events` (`id`, `instructor_id`, `active`, `changed_at`, `actor_user_id`), escrita só pela RPC; RLS habilitado **sem** policies; `REVOKE ALL` de `PUBLIC`/`anon`/`authenticated`; gatilhos de imutabilidade para `UPDATE`/`DELETE` (linha) e `TRUNCATE` (comando). **`security_audit_logs` não é tocada** (nem tabela, nem CHECKs, nem registros).
+
+**Sem FK, por desenho:** com a imutabilidade, uma FK `CASCADE`/`SET NULL` para `instructors`/`auth.users` faria a exclusão de conta falhar (mesmo padrão de `security_audit_logs`, §AP-05). O destino desse histórico na exclusão é decisão da **Trilha B** (retenção).
+
+**Harness:** `ap05a_harness_ext.pgsql.sql` agora reproduz os dois CHECKs **literalmente** (`pg_get_constraintdef`). Controle negativo: a gravação antiga falha no harness com o mesmo erro de produção.
+
+**Status AP-05/A:** implementado e testado localmente; migration **não aplicada**; sem deploy.
+
+### 0.8.4 Novo achado registrado (não corrigido)
+
+- **N-05 — bateria `p1205_reschedule.pgsql.sql` incompatível com AP-01.** Ela semeia aulas com `test.role='authenticated'`, o que o trigger de INSERT do AP-01 (já em produção) recusa. Independe de AP-05: falha igual com AP-01 sem férias; com AP-05/A e sem AP-01 passa **57/57**. Correção sugerida: semear como `service_role`, sem mudar asserções. **Fora do escopo; não alterado.**
+
 ---
 
 # 1. RESUMO EXECUTIVO

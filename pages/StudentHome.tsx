@@ -186,6 +186,7 @@ export const StudentHome: React.FC = () => {
           public_id,
           base_price,
           has_whatsapp,
+          on_vacation,
           meeting_point,
           categories,
           credential_number,
@@ -205,6 +206,7 @@ export const StudentHome: React.FC = () => {
             day_price
           )
         `)
+        .eq('on_vacation', false) // AP-05/A: em ferias sai da vitrine (a linha permanece)
         .gt('base_price', 0)     // Only instructors who set a price
         .not('categories', 'is', null); // Only instructors who selected a category
 
@@ -244,7 +246,10 @@ export const StudentHome: React.FC = () => {
           // 6. Pelo menos um veículo cadastrado
           const hasVehicle = inst.instructor_vehicles && inst.instructor_vehicles.length > 0;
 
-          return hasBasicProfile && hasWhatsapp && hasCredential && hasPrice && hasCategory && hasVehicle;
+          // 7. AP-05/A: instrutor em ferias nao e' oferecido para novas aulas
+          const isAvailable = inst.on_vacation !== true;
+
+          return hasBasicProfile && hasWhatsapp && hasCredential && hasPrice && hasCategory && hasVehicle && isAvailable;
         });
 
         setInstructors(completeInstructors);
