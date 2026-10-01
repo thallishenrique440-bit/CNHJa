@@ -6,6 +6,8 @@ import { InstallmentService } from '../lib/payments/InstallmentService.js';
 import { PaymentStateService } from '../lib/payments/PaymentStateService.js';
 import { AsaasWebhookPayload, TransitionOutcome } from '../lib/payments/PaymentStateTypes.js';
 import { RefundOperationRepository } from '../lib/payments/RefundOperationRepository.js';
+import { sanitizeProviderMessage } from '../lib/payments/RefundConfirmation.js';
+import { BookingCancellationCore } from '../lib/payments/BookingCancellationCore.js';
 import { SettlementService } from '../lib/payments/SettlementService.js';
 import { SettlementType } from '../lib/payments/SettlementTypes.js';
 import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDispatcher.js';
@@ -1058,31 +1060,34 @@ export default async function handler(req: Request, res: Response) {
         return res.status(400).json({ error: 'Missing paymentId' });
       }
 
-      // Reconcile reconcilable RefundOperations: transition REQUESTED -> PENDING
-      const reconcilableOps = await RefundOperationRepository.getReconcilableOperations(supabaseAdmin, 'asaas', currentPaymentId);
-      for (const op of reconcilableOps) {
-        if (op.status === 'REQUESTED') {
-          try {
-            await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'PENDING', {
-              sent_at: new Date().toISOString(),
-              metadata: { ...(op.metadata || {}), in_progress_event_at: new Date().toISOString() }
-            });
-          } catch (trErr) {
-            console.warn(`[ASAAS WEBHOOK] Could not transition op ${op.id} to PENDING:`, trErr);
-          }
-        }
-      }
-
-      const { data: apts } = await supabaseAdmin
-        .from('appointments')
-        .select('id')
-        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
-      for (const apt of apts || []) {
+      // Estorno em processamento: reconhece a operacao (PENDING), sem marcar
+      // nada como estornado. So' as aulas DAS operacoes sao sinalizadas.
+      const inProgress = await BookingCancellationCore.applyRefundEvent(
+        supabaseAdmin, currentPaymentId, payload.payment, 'PENDING', payload.id || null, null
+      );
+      const { all: inProgressOps } = await BookingCancellationCore.loadRefundOperationsForEvidence(supabaseAdmin, currentPaymentId);
+      const inProgressIds = inProgressOps
+        .filter((op) => op.status === 'PENDING')
+        .flatMap((op) => Array.isArray((op.metadata as any)?.appointmentIds) ? (op.metadata as any).appointmentIds : []);
+      if (inProgressIds.length > 0) {
         await supabaseAdmin.from('appointments').update({
           payment_status: 'refund_requested',
           updated_at: new Date().toISOString()
-        }).eq('id', apt.id);
+        }).in('id', inProgressIds).eq('payment_status', 'paid');
+      } else if (inProgressOps.length === 0) {
+        // Legado: estorno iniciado fora do app (painel Asaas), sem operacao.
+        const { data: apts } = await supabaseAdmin
+          .from('appointments')
+          .select('id')
+          .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
+        for (const apt of apts || []) {
+          await supabaseAdmin.from('appointments').update({
+            payment_status: 'refund_requested',
+            updated_at: new Date().toISOString()
+          }).eq('id', apt.id);
+        }
       }
+      console.log(`[ASAAS WEBHOOK] REFUND_IN_PROGRESS ${currentPaymentId}: applied=${inProgress.applied} ambiguous=${inProgress.ambiguous}`);
       await finalizeLedger('PROCESSED');
       return res.status(200).json({ success: true, message: 'Refund in progress recorded', event, timestamp });
     } else if (['PAYMENT_REFUNDED', 'PAYMENT_PARTIALLY_REFUNDED'].includes(event.toUpperCase())) {
@@ -1108,86 +1113,34 @@ export default async function handler(req: Request, res: Response) {
         return res.status(500).json({ error: 'Database verification failed' });
       }
 
-      // Reconcile RefundOperation(s) with actual refund items
-      const reconcilableOps = await RefundOperationRepository.getReconcilableOperations(supabaseAdmin, 'asaas', currentPaymentId);
-      const rawRefunds = payload.payment?.refunds;
-      const refundItems = Array.isArray(rawRefunds) && rawRefunds.length > 0
-        ? rawRefunds
-        : (payload.refund ? [payload.refund] : []);
+      // Regra financeira: o app estorna SO' o valor do servico (a taxa do Asaas
+      // nao e' devolvida). Para o Asaas isso e' um estorno PARCIAL do pagamento;
+      // portanto PAYMENT_PARTIALLY_REFUNDED e' o evento NORMAL dos estornos do
+      // app. A conclusao e' decidida por OPERACAO (item de estorno casado), e so'
+      // as aulas de operacoes confirmadas mudam de estado.
+      const { all: refundOps } = await BookingCancellationCore.loadRefundOperationsForEvidence(supabaseAdmin, currentPaymentId);
+      if (refundOps.length > 0) {
+        const outcome = await BookingCancellationCore.applyRefundEvent(
+          supabaseAdmin, currentPaymentId, payload.payment, 'COMPLETED', payload.id || null, null
+        );
+        await finalizeLedger(outcome.ambiguous > 0 && outcome.applied === 0 ? 'PENDING' : 'PROCESSED',
+          outcome.ambiguous > 0 ? 'Refund event ambiguous for some operations; reconciliation required' : undefined,
+          outcome.ambiguous > 0 && outcome.applied === 0 ? 'RECONCILIATION_PENDING' : undefined);
+        return res.status(200).json({
+          success: true,
+          message: 'Refund event reconciled per operation',
+          event,
+          matchedOperations: outcome.applied,
+          ambiguousOperations: outcome.ambiguous,
+          ignoredOperations: outcome.ignored,
+          timestamp
+        });
+      }
 
+      // ---- LEGADO: pagamento SEM nenhuma operacao de estorno (estorno feito
+      // fora do app, pelo painel Asaas). Comportamento anterior preservado.
       let matchedOpCount = 0;
       let conflictCount = 0;
-
-      if (reconcilableOps.length > 0) {
-        if (refundItems.length > 0) {
-          for (const item of refundItems) {
-            const itemStatus = String(item.status || 'DONE').toUpperCase();
-            if (!['DONE', 'REFUNDED', 'COMPLETED'].includes(itemStatus)) continue;
-
-            const itemValueCents = Math.round(Number(item.value || 0) * 100);
-            const providerRefundId = item.id || null;
-
-            // Match candidates
-            const candidateOps = reconcilableOps.filter(op =>
-              (providerRefundId && (op.provider_refund_id === providerRefundId || op.metadata?.provider_refund_id === providerRefundId)) ||
-              (op.requested_amount_cents === itemValueCents)
-            );
-
-            if (candidateOps.length === 1) {
-              const matched = candidateOps[0];
-              const targetStatus = itemValueCents >= matched.requested_amount_cents ? 'COMPLETED' : 'PARTIALLY_COMPLETED';
-              try {
-                await RefundOperationRepository.reconcileTransition(supabaseAdmin, matched.id, matched.version, targetStatus, {
-                  completed_amount_cents: itemValueCents,
-                  provider_refund_id: providerRefundId || matched.provider_refund_id,
-                  metadata: { ...(matched.metadata || {}), reconciled_via_webhook: true, event_id: payload.id || null }
-                });
-                matchedOpCount++;
-              } catch (trErr) {
-                console.warn(`[ASAAS WEBHOOK] Transition error for matched op ${matched.id}:`, trErr);
-              }
-            } else if (candidateOps.length > 1) {
-              // Ambiguous match across multiple operations with exact same amount -> CONFLICT
-              console.warn(`⚠️ [ASAAS WEBHOOK] Multiple candidate operations match refund item ${itemValueCents} cents for payment ${currentPaymentId}. Marking CONFLICT.`);
-              for (const op of candidateOps) {
-                try {
-                  await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'CONFLICT', {
-                    metadata: { ...(op.metadata || {}), conflict_reason: 'Ambiguous match across multiple operations with same amount' }
-                  });
-                  conflictCount++;
-                } catch (trErr) {
-                  console.warn(`[ASAAS WEBHOOK] Error setting CONFLICT on op ${op.id}:`, trErr);
-                }
-              }
-            }
-          }
-        } else if (reconcilableOps.length === 1 && !isPartialRefundEvent) {
-          // Single candidate operation and payment fully refunded -> Unequivocal match
-          const singleOp = reconcilableOps[0];
-          try {
-            await RefundOperationRepository.reconcileTransition(supabaseAdmin, singleOp.id, singleOp.version, 'COMPLETED', {
-              completed_amount_cents: singleOp.requested_amount_cents,
-              metadata: { ...(singleOp.metadata || {}), reconciled_via_webhook: true, event_id: payload.id || null }
-            });
-            matchedOpCount++;
-          } catch (trErr) {
-            console.warn(`[ASAAS WEBHOOK] Transition error for single op ${singleOp.id}:`, trErr);
-          }
-        } else if (reconcilableOps.length > 1 && !isPartialRefundEvent) {
-          // Multiple candidate operations without refund items breakdown -> CONFLICT
-          console.warn(`⚠️ [ASAAS WEBHOOK] Multiple candidate operations (${reconcilableOps.length}) for payment ${currentPaymentId} without item breakdown. Marking CONFLICT.`);
-          for (const op of reconcilableOps) {
-            try {
-              await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'CONFLICT', {
-                metadata: { ...(op.metadata || {}), conflict_reason: 'Multiple operations exist for payment without item breakdown' }
-              });
-              conflictCount++;
-            } catch (trErr) {
-              console.warn(`[ASAAS WEBHOOK] Error setting CONFLICT on op ${op.id}:`, trErr);
-            }
-          }
-        }
-      }
 
       // Update appointments and transactions based on reconciled scope
       if (Array.isArray(apts) && apts.length > 0) {
@@ -1280,62 +1233,39 @@ export default async function handler(req: Request, res: Response) {
 
       console.log(`⚠️ [ASAAS WEBHOOK] Refund denied event received for payment ${currentPaymentId}. Reason: ${denialReason}`);
 
-      // Reconcile RefundOperation(s) -> DENIED (without downgrading COMPLETED)
-      const reconcilableOps = await RefundOperationRepository.getReconcilableOperations(supabaseAdmin, 'asaas', currentPaymentId);
-      for (const op of reconcilableOps) {
-        if (['REQUESTED', 'PENDING', 'UNKNOWN'].includes(op.status)) {
-          try {
-            await RefundOperationRepository.reconcileTransition(supabaseAdmin, op.id, op.version, 'DENIED', {
-              metadata: { ...(op.metadata || {}), denial_reason: denialReason, denied_at: new Date().toISOString() }
-            });
-          } catch (trErr) {
-            console.warn(`[ASAAS WEBHOOK] Could not transition op ${op.id} to DENIED:`, trErr);
-          }
-        }
-      }
-
-      const { data: apts } = await supabaseAdmin
-        .from('appointments')
-        .select('id, status, payment_status, group_id')
-        .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`);
-
-      try {
-        const { data: refundTxs } = await supabaseAdmin
-          .from('transactions')
-          .select('id, metadata')
-          .eq('provider_payment_id', currentPaymentId)
-          .eq('type', 'refund');
-
-        if (refundTxs && refundTxs.length > 0) {
-          for (const tx of refundTxs) {
+      // Recusa definitiva do gateway. Por operacao:
+      //  - pendente/ambigua -> DENIED (marcas de "estorno solicitado" liberadas);
+      //  - COMPLETED nunca confirmada -> corrigida para DENIED (com trilha);
+      //  - COMPLETED confirmada -> evento tardio registrado e IGNORADO.
+      // O pagamento original NUNCA vira pagamento falho por causa de uma recusa.
+      const safeDenialReason = sanitizeProviderMessage(denialReason) || 'refund_denied';
+      const { all: deniedOps } = await BookingCancellationCore.loadRefundOperationsForEvidence(supabaseAdmin, currentPaymentId);
+      if (deniedOps.length > 0) {
+        const outcome = await BookingCancellationCore.applyRefundEvent(
+          supabaseAdmin, currentPaymentId, payload.payment, 'DENIED', payload.id || null, safeDenialReason
+        );
+        console.log(`[ASAAS WEBHOOK] REFUND_DENIED ${currentPaymentId}: applied=${outcome.applied} ambiguous=${outcome.ambiguous} ignored=${outcome.ignored}`);
+      } else {
+        // LEGADO (sem operacao): so' o ledger de estorno reflete a recusa.
+        try {
+          const { data: refundTxs } = await supabaseAdmin
+            .from('transactions')
+            .select('id, metadata')
+            .eq('provider_payment_id', currentPaymentId)
+            .eq('type', 'refund');
+          for (const tx of refundTxs || []) {
             const existingMeta = (tx.metadata && typeof tx.metadata === 'object') ? tx.metadata : {};
-            await supabaseAdmin
-              .from('transactions')
-              .update({
-                status: 'failed',
-                metadata: {
-                  ...existingMeta,
-                  denial_reason: denialReason,
-                  denialReason: denialReason,
-                  denied_at: new Date().toISOString()
-                }
-              })
-              .eq('id', tx.id);
+            await supabaseAdmin.from('transactions').update({
+              status: 'failed',
+              metadata: { ...existingMeta, denial_reason: safeDenialReason, denied_at: new Date().toISOString() }
+            }).eq('id', tx.id);
           }
-        }
-      } catch (txErr) {
-        console.warn(`⚠️ [ASAAS WEBHOOK] Error updating transaction status for PAYMENT_REFUND_DENIED:`, txErr);
-      }
-
-      if (apts && apts.length > 0) {
-        for (const apt of apts) {
-          await supabaseAdmin
-            .from('appointments')
-            .update({
-              payment_status: 'failed',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', apt.id);
+          await supabaseAdmin.from('appointments')
+            .update({ payment_status: 'paid', updated_at: new Date().toISOString() })
+            .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`)
+            .eq('payment_status', 'refund_requested');
+        } catch (txErr) {
+          console.warn(`⚠️ [ASAAS WEBHOOK] Error updating legacy records for PAYMENT_REFUND_DENIED:`, txErr);
         }
       }
 
@@ -1344,7 +1274,7 @@ export default async function handler(req: Request, res: Response) {
         success: true,
         message: 'PAYMENT_REFUND_DENIED event processed successfully',
         event,
-        denialReason,
+        denialReason: safeDenialReason,
         timestamp
       });
     } else {

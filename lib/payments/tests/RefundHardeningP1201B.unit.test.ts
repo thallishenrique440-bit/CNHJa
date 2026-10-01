@@ -224,10 +224,20 @@ async function main() {
     return { fn, calls };
   }
 
+  // Resposta do POST /payments/{id}/refund quando o estorno CONCLUIU: o Asaas
+  // devolve o objeto do PAGAMENTO (id `pay_...`) com o item de estorno em
+  // `refunds[]`. O corpo antigo destes cenarios (`{ id: 'ref_1' }`) so'
+  // "provava" conclusao porque o Core tratava qualquer 2xx como COMPLETED —
+  // exatamente o defeito corrigido. As assercoes nao mudam.
+  const REFUND_DONE_BODY = {
+    id: 'pay_1', status: 'RECEIVED', value: 100,
+    refunds: [{ status: 'DONE', value: 100, dateCreated: '2026-10-01 10:00:00' }]
+  };
+
   // ---- 6. refund COMPLETED -> appointment terminal -----------------------
   {
     const db = createDb({ appointments: [APT()], refund_operations: [], payment_installments: [], transactions: [] });
-    const gw = gateway({ ok: true, status: 200, body: { id: 'ref_1' } });
+    const gw = gateway({ ok: true, status: 200, body: REFUND_DONE_BODY });
     const res = await BookingCancellationCore.processCancellation({
       appointmentId: 'apt_1', reason: 'student_cancelled', adminClient: db,
       asaasApiKey: 'k', asaasApiUrl: 'https://sandbox', httpFetch: gw.fn as any
@@ -372,7 +382,7 @@ async function main() {
     }
     // Modulo B do cron: pending_approval + paid -> auto_expired -> refund
     const db = createDb({ appointments: [APT({ status: 'pending_approval' })], refund_operations: [], payment_installments: [], transactions: [] });
-    const gw = gateway({ ok: true, status: 200, body: { id: 'ref_b' } });
+    const gw = gateway({ ok: true, status: 200, body: REFUND_DONE_BODY });
     const res = await BookingCancellationCore.processCancellation({
       appointmentId: 'apt_1', reason: 'auto_expired', adminClient: db,
       asaasApiKey: 'k', asaasApiUrl: 'https://sandbox', httpFetch: gw.fn as any
@@ -383,7 +393,7 @@ async function main() {
   // ---- 12. idempotencia: sem refund duplicado ----------------------------
   {
     const db = createDb({ appointments: [APT()], refund_operations: [], payment_installments: [], transactions: [] });
-    const gw = gateway({ ok: true, status: 200, body: { id: 'ref_1' } });
+    const gw = gateway({ ok: true, status: 200, body: REFUND_DONE_BODY });
     const opts = { appointmentId: 'apt_1', reason: 'student_cancelled' as const, adminClient: db, asaasApiKey: 'k', asaasApiUrl: 'https://sandbox', httpFetch: gw.fn as any };
     await BookingCancellationCore.processCancellation(opts);
     const second = await BookingCancellationCore.processCancellation(opts);

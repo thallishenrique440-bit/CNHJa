@@ -66,6 +66,8 @@ const ALLOW = [
   'MinimalExposureAP02.unit.test.ts',
   'InstructorVacationAP05A.unit.test.ts',
   'EdgeAuthBloco3.unit.test.ts',
+  'RefundLifecycleConfirmation.unit.test.ts',
+  'SyncPaymentStatusAuthR2.unit.test.ts',
   'AsaasEnvironmentAP04.unit.test.ts',
   'SettlementService.unit.test.ts',
   'SyncPaymentStatusRefundFix.unit.test.ts',

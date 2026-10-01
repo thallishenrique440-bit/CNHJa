@@ -11,13 +11,45 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 type SupabaseClient = ReturnType<typeof createClient>;
 import { RefundOperationClaimLostError, RefundOperationNotFoundError, RefundOperationPersistenceError, RefundOperationTransitionError, RefundOperationVersionConflictError } from './RefundOperationErrors.ts';
-import { canTransitionRefund } from './RefundStateMachine.ts';
+import { canTransitionRefund, RefundEvidence } from './RefundStateMachine.ts';
 import {
   ClaimRefundOperationResult,
   CreateRefundOperationInput,
   RefundOperationRecord,
   RefundOperationStatus
 } from './RefundOperationTypes.ts';
+
+/**
+ * Trilha de auditoria de cada transicao (refund_operation_events).
+ * `details` e' filtrado por lista branca: nada de chave, token, CPF, e-mail,
+ * telefone ou payload cru.
+ */
+export type RefundEventSource =
+  | 'claim' | 'post' | 'webhook' | 'reconciliation' | 'payment_lookup' | 'lease_reaper' | 'manual_retry';
+
+export interface RefundAudit {
+  source: RefundEventSource;
+  providerEventId?: string | null;
+  asaasPaymentStatus?: string | null;
+  refundItemStatus?: string | null;
+  providerRefundId?: string | null;
+  decision?: string | null;
+  reason?: string | null;
+  httpStatus?: number | null;
+}
+
+const AUDIT_KEYS: Array<keyof RefundAudit> = [
+  'asaasPaymentStatus', 'refundItemStatus', 'providerRefundId', 'decision', 'reason', 'httpStatus'
+];
+
+async function sha256Hex(value: string): Promise<string | null> {
+  try {
+    const subtle = (globalThis as any).crypto?.subtle;
+    if (!subtle) return null;
+    const buf = await subtle.digest('SHA-256', new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(buf)).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+  } catch { return null; }
+}
 
 const mapInput = (input: CreateRefundOperationInput) => ({
   operation_key: input.operationKey,
@@ -149,6 +181,7 @@ export class RefundOperationRepository {
       return { operation: recheck, claimed: false };
     }
 
+    await this.recordEvent(supabase, operationId, 'REQUESTED', 'PENDING', { source: 'claim' });
     return { operation: data as RefundOperationRecord, claimed: true };
   }
 
@@ -232,6 +265,9 @@ export class RefundOperationRepository {
           .maybeSingle();
 
         if (!error && data) {
+          await this.recordEvent(supabase, operation.id, 'PENDING', 'UNKNOWN', {
+            source: 'lease_reaper', decision: 'lease_expired_in_pending'
+          });
           return data as RefundOperationRecord;
         }
         return await this.get(supabase, operation.id);
@@ -285,7 +321,8 @@ export class RefundOperationRepository {
     ownerId: string,
     expectedVersion: number,
     status: RefundOperationStatus,
-    fields: Record<string, unknown> = {}
+    fields: Record<string, unknown> = {},
+    audit: RefundAudit = { source: 'post' }
   ): Promise<RefundOperationRecord> {
     const current = await this.get(supabase, operationId);
     if (!canTransitionRefund(current.status, status, { source: 'local', complete: status === 'COMPLETED' })) {
@@ -309,6 +346,7 @@ export class RefundOperationRepository {
       }
       throw new RefundOperationClaimLostError(operationId);
     }
+    await this.recordEvent(supabase, operationId, current.status, status, audit);
     return data as RefundOperationRecord;
   }
 
@@ -345,10 +383,17 @@ export class RefundOperationRepository {
     operationId: string,
     expectedVersion: number,
     status: RefundOperationStatus,
-    fields: Record<string, unknown> = {}
+    fields: Record<string, unknown> = {},
+    audit: RefundAudit = { source: 'webhook' },
+    evidence: Partial<RefundEvidence> = {}
   ): Promise<RefundOperationRecord> {
     const current = await this.get(supabase, operationId);
-    if (!canTransitionRefund(current.status, status, { source: 'webhook', complete: status === 'COMPLETED' })) {
+    const evidenceSource: RefundEvidence['source'] = audit.source === 'reconciliation' || audit.source === 'payment_lookup'
+      ? 'reconciliation'
+      : audit.source === 'manual_retry' ? 'local' : 'webhook';
+    if (!canTransitionRefund(current.status, status, {
+      source: evidenceSource, complete: status === 'COMPLETED', ...evidence
+    })) {
       throw new RefundOperationTransitionError(`Invalid gateway refund transition ${current.status} -> ${status}`);
     }
     const { data, error } = await supabase
@@ -364,6 +409,94 @@ export class RefundOperationRepository {
       const actual = await this.get(supabase, operationId);
       throw new RefundOperationVersionConflictError(operationId, expectedVersion, actual.version);
     }
+    await this.recordEvent(supabase, operationId, current.status, status, audit);
     return data as RefundOperationRecord;
+  }
+
+  /**
+   * Conclusoes que o gateway nunca confirmou (legado: POST 2xx => COMPLETED).
+   * Sao as unicas COMPLETED que um evento definitivo de recusa pode corrigir.
+   */
+  static async getUnconfirmedCompletions(
+    supabase: SupabaseClient,
+    provider: string,
+    providerPaymentId: string
+  ): Promise<RefundOperationRecord[]> {
+    const { data, error } = await supabase
+      .from('refund_operations')
+      .select('*')
+      .eq('provider', provider)
+      .eq('provider_payment_id', providerPaymentId)
+      .eq('status', 'COMPLETED')
+      .is('acknowledged_at', null);
+    if (error) {
+      console.warn(`[RefundOperationRepository] Error fetching unconfirmed completions for ${providerPaymentId}:`, error);
+      return [];
+    }
+    return (data || []) as RefundOperationRecord[];
+  }
+
+  /**
+   * Candidatas a reconciliacao: PENDING/UNKNOWN paradas desde `olderThanIso` e
+   * COMPLETED sem confirmacao do gateway.
+   */
+  static async findStaleForReconciliation(
+    supabase: SupabaseClient,
+    olderThanIso: string,
+    limit = 50
+  ): Promise<RefundOperationRecord[]> {
+    const [stale, unconfirmed] = await Promise.all([
+      supabase.from('refund_operations').select('*')
+        .in('status', ['PENDING', 'UNKNOWN'])
+        .lt('updated_at', olderThanIso)
+        .order('updated_at', { ascending: true })
+        .limit(limit),
+      supabase.from('refund_operations').select('*')
+        .eq('status', 'COMPLETED')
+        .is('acknowledged_at', null)
+        .order('updated_at', { ascending: true })
+        .limit(limit)
+    ]);
+    if (stale.error) console.warn('[RefundOperationRepository] stale query failed:', stale.error);
+    if (unconfirmed.error) console.warn('[RefundOperationRepository] unconfirmed query failed:', unconfirmed.error);
+    const byId = new Map<string, RefundOperationRecord>();
+    for (const op of [...(stale.data || []), ...(unconfirmed.data || [])] as RefundOperationRecord[]) byId.set(op.id, op);
+    return Array.from(byId.values()).slice(0, limit);
+  }
+
+  /**
+   * Registra uma transicao em refund_operation_events. Melhor-esforco: nunca
+   * derruba o fluxo financeiro. Evento repetido (mesmo provider_event_id) e'
+   * ignorado pela UNIQUE (refund_operation_id, provider_event_id).
+   */
+  static async recordEvent(
+    supabase: SupabaseClient,
+    operationId: string,
+    fromStatus: string | null,
+    toStatus: string,
+    audit: RefundAudit
+  ): Promise<void> {
+    try {
+      const details: Record<string, unknown> = {};
+      for (const k of AUDIT_KEYS) {
+        const v = audit[k];
+        if (v !== undefined && v !== null && v !== '') details[k] = v;
+      }
+      const evidenceHash = await sha256Hex(JSON.stringify({ operationId, fromStatus, toStatus, source: audit.source, ...details }));
+      const { error } = await supabase.from('refund_operation_events').insert({
+        refund_operation_id: operationId,
+        provider_event_id: audit.providerEventId || null,
+        source: audit.source,
+        from_status: fromStatus,
+        to_status: toStatus,
+        evidence_hash: evidenceHash,
+        raw_payload: details
+      });
+      if (error && (error as any).code !== '23505') {
+        console.error(`[RefundOperationRepository] refund_operation_events insert failed for ${operationId}:`, (error as any).message || error);
+      }
+    } catch (err: any) {
+      console.error(`[RefundOperationRepository] refund_operation_events exception for ${operationId}:`, err?.message || err);
+    }
   }
 }

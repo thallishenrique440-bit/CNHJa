@@ -3,6 +3,9 @@ import { NotificationService } from '../_shared/NotificationService.ts'
 import { asaasFetch, getAsaasRefundState } from '../_shared/asaasClient.ts'
 import { getAsaasEnvironment } from '../_shared/AsaasEnvironment.ts'
 import { InstallmentService } from '../_shared/InstallmentService.ts'
+import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
+import { RefundOperationRepository } from '../_shared/RefundOperationRepository.ts'
+import { requireCronAuth } from '../_shared/cronAuth.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -30,9 +33,59 @@ function calculateApprovalExpiresAt(dateStr?: string, startTimeStr?: string, cre
   }
 }
 
+/** PENDING/UNKNOWN sem movimento ha' este tempo entram na reconciliacao. */
+const REFUND_RECONCILE_IDLE_MS = 10 * 60 * 1000
+/** So' operacoes paradas ha' este tempo podem ser fechadas por "nenhum estorno no gateway". */
+const REFUND_RECONCILE_STALE_MS = 30 * 60 * 1000
+const REFUND_RECONCILE_BATCH = 25
+
+/**
+ * FASE 0 — reconciliacao das operacoes de estorno.
+ * Consulta o pagamento no Asaas (GET, somente leitura) e aplica a evidencia a
+ * cada operacao PENDING/UNKNOWN parada e a cada COMPLETED nunca confirmada.
+ * Nunca emite POST: nenhuma cobranca e nenhum estorno novo nascem aqui.
+ */
+async function reconcileRefundOperations() {
+  const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || ''
+  if (!asaasApiKey) return { skipped: 'missing_asaas_api_key', checked: 0, results: [] }
+  let asaasApiUrl: string
+  try {
+    asaasApiUrl = getAsaasEnvironment().apiUrl
+  } catch (_envErr) {
+    return { skipped: 'asaas_environment_invalid', checked: 0, results: [] }
+  }
+
+  const olderThan = new Date(Date.now() - REFUND_RECONCILE_IDLE_MS).toISOString()
+  const ops = await RefundOperationRepository.findStaleForReconciliation(supabaseAdmin, olderThan, REFUND_RECONCILE_BATCH)
+  const results: any[] = []
+  for (const op of ops) {
+    try {
+      results.push(await BookingCancellationCore.reconcileRefundOperation(supabaseAdmin, op, {
+        httpFetch: asaasFetch,
+        asaasApiUrl,
+        asaasApiKey,
+        staleAfterMs: REFUND_RECONCILE_STALE_MS
+      }))
+    } catch (err: any) {
+      results.push({ operationId: op.id, before: op.status, after: op.status, outcome: 'error', error: err?.message })
+    }
+  }
+  console.log(`[Sync job] Refund reconciliation: checked=${ops.length}`)
+  return { checked: ops.length, results }
+}
+
 Deno.serve(async (req) => {
+  // R2: reconcilia DINHEIRO (le o Asaas e muda estado de estorno/aula). `verify_jwt`
+  // nao basta (a chave anon publica e' um JWT valido). Exige `Authorization:
+  // Bearer <CRON_SECRET>`, fail-closed e em tempo constante, ANTES de qualquer
+  // leitura ou escrita. Invocacao manual (R1) usa o mesmo segredo.
+  const denied = await requireCronAuth(req, 'sync-payment-status')
+  if (denied) return denied
+
   try {
     console.log("🔄 Starting sync-payment-status job...")
+
+    const refundReconciliation = await reconcileRefundOperations()
 
     // Find appointments that are stuck in checkout/approval or have pending refund reconciliations
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
@@ -47,7 +100,7 @@ Deno.serve(async (req) => {
     console.log(`Found ${stuckAppointments?.length || 0} potentially stuck or pending refund appointments.`)
 
     if (!stuckAppointments || stuckAppointments.length === 0) {
-      return new Response(JSON.stringify({ message: 'No stuck or pending refund appointments found.' }), {
+      return new Response(JSON.stringify({ message: 'No stuck or pending refund appointments found.', refund_reconciliation: refundReconciliation }), {
         headers: { 'Content-Type': 'application/json' },
       })
     }
@@ -406,6 +459,7 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         message: 'Sync job completed', 
+        refund_reconciliation: refundReconciliation,
         processed: stuckAppointments.length,
         success: successCount,
         results 
