@@ -254,6 +254,7 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
         start_time,
         end_time,
         status,
+        payment_status,
         price,
         instructor_id,
         instructors (
@@ -406,6 +407,17 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
 
       const createdAtStr = firstInst.created_at || latestPaymentDateStr || firstInst.due_date;
 
+      // Estado do reembolso: leitura direta de appointments.payment_status, sem
+      // inferencia. Recusa prevalece sobre pendencia, que prevalece sobre
+      // conclusao — a compra so' aparece como reembolsada quando TODAS as
+      // aulas dela estao `refunded`.
+      const paymentStatuses = uniqueAppts.map(a => a.payment_status);
+      const refundStatus: StudentHistoryItemDTO['refundStatus'] = paymentStatuses.includes('refund_denied')
+        ? 'denied'
+        : (paymentStatuses.includes('refund_requested')
+          ? 'pending'
+          : (paymentStatuses.length > 0 && paymentStatuses.every(ps => ps === 'refunded') ? 'completed' : undefined));
+
       return {
         id: firstInst.id,
         providerPaymentId: firstInst.provider_payment_id,
@@ -419,6 +431,7 @@ export class StudentFinanceReadService implements IStudentFinanceReadService {
         dueDate: firstInst.due_date,
         paymentDate: latestPaymentDateStr,
         status: uiStatus,
+        refundStatus,
         combo: isCombo,
         isCombo,
         lessonCount,

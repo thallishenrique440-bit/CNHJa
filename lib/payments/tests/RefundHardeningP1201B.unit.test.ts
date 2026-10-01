@@ -249,20 +249,19 @@ async function main() {
     check(gw.calls.filter(c => c.startsWith('POST')).length === 1, '6. exatamente um POST /refund');
   }
 
-  // ---- 7. refund recusado (4xx) -> appointment INTACTO -------------------
+  // ---- 7. refund recusado (4xx) -> aula ENCERRADA, estorno refund_denied ----
+  // (antes: appointment intacto. O encerramento operacional deixou de depender
+  //  do estorno; o estado financeiro e' que registra a recusa.)
   {
     const db = createDb({ appointments: [APT()], refund_operations: [], payment_installments: [], transactions: [] });
     const gw = gateway({ ok: false, status: 400, body: { errors: [{ description: 'nope' }] } });
-    await expectThrow(
-      () => BookingCancellationCore.processCancellation({
-        appointmentId: 'apt_1', reason: 'student_cancelled', adminClient: db,
-        asaasApiKey: 'k', asaasApiUrl: 'https://sandbox', httpFetch: gw.fn as any
-      }),
-      () => true,
-      '7. refund 4xx propaga erro'
-    );
-    check(db.tables.appointments[0].status === 'pending_approval', '7. appointment permanece INTACTO apos refund recusado');
-    check(db.tables.appointments[0].payment_status === 'paid', '7. payment_status intacto');
+    const res7 = await BookingCancellationCore.processCancellation({
+      appointmentId: 'apt_1', reason: 'student_cancelled', adminClient: db,
+      asaasApiKey: 'k', asaasApiUrl: 'https://sandbox', httpFetch: gw.fn as any
+    });
+    check(res7.status === 'cancelled' && res7.refundConfirmed === false && res7.refundState === 'denied', '7. refund 4xx: aula encerrada, estorno NAO confirmado');
+    check(db.tables.appointments[0].status === 'cancelled', '7. appointment encerrado apos refund recusado');
+    check(db.tables.appointments[0].payment_status === 'refund_denied', '7. payment_status refund_denied (nunca refunded)');
     check(db.tables.refund_operations[0].status === 'DENIED', '7. operacao DENIED');
   }
 
@@ -305,8 +304,8 @@ async function main() {
       asaasApiKey: 'k', asaasApiUrl: 'https://sandbox', httpFetch: gw2.fn as any
     });
     check(gw2.calls.filter(c => c.startsWith('POST')).length === 0, '8b. operacao UNKNOWN BLOQUEIA um segundo POST /refund');
-    check(res2.status === 'pending_refund', '8b. resultado sinaliza estorno em processamento');
-    check(db.tables.appointments[0].status === 'pending_approval', '8b. appointment segue intacto');
+    check(res2.status === 'cancelled' && res2.refundState === 'in_review' && res2.refundConfirmed === false, '8b. resultado: aula encerrada, estorno em analise');
+    check(db.tables.appointments[0].status === 'cancelled' && db.tables.appointments[0].payment_status === 'refund_requested', '8b. appointment encerrado com refund_requested');
   }
 
   // ---- D4. GET /payments/{id} sem resposta valida -> NADA e' escrito --------

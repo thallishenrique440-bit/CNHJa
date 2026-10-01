@@ -113,37 +113,19 @@ Deno.serve(async (req) => {
       httpFetch: asaasFetch
     });
 
-    // D2 — `pending_refund` NAO PODE SAIR COMO 2xx.
-    //
-    // `pending_refund` significa: o estorno nao atingiu COMPLETED e o
-    // agendamento foi DELIBERADAMENTE deixado intacto. Respondendo 200, o
-    // `invokeSecureFunction` de `lib/functions.ts` nao preenche `error`, e
-    // `pages/student/Lessons.tsx:1047-1058` -- que nao le `status` -- removia a
-    // aula da lista e exibia "Aula cancelada e horario liberado.". Falso
-    // sucesso, com o dinheiro ainda retido.
-    //
-    // Devolvendo 409 o front entra no caminho de erro que JA EXISTE, sem
-    // qualquer alteracao em `Lessons.tsx`. O campo `error` e' o que o wrapper
-    // le para montar a mensagem; os demais campos ficam para diagnostico.
-    if (result.status === 'pending_refund') {
-      return new Response(
-        JSON.stringify({
-          error: result.message,
-          code: 'REFUND_PENDING',
-          status: result.status,
-          refund_status: result.refundStatus || null,
-          payment_status: result.paymentStatus,
-          count: result.processedCount
-        }),
-        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
+    // A aula e' encerrada pelo Core qualquer que seja o estado do estorno, logo
+    // a resposta e' 2xx. O que NAO pode acontecer e' o cliente entender que o
+    // dinheiro voltou: `refund_confirmed` so' e' true com confirmacao do
+    // gateway, `refund_state` distingue confirmado / em analise / recusado, e a
+    // mensagem do Core nunca afirma estorno concluido sem essa confirmacao.
     return new Response(
       JSON.stringify({
         message: result.message,
         status: result.status,
         payment_status: result.paymentStatus,
+        refund_confirmed: result.refundConfirmed,
+        refund_state: result.refundState,
+        refund_status: result.refundStatus || null,
         count: result.processedCount
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

@@ -5,7 +5,7 @@
 
 export type PaymentProvider = 'asaas';
 
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released' | 'refund_requested';
+export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded' | 'authorized' | 'released' | 'refund_requested' | 'refund_denied';
 
 export type AppointmentStatus =
   | 'pending'

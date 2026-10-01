@@ -61,6 +61,12 @@ export interface StudentHistoryItemDTO {
   dueDate: string;
   paymentDate?: string;
   status: string; // 'completed' | 'pending' | 'failed' | 'refunded'
+  /**
+   * Estado do reembolso da compra, lido de `appointments.payment_status`:
+   * 'pending' (refund_requested), 'denied' (refund_denied), 'completed'
+   * (refunded). Ausente quando nao ha' reembolso.
+   */
+  refundStatus?: 'pending' | 'denied' | 'completed';
   combo: boolean;
   isCombo: boolean;
   lessonCount: number;

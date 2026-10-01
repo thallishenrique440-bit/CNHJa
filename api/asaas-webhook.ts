@@ -1260,6 +1260,13 @@ export default async function handler(req: Request, res: Response) {
               metadata: { ...existingMeta, denial_reason: safeDenialReason, denied_at: new Date().toISOString() }
             }).eq('id', tx.id);
           }
+          // Aula ja' encerrada: a recusa fica explicita (`refund_denied`); so'
+          // aula ainda aberta volta a `paid`.
+          await supabaseAdmin.from('appointments')
+            .update({ payment_status: 'refund_denied', updated_at: new Date().toISOString() })
+            .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`)
+            .in('status', ['cancelled', 'expired'])
+            .eq('payment_status', 'refund_requested');
           await supabaseAdmin.from('appointments')
             .update({ payment_status: 'paid', updated_at: new Date().toISOString() })
             .or(`provider_payment_id.eq.${currentPaymentId},payment_intent_id.eq.${currentPaymentId}`)

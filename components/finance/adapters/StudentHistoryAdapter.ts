@@ -27,6 +27,8 @@ export interface StudentHistoryItemInput {
   lessonPriceCents?: number;
   netAmount?: number;
   status: string;
+  /** Estado do reembolso da compra: pendente (em análise), negado ou concluído. */
+  refundStatus?: 'pending' | 'denied' | 'completed';
   instructorName: string;
   appointmentDate?: string;
   appointmentTime?: string;
@@ -52,7 +54,11 @@ export class StudentHistoryAdapter {
   public static toViewModel(item: StudentHistoryItemInput): HistoryCardViewModel {
     const isCombo = Boolean(item.isCombo);
     const isTip = item.type === 'tip' || Boolean(item.groupId?.startsWith('tip_')) || item.lessonCount === 0;
-    const isRefund = item.type === 'refund' || item.status === 'refunded' || item.status === 'partially_refunded';
+    // Reembolso pendente ou negado NÃO é reembolso: o card continua sendo o da
+    // compra (sem "Reembolso recebido", sem valor negativo) e só o selo muda.
+    const refundUnconfirmed = item.refundStatus === 'pending' || item.refundStatus === 'denied';
+    const isRefund = !refundUnconfirmed
+      && (item.type === 'refund' || item.status === 'refunded' || item.status === 'partially_refunded');
     const isLesson = !isCombo && !isTip && !isRefund;
 
     const totalInst = item.totalInstallments && item.totalInstallments > 0 ? item.totalInstallments : 1;
@@ -68,7 +74,13 @@ export class StudentHistoryAdapter {
     // Status Badge & Appointment Status
     let statusBadge: HistoryCardViewModel['status']['badge'] = undefined;
     const isPending = ['pending', 'processing'].includes(item.status);
-    if (isPending) {
+    if (item.refundStatus === 'pending') {
+      statusBadge = { label: 'Reembolso em análise', variant: 'pending' };
+    } else if (item.refundStatus === 'denied') {
+      statusBadge = { label: 'Reembolso negado', variant: 'failed' };
+    } else if (item.refundStatus === 'completed') {
+      statusBadge = { label: 'Reembolsado', variant: 'refunded' };
+    } else if (isPending) {
       statusBadge = { label: 'Pendente', variant: 'pending' };
     } else if (item.status === 'failed') {
       statusBadge = { label: 'Falhou', variant: 'failed' };

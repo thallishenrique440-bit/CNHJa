@@ -45,17 +45,53 @@ export interface RefundReconcileDeps {
   staleAfterMs?: number;
 }
 
+/**
+ * Estado FINANCEIRO do estorno, separado do estado operacional da aula.
+ *  - `confirmed`: o gateway confirmou o estorno;
+ *  - `in_review`: estorno solicitado, ambiguo ou em conflito — ainda sem desfecho;
+ *  - `denied`: o gateway recusou o estorno (revisao manual);
+ *  - `none`: nao ha' estorno (aula nao paga).
+ */
+export type RefundFinancialState = 'confirmed' | 'in_review' | 'denied' | 'none';
+
+/** Mensagem unica para "aula encerrada, estorno ainda sem confirmacao". */
+export const REFUND_IN_REVIEW_MESSAGE = 'O reembolso está em análise e pode ser acompanhado na área Financeiro.';
+
+export function refundStateFromPaymentStatus(paymentStatus: string | null | undefined): RefundFinancialState {
+  if (paymentStatus === 'refunded') return 'confirmed';
+  if (paymentStatus === 'refund_requested') return 'in_review';
+  if (paymentStatus === 'refund_denied') return 'denied';
+  return 'none';
+}
+
+/**
+ * Classificacao de um resultado para contagem/telemetria (cron) — separa "aula
+ * encerrada" de "estorno concluido". So' `refund_confirmed` e' estorno feito.
+ */
+export type CancellationOutcomeKind = 'refund_confirmed' | 'refund_in_review' | 'refund_denied' | 'no_refund' | 'already_processed';
+
+export function classifyCancellationResult(result: Pick<CancellationResult, 'alreadyProcessed' | 'refundState'>): CancellationOutcomeKind {
+  if (result.alreadyProcessed) return 'already_processed';
+  if (result.refundState === 'confirmed') return 'refund_confirmed';
+  if (result.refundState === 'denied') return 'refund_denied';
+  if (result.refundState === 'in_review') return 'refund_in_review';
+  return 'no_refund';
+}
+
 export interface CancellationResult {
   success: boolean;
   alreadyProcessed: boolean;
   reason: CancellationReason;
   /**
-   * P-1.20.1B: `pending_refund` means the appointment was DELIBERATELY left
-   * untouched because the refund has not reached a terminal COMPLETED state.
-   * The appointment is never parked in an intermediate status.
+   * Estado OPERACIONAL da aula. O encerramento nao depende do desfecho do
+   * estorno: uma aula paga e' encerrada mesmo com o estorno pendente ou
+   * recusado, e o estado financeiro segue em `paymentStatus`/`refundState`.
    */
-  status: 'cancelled' | 'expired' | 'pending_refund';
-  paymentStatus: 'refunded' | 'released' | 'failed' | 'refund_requested';
+  status: 'cancelled' | 'expired';
+  paymentStatus: 'refunded' | 'released' | 'failed' | 'refund_requested' | 'refund_denied' | 'paid';
+  /** `true` SOMENTE quando o gateway confirmou o estorno. */
+  refundConfirmed: boolean;
+  refundState: RefundFinancialState;
   isPaid: boolean;
   processedCount: number;
   groupId?: string;
@@ -78,6 +114,9 @@ export const REASON_ALLOWED_STATUSES: Record<CancellationReason, string[]> = {
   student_cancelled: ['pending', 'pending_approval', 'awaiting_payment', 'reserved'],
   auto_expired: ['pending', 'pending_approval', 'awaiting_payment', 'reserved']
 };
+
+/** Estados operacionais terminais escritos por este Core. */
+export const CLOSED_STATUSES = ['cancelled', 'expired'];
 
 /** Statuses that mean "the instructor already accepted". Never cancellable. */
 export const ACCEPTED_STATUSES = ['confirmed', 'scheduled'];
@@ -164,6 +203,8 @@ export class BookingCancellationCore {
         reason,
         status: reason === 'instructor_rejected' ? 'cancelled' : (reason === 'auto_expired' ? 'expired' : 'cancelled'),
         paymentStatus: appointment.payment_status || 'released',
+        refundConfirmed: appointment.payment_status === 'refunded',
+        refundState: refundStateFromPaymentStatus(appointment.payment_status),
         isPaid: appointment.payment_status === 'refunded',
         processedCount: 0,
         groupId: appointment.group_id || appointment.id,
@@ -174,8 +215,18 @@ export class BookingCancellationCore {
     activeCancellationLocks.add(lockKey);
 
     try {
+      // Nova tentativa EXPLICITA do estorno de uma aula JA' ENCERRADA com o
+      // estorno recusado. E' uma operacao somente financeira: reabre a operacao
+      // DENIED (mesmas regras de `explicitRetry`), nunca altera o `status` da
+      // aula e nunca e' ligada por cron, webhook ou reconciliacao.
+      const isFinancialRetry = params.explicitRetry === true
+        && CLOSED_STATUSES.includes(appointment.status)
+        && appointment.payment_status === 'refund_denied';
+
       // 3. Idempotency & Eligibility Validation
-      if (reason === 'instructor_rejected') {
+      if (isFinancialRetry) {
+        // segue para o fluxo do gateway; a aula permanece encerrada.
+      } else if (reason === 'instructor_rejected') {
         if (appointment.status === 'cancelled' && appointment.cancelled_reason === 'instructor_rejected') {
           return {
             success: true,
@@ -183,6 +234,8 @@ export class BookingCancellationCore {
             reason,
             status: 'cancelled',
             paymentStatus: appointment.payment_status || 'released',
+            refundConfirmed: appointment.payment_status === 'refunded',
+            refundState: refundStateFromPaymentStatus(appointment.payment_status),
             isPaid: appointment.payment_status === 'refunded',
             processedCount: 1,
             groupId: appointment.group_id || appointment.id,
@@ -197,6 +250,8 @@ export class BookingCancellationCore {
             reason,
             status: 'expired',
             paymentStatus: appointment.payment_status || 'released',
+            refundConfirmed: appointment.payment_status === 'refunded',
+            refundState: refundStateFromPaymentStatus(appointment.payment_status),
             isPaid: appointment.payment_status === 'refunded',
             processedCount: 1,
             groupId: appointment.group_id || appointment.id,
@@ -211,6 +266,8 @@ export class BookingCancellationCore {
             reason,
             status: 'cancelled',
             paymentStatus: appointment.payment_status || 'released',
+            refundConfirmed: appointment.payment_status === 'refunded',
+            refundState: refundStateFromPaymentStatus(appointment.payment_status),
             isPaid: appointment.payment_status === 'refunded',
             processedCount: 1,
             groupId: appointment.group_id || appointment.id,
@@ -221,7 +278,7 @@ export class BookingCancellationCore {
 
       // P-1.20.1B: eligibility is a function of the reason, not a flat list.
       const allowedStatuses = REASON_ALLOWED_STATUSES[reason] || [];
-      if (!allowedStatuses.includes(appointment.status)) {
+      if (!isFinancialRetry && !allowedStatuses.includes(appointment.status)) {
         if (ACCEPTED_STATUSES.includes(appointment.status)) {
           throw new CancellationNotAllowedError(
             reason,
@@ -248,11 +305,13 @@ export class BookingCancellationCore {
         if (!groupAppointments || groupAppointments.length === 0) throw new Error('Group not found');
 
         const activeNonCancelable = groupAppointments.filter((a: any) => !allowedStatuses.includes(a.status) && a.status !== 'cancelled' && a.status !== 'expired');
-        if (activeNonCancelable.length > 0) {
+        if (!isFinancialRetry && activeNonCancelable.length > 0) {
           throw new Error('Este combo não pode ser cancelado pois um ou mais horários já foram processados.');
         }
 
-        appointmentsToCancel = groupAppointments.filter((a: any) => allowedStatuses.includes(a.status));
+        appointmentsToCancel = isFinancialRetry
+          ? groupAppointments.filter((a: any) => CLOSED_STATUSES.includes(a.status) && a.payment_status === 'refund_denied')
+          : groupAppointments.filter((a: any) => allowedStatuses.includes(a.status));
         if (appointmentsToCancel.length === 0) {
           return {
             success: true,
@@ -260,6 +319,8 @@ export class BookingCancellationCore {
             reason,
             status: reason === 'instructor_rejected' ? 'cancelled' : (reason === 'auto_expired' ? 'expired' : 'cancelled'),
             paymentStatus: appointment.payment_status || 'released',
+            refundConfirmed: appointment.payment_status === 'refunded',
+            refundState: refundStateFromPaymentStatus(appointment.payment_status),
             isPaid: appointment.payment_status === 'refunded',
             processedCount: 0,
             groupId: appointment.group_id,
@@ -281,7 +342,7 @@ export class BookingCancellationCore {
       // `refund_operations` is now the only financial lock. Its `operation_key`
       // is unique and deterministic and its claim carries owner + lease, which
       // is everything this block was trying to approximate. The appointment
-      // keeps its real business status until the refund is COMPLETED.
+      // goes straight from its real business status to a terminal one.
       //
       // The unpaid path has no refund operation, so its terminal write in step 8
       // carries its own CAS (`.in('status', allowedStatuses)`), which is atomic
@@ -577,10 +638,12 @@ export class BookingCancellationCore {
                           denial_reason: reason,
                           owner_id: null,
                           lease_until: null,
-                          metadata: evidenceMeta
+                          metadata: { ...evidenceMeta, requires_manual_review: true }
                         }, { ...audit, reason });
-                        // Igual ao HTTP 4xx: a recusa PROPAGA como erro (nao vira pending_refund).
-                        throw new Error(`Asaas refund denied for payment ${paymentId} (${view.refundItemStatus}).`);
+                        // Recusa definitiva: a aula e' encerrada mesmo assim, com
+                        // o estado financeiro `refund_denied` (revisao manual).
+                        console.warn(`[BookingCancellationCore] Asaas refund denied for payment ${paymentId} (${view.refundItemStatus}).`);
+                        isRefundRequestedOrConfirmed = true;
                       } else {
                         // Resposta sem prova do estado: o estorno PODE existir.
                         op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version, 'UNKNOWN', {
@@ -599,9 +662,12 @@ export class BookingCancellationCore {
                       if (isDefinitiveRefusal) {
                         // The gateway refused. Deterministic, terminal.
                         op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version, 'DENIED', {
-                          denial_reason: reason
+                          denial_reason: reason,
+                          metadata: { ...(op.metadata || {}), requires_manual_review: true }
                         }, { source: 'post', httpStatus: refundRes.status, reason, decision: 'http_refusal' });
-                        throw new Error(`Asaas refund failed (HTTP ${refundRes.status}): ${reason}`);
+                        // Mesma regra da recusa por item: encerra a aula, estorno `refund_denied`.
+                        console.warn(`[BookingCancellationCore] Asaas refund failed (HTTP ${refundRes.status}) for payment ${paymentId}: ${reason}`);
+                        isRefundRequestedOrConfirmed = true;
                       } else {
                         // 5xx/408: the refund MAY have been applied. Never assume it was not.
                         op = await RefundOperationRepository.transition(adminClient, op.id, ownerId, op.version, 'UNKNOWN', {
@@ -651,16 +717,21 @@ export class BookingCancellationCore {
       }
 
       // ======================================================================
-      // P-1.20.1B — TERMINAL GATE
+      // ENCERRAMENTO OPERACIONAL x DESFECHO FINANCEIRO
       //
-      // For a PAID booking, nothing downstream (installments, ledger, the
-      // appointment itself) is written until the refund operation has reached
-      // COMPLETED. Before this phase the appointment was flipped to `cancelled`
-      // whatever the gateway said, which allowed "cancelled with the money
-      // never returned" and, worse, left rows stranded in `cancelling`.
+      // O estado operacional da aula (`status`) NAO depende do estorno. Uma aula
+      // paga que expirou, foi recusada ou cancelada e' encerrada aqui qualquer
+      // que seja o estado da operacao de estorno. O que o estorno decide e'
+      // SOMENTE o estado financeiro:
+      //   - COMPLETED confirmado ............. `refunded`
+      //   - REQUESTED/PENDING/UNKNOWN/CONFLICT `refund_requested` (em analise)
+      //   - DENIED ........................... `refund_denied` (revisao manual)
+      // `refunded` nunca e' gravado sem confirmacao do gateway, as parcelas so'
+      // viram REFUNDED com confirmacao, e nenhum POST novo nasce daqui.
       //
-      // The appointment is NEVER parked in an intermediate state: it either
-      // keeps its real business status, or it reaches a terminal one.
+      // Antes, a aula paga ficava intacta ate' o estorno atingir COMPLETED: com
+      // o estorno recusado ela permanecia `pending_approval` para sempre e o
+      // cron a reprocessava a cada minuto.
       // ======================================================================
       // D3 — SEM CONFIRMACAO DO GATEWAY, NADA E' ESCRITO.
       //
@@ -683,25 +754,56 @@ export class BookingCancellationCore {
         );
       }
 
-      if (isPaid && refundOperation && (refundOperation.status === 'DENIED' || refundOperation.status === 'CONFLICT')) {
-        throw new Error(`Estorno recusado pelo gateway (${refundOperation.status}) para o pagamento ${paymentId}. O agendamento permanece inalterado.`);
-      }
+      // ----------------------------------------------------------------------
+      // VISAO ATUAL DA OPERACAO
+      //
+      // Entre o POST e as escritas abaixo, outro ator pode mover a operacao: o
+      // webhook (estorno concluido ou recusado) ou outro worker que detinha a
+      // lease. Decidir com a copia em memoria gravava um estado ja' superado.
+      // A operacao e' relida no banco imediatamente ANTES das escritas e de
+      // novo DEPOIS delas (`settleWithCurrentOperation`), e so' a linha lida
+      // do banco define `refunded` / `refund_denied`.
+      // ----------------------------------------------------------------------
+      let isRefundDenied = false;
+      let refundState = 'none' as RefundFinancialState;
+      const refreshRefundView = async (): Promise<void> => {
+        if (isPaid && refundOperation) {
+          refundOperation = await RefundOperationRepository.get(adminClient, refundOperation.id);
+          isRefundConfirmed = refundOperation.status === 'COMPLETED' && !!refundOperation.acknowledged_at;
+        }
+        isRefundDenied = isPaid && !isRefundConfirmed && refundOperation?.status === 'DENIED';
+        refundState = !isPaid ? 'none'
+          : (isRefundConfirmed ? 'confirmed' : (isRefundDenied ? 'denied' : 'in_review'));
+      };
+      const financialStatus = (): 'refunded' | 'refund_requested' | 'refund_denied' | 'released' => !isPaid ? 'released'
+        : (isRefundConfirmed ? 'refunded' : (isRefundDenied ? 'refund_denied' : 'refund_requested'));
+      /**
+       * Depois das escritas: rele a operacao e, se ela mudou ou se a aula foi
+       * encerrada por outro ator com um estado mais antigo, alinha ledger,
+       * parcelas e `payment_status` ao estado ATUAL. So' promove (em analise ->
+       * confirmado/recusado); nunca rebaixa o que outro ator ja' confirmou.
+       */
+      const settleWithCurrentOperation = async (ids: string[]): Promise<void> => {
+        if (!isPaid || !refundOperation || !paymentId) return;
+        const written = refundState;
+        await refreshRefundView();
+        if (refundState !== written && (isRefundConfirmed || isRefundDenied)) {
+          console.warn(`[BookingCancellationCore] Refund operation ${refundOperation.id} moved to ${refundOperation.status} during the write; realigning ledger (${written} -> ${refundState}).`);
+          if (isRefundConfirmed) {
+            await BookingCancellationCore.applyInstallmentOutcome(adminClient, {
+              isPaid, isRefundConfirmed, scope: effectiveScope, paymentId, groupId: appointment.group_id
+            });
+          }
+          await BookingCancellationCore.writeRefundTransactions(adminClient, {
+            paymentId, appointments: appointmentsToCancel, reason, isRefundConfirmed, isRefundDenied
+          });
+        }
+        await BookingCancellationCore.alignClosedAppointments(adminClient, ids, refundState);
+      };
 
+      await refreshRefundView();
       if (isPaid && !isRefundConfirmed) {
-        const refundStatus = refundOperation?.status || 'UNKNOWN';
-        console.warn(`[BookingCancellationCore] Refund for ${paymentId} is not COMPLETED (state: ${refundStatus}). Appointment left untouched.`);
-        return {
-          success: false,
-          alreadyProcessed: false,
-          reason,
-          status: 'pending_refund',
-          paymentStatus: 'refund_requested',
-          isPaid: true,
-          processedCount: 0,
-          groupId: appointment.group_id || appointment.id,
-          refundStatus,
-          message: 'Estorno em processamento. O agendamento permanece inalterado ate a confirmacao do gateway.'
-        };
+        console.warn(`[BookingCancellationCore] Refund for ${paymentId} is not COMPLETED (state: ${refundOperation?.status || 'UNKNOWN'}). Closing the appointment operationally; financial state: ${refundState}.`);
       }
 
       // 6. Update payment_installments table (SSOT)
@@ -714,21 +816,51 @@ export class BookingCancellationCore {
       // 7. Update Financial Transactions
       if (isPaid && paymentId) {
         await BookingCancellationCore.writeRefundTransactions(adminClient, {
-          paymentId, appointments: appointmentsToCancel, reason, isRefundConfirmed
+          paymentId, appointments: appointmentsToCancel, reason, isRefundConfirmed, isRefundDenied
         });
       }
 
       // 8. Update Appointments Table
       const cancelIds = appointmentsToCancel.map((a: any) => a.id);
+      if (isFinancialRetry) {
+        // Somente o estado financeiro muda; a aula continua encerrada.
+        const { error: retryError } = await adminClient
+          .from('appointments')
+          .update({ payment_status: financialStatus(), updated_at: new Date().toISOString() })
+          .in('id', cancelIds)
+          .in('status', CLOSED_STATUSES);
+        if (retryError) throw retryError;
+        await settleWithCurrentOperation(cancelIds);
+        const retryPaymentStatus = financialStatus();
+        return {
+          success: true,
+          alreadyProcessed: false,
+          reason,
+          status: appointment.status === 'expired' ? 'expired' : 'cancelled',
+          paymentStatus: retryPaymentStatus,
+          refundConfirmed: isRefundConfirmed,
+          refundState,
+          isPaid,
+          processedCount: cancelIds.length,
+          groupId: appointment.group_id || appointment.id,
+          refundStatus: refundOperation?.status,
+          message: isRefundConfirmed
+            ? 'Estorno confirmado pelo gateway.'
+            : `Nova tentativa de estorno registrada. ${REFUND_IN_REVIEW_MESSAGE}`
+        };
+      }
       // P-1.20.1B: the terminal write carries its own CAS. This single statement
       // is atomic and idempotent, which is all the `cancelling` lock ever
       // provided — without the corruptible intermediate state.
-      const { targetStatus, paymentStatus, effectivelyCancelled } = await BookingCancellationCore.applyAppointmentOutcome(adminClient, {
-        ids: cancelIds, allowedStatuses, reason, isPaid, isRefundConfirmed, initiatedBy
+      const { targetStatus, effectivelyCancelled } = await BookingCancellationCore.applyAppointmentOutcome(adminClient, {
+        ids: cancelIds, allowedStatuses, reason, isPaid, isRefundConfirmed, isRefundDenied, initiatedBy
       });
+      // Vale tambem quando o CAS nao encerrou nada (outro worker encerrou
+      // antes, possivelmente com um estado financeiro mais antigo).
+      await settleWithCurrentOperation(cancelIds);
+      const paymentStatus = financialStatus();
       if (effectivelyCancelled === 0) {
-        // Another worker finished first. The refund is already terminal, so this
-        // is success, not failure.
+        // Another worker closed the appointment first: success, not failure.
         console.log(`[BookingCancellationCore] Appointments already in a terminal state for ${lockKey}.`);
         return {
           success: true,
@@ -736,6 +868,8 @@ export class BookingCancellationCore {
           reason,
           status: targetStatus,
           paymentStatus,
+          refundConfirmed: isRefundConfirmed,
+          refundState,
           isPaid,
           processedCount: 0,
           groupId: appointment.group_id || appointment.id,
@@ -747,7 +881,7 @@ export class BookingCancellationCore {
       // 9. Send Notifications
       const comboCount = appointmentsToCancel.length || 1;
       const groupId = appointment.group_id || appointment.id;
-      await BookingCancellationCore.sendCancellationNotifications(reason, appointment, comboCount, groupId);
+      await BookingCancellationCore.sendCancellationNotifications(reason, appointment, comboCount, groupId, refundState);
 
       return {
         success: true,
@@ -755,11 +889,18 @@ export class BookingCancellationCore {
         reason,
         status: targetStatus,
         paymentStatus,
+        refundConfirmed: isRefundConfirmed,
+        refundState,
         isPaid,
         processedCount: effectivelyCancelled,
         groupId,
         refundStatus: refundOperation?.status,
-        message: 'Cancelamento e estorno processados com sucesso.'
+        // So' afirma estorno concluido com confirmacao do gateway.
+        message: refundState === 'confirmed'
+          ? 'Cancelamento e estorno processados com sucesso.'
+          : (refundState === 'none'
+            ? 'Cancelamento processado com sucesso.'
+            : `Aula encerrada. ${REFUND_IN_REVIEW_MESSAGE}`)
       };
 
     } finally {
@@ -804,9 +945,10 @@ export class BookingCancellationCore {
    * (`appointment.price`); a taxa do Asaas nao entra nestes valores.
    */
   static async writeRefundTransactions(adminClient: any, p: {
-    paymentId: string; appointments: any[]; reason: CancellationReason; isRefundConfirmed: boolean;
+    paymentId: string; appointments: any[]; reason: CancellationReason; isRefundConfirmed: boolean; isRefundDenied?: boolean;
   }): Promise<void> {
     const { paymentId, appointments, reason, isRefundConfirmed } = p;
+    const isRefundDenied = !isRefundConfirmed && p.isRefundDenied === true;
     try {
       if (isRefundConfirmed) {
         await adminClient
@@ -816,13 +958,25 @@ export class BookingCancellationCore {
           .eq('type', 'lesson_payment');
       }
 
-      const refundTxStatus = isRefundConfirmed ? 'completed' : 'pending';
+      const refundTxStatus = isRefundConfirmed ? 'completed' : (isRefundDenied ? 'failed' : 'pending');
       for (const apt of appointments) {
         const gross = Math.round(Number(apt.price || 0));
         const fee = Math.floor(gross * 0.1);
         const net = gross - fee;
 
-        await adminClient
+        // Um estorno ja' CONFIRMADO no ledger nunca e' rebaixado por uma visao
+        // nao confirmada (worker concorrente ou webhook que chegou antes).
+        if (!isRefundConfirmed) {
+          const { data: existingRefundTx } = await adminClient
+            .from('transactions')
+            .select('id, status')
+            .eq('appointment_id', apt.id)
+            .eq('type', 'refund')
+            .maybeSingle();
+          if (existingRefundTx?.status === 'completed') continue;
+        }
+
+        const { error: refundTxError } = await adminClient
           .from('transactions')
           .upsert({
             appointment_id: apt.id,
@@ -842,22 +996,56 @@ export class BookingCancellationCore {
               provider: 'asaas',
               note: reason,
               refund_requested_at: new Date().toISOString(),
-              asaas_refund_status: isRefundConfirmed ? 'REFUNDED' : 'REFUND_REQUESTED'
+              asaas_refund_status: isRefundConfirmed ? 'REFUNDED' : (isRefundDenied ? 'REFUND_DENIED' : 'REFUND_REQUESTED')
             }
           }, { onConflict: 'appointment_id,type' });
+        if (refundTxError) {
+          console.error(`⚠️ Refund ledger write failed for appointment ${apt.id} (payment ${paymentId}):`, refundTxError.message || refundTxError);
+        }
       }
     } catch (txErr) {
       console.error(`⚠️ Error updating financial transactions:`, txErr);
     }
   }
 
+  /**
+   * Alinha `payment_status` das aulas JA' ENCERRADAS ao estado atual do
+   * estorno. Somente promocoes, cada uma com CAS no valor anterior:
+   *  - confirmado: qualquer valor -> `refunded`;
+   *  - recusado: `refund_requested` -> `refund_denied`;
+   *  - em analise: nada (nao rebaixa `refunded` nem `refund_denied`).
+   * Nunca altera `status`. Idempotente.
+   */
+  static async alignClosedAppointments(adminClient: any, ids: string[], refundState: RefundFinancialState): Promise<void> {
+    if (ids.length === 0) return;
+    const nowIso = new Date().toISOString();
+    if (refundState === 'confirmed') {
+      const { error } = await adminClient.from('appointments')
+        .update({ payment_status: 'refunded', updated_at: nowIso })
+        .in('id', ids)
+        .in('status', CLOSED_STATUSES)
+        .neq('payment_status', 'refunded');
+      if (error) throw error;
+    } else if (refundState === 'denied') {
+      const { error } = await adminClient.from('appointments')
+        .update({ payment_status: 'refund_denied', updated_at: nowIso })
+        .in('id', ids)
+        .in('status', CLOSED_STATUSES)
+        .eq('payment_status', 'refund_requested');
+      if (error) throw error;
+    }
+  }
+
   /** Passo 8 — escrita terminal da aula, com CAS pelo status de negocio. */
   static async applyAppointmentOutcome(adminClient: any, p: {
-    ids: string[]; allowedStatuses: string[]; reason: CancellationReason; isPaid: boolean; isRefundConfirmed: boolean; initiatedBy?: string;
-  }): Promise<{ targetStatus: 'cancelled' | 'expired'; paymentStatus: 'refunded' | 'refund_requested' | 'released'; effectivelyCancelled: number }> {
+    ids: string[]; allowedStatuses: string[]; reason: CancellationReason; isPaid: boolean; isRefundConfirmed: boolean; isRefundDenied?: boolean; initiatedBy?: string;
+  }): Promise<{ targetStatus: 'cancelled' | 'expired'; paymentStatus: 'refunded' | 'refund_requested' | 'refund_denied' | 'released'; effectivelyCancelled: number }> {
     const { ids, allowedStatuses, reason, isPaid, isRefundConfirmed, initiatedBy } = p;
+    const isRefundDenied = !isRefundConfirmed && p.isRefundDenied === true;
     const targetStatus: 'cancelled' | 'expired' = (reason === 'instructor_rejected' || reason === 'student_cancelled') ? 'cancelled' : 'expired';
-    const paymentStatus = isPaid ? (isRefundConfirmed ? 'refunded' : 'refund_requested') : 'released';
+    const paymentStatus = isPaid
+      ? (isRefundConfirmed ? 'refunded' : (isRefundDenied ? 'refund_denied' : 'refund_requested'))
+      : 'released';
 
     const updateData: Record<string, any> = {
       status: targetStatus,
@@ -886,14 +1074,18 @@ export class BookingCancellationCore {
   }
 
   /** Passo 9 — notificacoes (mesmas do fluxo sincrono). */
-  static async sendCancellationNotifications(reason: CancellationReason, appointment: any, comboCount: number, groupId: string): Promise<void> {
+  static async sendCancellationNotifications(reason: CancellationReason, appointment: any, comboCount: number, groupId: string, refundState: RefundFinancialState = 'none'): Promise<void> {
+    // Para o aluno, estorno recusado tambem e' "em analise": so' `confirmed`
+    // autoriza dizer que o valor foi reembolsado.
+    const refundNotice: 'confirmed' | 'in_review' | 'none' = refundState === 'confirmed' ? 'confirmed' : (refundState === 'none' ? 'none' : 'in_review');
     if (reason === 'instructor_rejected') {
       if (appointment.student_id) {
         try {
           await NotificationService.sendBookingRejected({
             studentId: appointment.student_id,
             comboCount,
-            groupId
+            groupId,
+            refundState: refundNotice
           });
         } catch (notifErr) {
           console.error(`⚠️ Error sending rejection notification:`, notifErr);
@@ -906,7 +1098,8 @@ export class BookingCancellationCore {
             userId: appointment.student_id,
             isInstructor: false,
             comboCount,
-            groupId
+            groupId,
+            refundState: refundNotice
           });
         }
         if (appointment.instructor_id) {
@@ -975,21 +1168,28 @@ export class BookingCancellationCore {
       .neq('payment_status', 'refunded');
 
     if (outcome.effectivelyCancelled > 0) {
-      await BookingCancellationCore.sendCancellationNotifications(reason, apts[0], apts.length, groupId || apts[0].id);
+      await BookingCancellationCore.sendCancellationNotifications(reason, apts[0], apts.length, groupId || apts[0].id, 'confirmed');
     }
     return { finalized: true, cancelled: outcome.effectivelyCancelled, reason: 'finalized' };
   }
 
   /**
-   * Recusa de uma operacao que NUNCA marcou nada como estornado: libera as
-   * marcas de "estorno solicitado". O pagamento original continua pago — uma
-   * recusa de estorno nunca vira pagamento falho.
+   * Recusa de uma operacao que NUNCA marcou nada como estornado. O pagamento
+   * original continua pago — uma recusa de estorno nunca vira pagamento falho.
+   *  - aula ja' ENCERRADA: `refund_requested` -> `refund_denied` (o dinheiro
+   *    segue com a plataforma; revisao manual). A aula nao e' reaberta;
+   *  - aula ainda aberta (legado): `refund_requested` -> `paid`.
    */
   static async releaseAfterDenial(adminClient: any, op: RefundOperationRecord, denialReason: string | null): Promise<void> {
     const { ids } = BookingCancellationCore.opContext(op);
     if (ids.length === 0) return;
     const nowIso = new Date().toISOString();
     try {
+      await adminClient.from('appointments')
+        .update({ payment_status: 'refund_denied', updated_at: nowIso })
+        .in('id', ids)
+        .in('status', CLOSED_STATUSES)
+        .eq('payment_status', 'refund_requested');
       await adminClient.from('appointments')
         .update({ payment_status: 'paid', updated_at: nowIso })
         .in('id', ids)
@@ -1001,6 +1201,20 @@ export class BookingCancellationCore {
         .neq('status', 'completed');
     } catch (err) {
       console.error(`⚠️ releaseAfterDenial failed for op ${op.id}:`, err);
+    }
+  }
+
+  /** `refund_denied` -> `refund_requested` nas aulas da operacao (estorno voltou a estar em analise). */
+  static async markRefundUnderReview(adminClient: any, op: RefundOperationRecord): Promise<void> {
+    const { ids } = BookingCancellationCore.opContext(op);
+    if (ids.length === 0) return;
+    try {
+      await adminClient.from('appointments')
+        .update({ payment_status: 'refund_requested', updated_at: new Date().toISOString() })
+        .in('id', ids)
+        .eq('payment_status', 'refund_denied');
+    } catch (err) {
+      console.error(`⚠️ markRefundUnderReview failed for op ${op.id}:`, err);
     }
   }
 
@@ -1046,6 +1260,13 @@ export class BookingCancellationCore {
           .update({ status: 'failed', metadata: { denial_reason: denialReason, denied_at: nowIso, refund_operation_id: op.id, false_completion_reverted: true } })
           .in('appointment_id', ids)
           .eq('type', 'refund');
+        // Aula encerrada nao volta a `paid` (seria "encerrada e paga", sem
+        // rastro da recusa): fica `refund_denied`.
+        await adminClient.from('appointments')
+          .update({ payment_status: 'refund_denied', updated_at: nowIso })
+          .in('id', ids)
+          .in('status', CLOSED_STATUSES)
+          .in('payment_status', ['refunded', 'refund_requested']);
         await adminClient.from('appointments')
           .update({ payment_status: 'paid', updated_at: nowIso })
           .in('id', ids)
@@ -1090,8 +1311,12 @@ export class BookingCancellationCore {
           if (op.status === 'CONFLICT' || confirmed) break;
           if (op.status === 'DENIED') {
             op = await RefundOperationRepository.reconcileTransition(adminClient, op.id, op.version, 'CONFLICT', {
-              metadata: { ...(op.metadata || {}), conflict_reason: 'gateway_shows_refund_done_after_denial' }
+              metadata: { ...(op.metadata || {}), conflict_reason: 'gateway_shows_refund_done_after_denial', requires_manual_review: true }
             }, fullAudit);
+            // O gateway mostra um estorno feito depois da recusa: a aula deixa
+            // de dizer "negado" e volta a "em analise". Nunca vira `refunded`
+            // por aqui — CONFLICT exige revisao.
+            await BookingCancellationCore.markRefundUnderReview(adminClient, op);
             break;
           }
           op = await RefundOperationRepository.reconcileTransition(adminClient, op.id, op.version, 'COMPLETED', {
@@ -1143,7 +1368,7 @@ export class BookingCancellationCore {
               denial_reason: reason,
               owner_id: null,
               lease_until: null,
-              metadata: { ...(op.metadata || {}), denied_at: nowIso }
+              metadata: { ...(op.metadata || {}), denied_at: nowIso, requires_manual_review: true }
             }, { ...fullAudit, reason });
             await BookingCancellationCore.releaseAfterDenial(adminClient, op, reason);
           }
@@ -1159,7 +1384,7 @@ export class BookingCancellationCore {
               denial_reason: reason,
               owner_id: null,
               lease_until: null,
-              metadata: { ...(op.metadata || {}), denied_at: nowIso }
+              metadata: { ...(op.metadata || {}), denied_at: nowIso, requires_manual_review: true }
             }, { ...fullAudit, reason, decision: reason });
             await BookingCancellationCore.releaseAfterDenial(adminClient, op, reason);
           }
@@ -1220,8 +1445,13 @@ export class BookingCancellationCore {
     let applied = 0, ambiguous = 0, ignored = 0;
 
     // Recusa tardia sobre conclusao CONFIRMADA: so' registra (nunca regride).
+    // Estorno concluido DEPOIS de uma recusa (ex.: refeito pelo painel do
+    // Asaas), sem nenhuma conclusao confirmada: a evidencia vai para as
+    // operacoes DENIED, que passam a CONFLICT (revisao) — nunca a COMPLETED.
+    const confirmedOps = all.filter((op) => op.status === 'COMPLETED' && !!op.acknowledged_at);
     const targets = actionable.length > 0 ? actionable
-      : (eventOutcome === 'DENIED' ? all.filter((op) => op.status === 'COMPLETED' && !!op.acknowledged_at) : []);
+      : (eventOutcome === 'DENIED' ? confirmedOps
+        : (eventOutcome === 'COMPLETED' && confirmedOps.length === 0 ? all.filter((op) => op.status === 'DENIED') : []));
 
     for (const op of targets) {
       const exclude = all.filter((o) => o.id !== op.id).map((o) => o.provider_refund_id).filter(Boolean) as string[];

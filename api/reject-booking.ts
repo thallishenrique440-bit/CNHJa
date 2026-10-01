@@ -74,6 +74,8 @@ export default async function handler(req: any, res: any) {
       message: result.message,
       status: result.status,
       payment_status: result.paymentStatus,
+      refund_confirmed: result.refundConfirmed,
+      refund_state: result.refundState,
       count: result.processedCount
     });
 

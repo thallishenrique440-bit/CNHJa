@@ -159,11 +159,22 @@ export class NotificationService {
     studentId: string;
     comboCount: number;
     groupId: string;
+    /**
+     * Estado do estorno no momento do aviso. So' `confirmed` (confirmado pelo
+     * gateway) permite dizer que o valor foi reembolsado. Omitido = sem
+     * afirmacao sobre reembolso.
+     */
+    refundState?: 'confirmed' | 'in_review' | 'none';
   }) {
     const title = params.comboCount > 1 ? 'Pacote recusado' : 'Aula recusada';
-    const message = params.comboCount > 1
-      ? `Seu pacote de ${params.comboCount} aulas foi recusado pelo instrutor e o valor foi reembolsado.`
-      : 'Sua solicitação de aula foi recusada pelo instrutor e o valor foi reembolsado.';
+    const base = params.comboCount > 1
+      ? `Seu pacote de ${params.comboCount} aulas foi recusado pelo instrutor`
+      : 'Sua solicitação de aula foi recusada pelo instrutor';
+    const message = params.refundState === 'confirmed'
+      ? `${base} e o valor foi reembolsado.`
+      : (params.refundState === 'in_review'
+        ? `${base}. O reembolso está em análise e pode ser acompanhado na área Financeiro.`
+        : `${base}.`);
 
     return this.createNotification({
       userId: params.studentId,
@@ -205,11 +216,16 @@ export class NotificationService {
     isInstructor: boolean;
     comboCount: number;
     groupId: string;
+    /** Somente para o aluno: `in_review` acrescenta o aviso de reembolso em analise. */
+    refundState?: 'confirmed' | 'in_review' | 'none';
   }) {
     const title = params.comboCount > 1 ? 'Pacote expirado' : 'Agendamento expirado';
-    const message = params.comboCount > 1
+    const base = params.comboCount > 1
       ? `O prazo para aprovação do pacote de ${params.comboCount} aulas expirou.`
       : 'O prazo para aceitar a solicitação de aula expirou.';
+    const message = (!params.isInstructor && params.refundState === 'in_review')
+      ? `${base} O reembolso está em análise e pode ser acompanhado na área Financeiro.`
+      : base;
 
     return this.createNotification({
       userId: params.userId,

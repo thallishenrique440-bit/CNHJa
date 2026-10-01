@@ -100,4 +100,35 @@ export class PaymentStateMachine {
 
     return 'pending';
   }
+
+  /**
+   * Estados de REEMBOLSO de `appointments.payment_status`. Sao gravados por aula
+   * pelo BookingCancellationCore a partir da operacao de estorno e NAO sao
+   * derivaveis das parcelas — a projecao das parcelas nao pode apaga-los.
+   */
+  public static readonly REFUND_PAYMENT_STATUSES: readonly string[] = ['refund_requested', 'refund_denied', 'refunded'];
+
+  /**
+   * A projecao das parcelas pode sobrescrever o `payment_status` atual da aula?
+   *  - aula sem estado de reembolso: sim (processamento normal das parcelas);
+   *  - aula com estado de reembolso: somente quando a projecao e' `refunded`
+   *    (todas as parcelas REFUNDED pelo gateway). Uma parcela recebida nunca
+   *    transforma reembolso solicitado/recusado/confirmado em `paid`.
+   */
+  public static shouldProjectionOverwrite(
+    currentPaymentStatus: string | null | undefined,
+    projection: AppointmentPaymentStatusProjection
+  ): boolean {
+    if (projection === 'refunded') return true;
+    return !PaymentStateMachine.REFUND_PAYMENT_STATUSES.includes(String(currentPaymentStatus ?? ''));
+  }
+
+  /**
+   * A mesma regra de `shouldProjectionOverwrite`, como filtro PostgREST (`or`)
+   * para ir na propria instrucao UPDATE. `null` = sem filtro.
+   */
+  public static projectionOverwriteFilter(projection: AppointmentPaymentStatusProjection): string | null {
+    if (projection === 'refunded') return null;
+    return `payment_status.is.null,payment_status.not.in.(${PaymentStateMachine.REFUND_PAYMENT_STATUSES.join(',')})`;
+  }
 }

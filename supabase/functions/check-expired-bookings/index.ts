@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
+import { BookingCancellationCore, classifyCancellationResult } from '../_shared/BookingCancellationCore.ts'
 import { asaasFetch } from '../_shared/asaasClient.ts'
 import { requireCronAuth } from '../_shared/cronAuth.ts'
 
@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
           httpFetch: asaasFetch
         });
 
-        return { id: booking.id, status: 'expired_success', result: res };
+        return { id: booking.id, status: 'expired_success', refund: classifyCancellationResult(res), result: res };
       } catch (err: any) {
         console.error(`❌ [Module A] Error expiring booking ${booking.id} via Core:`, err);
         throw err;
@@ -70,6 +70,12 @@ Deno.serve(async (req) => {
     // MODULE B — AULA PAGA NÃO ACEITA (Paid pending_approval past start_time)
     // Target status: pending_approval AND payment_status: paid
     // Condition: (date + start_time) in America/Sao_Paulo <= NOW()
+    //
+    // O Core encerra a aula (`expired`) na PRIMEIRA execucao, qualquer que seja
+    // o estado do estorno. A partir dai' ela sai deste seletor (status deixa de
+    // ser `pending_approval`; payment_status deixa de ser `paid`), portanto nao
+    // e' reprocessada. Operacao DENIED/CONFLICT nunca recebe novo POST: o Core
+    // reaproveita a operacao existente (`findByObligation`).
     // =========================================================================
     console.log("🔍 [Module B] Fetching paid pending_approval bookings past start time...")
     const { data: pendingPaidBookings, error: fetchPaidError } = await supabaseAdmin
@@ -120,7 +126,7 @@ Deno.serve(async (req) => {
           httpFetch: asaasFetch
         });
 
-        return { id: booking.id, status: 'expired_success', result: res };
+        return { id: booking.id, status: 'expired_success', refund: classifyCancellationResult(res), result: res };
       } catch (err: any) {
         console.error(`❌ [Module B] Error expiring paid booking ${booking.id} via Core:`, err);
         throw err;
@@ -131,9 +137,17 @@ Deno.serve(async (req) => {
     const moduleBSkipped = moduleBResults.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
     const moduleBFailed = moduleBResults.filter(r => r.status === 'rejected').length
 
+    // `success` = aula ENCERRADA. O estorno e' contado a parte: so'
+    // `refund_confirmed` e' estorno concluido; pendente e recusado nunca entram
+    // nessa conta.
+    const countRefund = (kind: string) => moduleBResults.filter(r => r.status === 'fulfilled' && (r.value as any).refund === kind).length
+    const moduleBRefundConfirmed = countRefund('refund_confirmed')
+    const moduleBRefundInReview = countRefund('refund_in_review')
+    const moduleBRefundDenied = countRefund('refund_denied')
+
     console.log(`🏁 check-expired-bookings job finished.
       Module A (Unpaid): Success=${moduleASuccess}, Skipped=${moduleASkipped}, Failed=${moduleAFailed}
-      Module B (Paid): Success=${moduleBSuccess}, Skipped=${moduleBSkipped}, Failed=${moduleBFailed}`)
+      Module B (Paid): Closed=${moduleBSuccess}, Skipped=${moduleBSkipped}, Failed=${moduleBFailed}, RefundConfirmed=${moduleBRefundConfirmed}, RefundInReview=${moduleBRefundInReview}, RefundDenied=${moduleBRefundDenied}`)
 
     return new Response(
       JSON.stringify({ 
@@ -150,6 +164,9 @@ Deno.serve(async (req) => {
           success: moduleBSuccess,
           skipped: moduleBSkipped,
           failed: moduleBFailed,
+          refund_confirmed: moduleBRefundConfirmed,
+          refund_in_review: moduleBRefundInReview,
+          refund_denied: moduleBRefundDenied,
           results: moduleBResults
         }
       }),

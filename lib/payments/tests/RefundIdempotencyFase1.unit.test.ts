@@ -184,14 +184,15 @@ async function main() {
     const gwA = gateway(payment([split('PENDING')]), DENY_400);
     const r1 = await attempt(() => run(db, gwA, { reason: 'auto_expired' }));
     const keyAfterFirst = db.tables.refund_operations[0]?.operation_key;
-    check(!!r1.error && db.tables.refund_operations.length === 1 && db.tables.refund_operations[0].status === 'DENIED',
+    check(!r1.error && r1.value?.refundState === 'denied' && db.tables.refund_operations.length === 1 && db.tables.refund_operations[0].status === 'DENIED',
       '1e. primeira execucao: 1 operacao, recusada (DENIED)');
 
     const gwB = gateway(payment([split('REFUNDED')]), OK_DONE());
     const r2 = await attempt(() => run(db, gwB, { reason: 'auto_expired' }));
     check(db.tables.refund_operations.length === 1, '1f. split revertido: NENHUMA operacao nova e\' criada');
     check(db.tables.refund_operations[0].operation_key === keyAfterFirst, '1g. a operacao mantem a mesma chave');
-    check(gwB.posts().length === 0 && !!r2.error, '1h. split revertido: nenhum POST; a recusa continua valendo');
+    check(gwB.posts().length === 0 && r2.value?.refundConfirmed === false && db.tables.appointments[0].payment_status === 'refund_denied',
+      '1h. split revertido: nenhum POST; a recusa continua valendo');
     check(JSON.stringify(db.tables.refund_operations[0].metadata.split_snapshot) === JSON.stringify([{ id: 'spl_1', amountCents: 9000 }]),
       '1i. split original preservado como informacao (metadata.split_snapshot)');
     check(db.tables.refund_operations[0].metadata.key_version === 'v2', '1j. operacao nova usa a chave v2');
@@ -213,8 +214,8 @@ async function main() {
     check(posts === 0, '2a. 5 ciclos do cron apos a recusa, com o split variando: 0 POST');
     check(db.tables.refund_operations.length === 1 && db.tables.refund_operations[0].status === 'DENIED', '2b. continua 1 operacao, DENIED');
     check(db.tables.refund_operations[0].attempt === 1, '2c. attempt nao cresce: nenhuma tentativa nova foi feita');
-    check(db.tables.appointments[0].status === 'pending_approval' && db.tables.appointments[0].payment_status === 'paid',
-      '2d. aula inalterada (cancelamento operacional fora desta fase)');
+    check(db.tables.appointments[0].status === 'expired' && db.tables.appointments[0].payment_status === 'refund_denied',
+      '2d. aula encerrada (expired) com o estorno refund_denied');
 
     // Caso real de producao: DUAS operacoes DENIED antigas (chaves v1 diferentes).
     const dbProd = db0({ refund_operations: [
@@ -234,7 +235,8 @@ async function main() {
     const db = db0({ refund_operations: [OP({ status: 'CONFLICT' })] });
     const gw = gateway(payment([split('REFUNDED')]), OK_DONE());
     const r = await attempt(() => run(db, gw));
-    check(gw.posts().length === 0 && db.tables.refund_operations.length === 1 && !!r.error, '3a. CONFLICT: nenhum POST, nenhuma operacao nova');
+    check(gw.posts().length === 0 && db.tables.refund_operations.length === 1 && r.value?.refundConfirmed === false
+      && db.tables.appointments[0].payment_status === 'refund_requested', '3a. CONFLICT: nenhum POST, nenhuma operacao nova, estorno em analise');
     const gw2 = gateway(payment([]), OK_DONE());
     await attempt(() => run(db, gw2, { explicitRetry: true }));
     check(gw2.posts().length === 0 && db.tables.refund_operations[0].status === 'CONFLICT', '3b. CONFLICT nao e\' reaberto nem por tentativa explicita');
@@ -297,7 +299,7 @@ async function main() {
     const db3 = db0({ refund_operations: [OP({ status: 'PENDING', owner_id: 'worker-outro', lease_until: future, operation_key: 'refund:v1:old' })] });
     const gw3 = gateway(payment([split('REFUNDED')]), OK_DONE());
     const r3 = await attempt(() => run(db3, gw3));
-    check(gw3.posts().length === 0 && db3.tables.refund_operations.length === 1 && r3.value?.status === 'pending_refund',
+    check(gw3.posts().length === 0 && db3.tables.refund_operations.length === 1 && r3.value?.refundState === 'in_review',
       '5e. operacao em andamento por outro worker: nenhum POST, nenhuma operacao nova');
   }
 

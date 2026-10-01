@@ -31,6 +31,20 @@ export type LessonDisplayStatus =
   | 'lunch'             // Almoço (apenas instrutor)
   | 'unavailable';      // Indisponível (apenas instrutor)
 
+/** Cancelamentos técnicos (retentativa de checkout, limpeza): nunca são exibidos ao aluno. */
+const TECHNICAL_CANCEL_REASONS = ['user_retry_new_attempt', 'system_cleanup_expired', 'payment_creation_failed'];
+
+/**
+ * Regra da agenda ativa do aluno ("Minhas Aulas"): aulas encerradas não aparecem.
+ * `cancelled` já é excluído na consulta; aqui saem `expired` e os cancelamentos
+ * técnicos. A regra olha apenas o estado OPERACIONAL: o estado do reembolso
+ * (pendente, concluído ou negado) não faz a aula voltar à agenda.
+ */
+export function isHiddenFromStudentAgenda(status: string, cancelledReason?: string | null): boolean {
+  if (status === 'expired') return true;
+  return status === 'cancelled' && !!cancelledReason && TECHNICAL_CANCEL_REASONS.includes(cancelledReason);
+}
+
 /**
  * Deriva o status de exibição de uma aula com base no status do banco e no tempo atual.
  */

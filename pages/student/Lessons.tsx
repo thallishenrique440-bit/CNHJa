@@ -8,7 +8,7 @@ import { supabase } from '../../lib/supabase';
 import { invokeSecureFunction } from '../../lib/functions';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
-import { getDerivedStatus, LessonDisplayStatus } from '../../lib/lessonStatus';
+import { getDerivedStatus, isHiddenFromStudentAgenda, LessonDisplayStatus } from '../../lib/lessonStatus';
 import { getGoogleMapsUrl } from '../../src/utils/maps';
 import { AGENDA_SLOTS, LESSON_DURATION } from '../../lib/slots';
 
@@ -174,13 +174,7 @@ export const StudentLessons: React.FC = () => {
     
     return rawLessons.map((apt): Lesson | null => {
       // Exclude expired lessons or technical cancellations (user_retry_new_attempt, system_cleanup_expired, payment_creation_failed)
-      const isTechnicalCancelled = 
-        apt.status === 'cancelled' && 
-        (apt.cancelled_reason === 'user_retry_new_attempt' || 
-         apt.cancelled_reason === 'system_cleanup_expired' || 
-         apt.cancelled_reason === 'payment_creation_failed');
-
-      if (apt.status === 'expired' || isTechnicalCancelled) {
+      if (isHiddenFromStudentAgenda(apt.status, apt.cancelled_reason)) {
         return null;
       }
 
@@ -1054,20 +1048,31 @@ export const StudentLessons: React.FC = () => {
 
     try {
       // Call cancel-booking secure Edge Function for each appointment ID to be cancelled
+      // A aula é encerrada mesmo com o reembolso ainda não confirmado pelo
+      // provedor; nesse caso o aluno é avisado de que ele está em análise.
+      let refundInReview = false;
       for (const id of lessonToCancel.ids) {
-        const { error } = await invokeSecureFunction('cancel-booking', {
+        const { data, error } = await invokeSecureFunction('cancel-booking', {
           body: { appointment_id: id }
         });
 
         if (error) {
           throw error;
         }
+        if (data?.refund_state === 'in_review' || data?.refund_state === 'denied') {
+          refundInReview = true;
+        }
       }
 
       // Optimistic Update: Filter out the cancelled lessons
       setRawLessons(prev => prev.filter(l => !lessonToCancel.ids.includes(l.id)));
-      
-      addToast("Aula cancelada e horário liberado.", "success");
+
+      addToast(
+        refundInReview
+          ? "Aula cancelada e horário liberado. O reembolso está em análise e pode ser acompanhado na área Financeiro."
+          : "Aula cancelada e horário liberado.",
+        "success"
+      );
       setLessonToCancel(null);
 
     } catch (err: any) {

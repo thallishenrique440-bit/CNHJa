@@ -165,18 +165,22 @@ Deno.serve(async (req) => {
           console.error('❌ Error executing auto_expired in approve-booking via Core:', cancelErr);
         }
 
-        const refundCompleted = !expirationError
-          && (expirationResult?.status === 'expired' || expirationResult?.status === 'cancelled');
+        // `status === 'expired'` deixou de significar "estorno concluido": a aula
+        // e' encerrada mesmo com o estorno pendente ou recusado. So' a
+        // confirmacao do gateway (`refundConfirmed`) autoriza dizer que o
+        // reembolso foi processado.
+        const refundCompleted = !expirationError && expirationResult?.refundConfirmed === true;
 
         const expirationMessage = refundCompleted
           ? 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O reembolso foi processado automaticamente.'
-          : 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O estorno ainda NÃO foi confirmado pelo gateway e está pendente de reconciliação.';
+          : 'Esta aula expirou pois o horário de início foi atingido sem confirmação. O reembolso ao aluno ainda NÃO foi confirmado pelo gateway e está em análise.';
 
         return new Response(
           JSON.stringify({ 
             error: expirationMessage, 
             code: 'LESSON_EXPIRED',
             refund_completed: refundCompleted,
+            refund_state: expirationResult?.refundState || null,
             refund_status: expirationResult?.refundStatus || null
           }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

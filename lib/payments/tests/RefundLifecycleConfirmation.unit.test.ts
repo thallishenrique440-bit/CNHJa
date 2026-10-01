@@ -298,12 +298,12 @@ async function run() {
     const gw = gateway({ ok: true, status: 200, body: paymentWithRefunds([PENDING_ITEM]) });
     const res = await cancel(db, gw);
     const op = db.tables.refund_operations[0];
-    check(res.status === 'pending_refund', '2. pendente: resultado pending_refund');
+    check(res.status === 'cancelled' && res.refundState === 'in_review' && res.refundConfirmed === false, '2. pendente: aula encerrada, estorno em analise');
     check(op.status === 'PENDING' && !!op.acknowledged_at && op.owner_id === null && op.lease_until === null,
       '2. PENDING reconhecido, lease liberada (reaper nao o rebaixa)');
-    check(db.tables.appointments[0].status === 'pending_approval' && db.tables.appointments[0].payment_status === 'paid',
-      '2. aula NAO marcada como estornada');
-    check(db.tables.payment_installments[0].status === 'RECEIVED' && !refundTx(db), '2. parcela e ledger intocados');
+    check(db.tables.appointments[0].status === 'cancelled' && db.tables.appointments[0].payment_status === 'refund_requested',
+      '2. aula encerrada e NAO marcada como estornada');
+    check(db.tables.payment_installments[0].status === 'RECEIVED' && refundTx(db)?.status === 'pending', '2. parcela intocada; ledger de estorno pendente');
   }
 
   // --------------------------------------------------------------------------
@@ -314,9 +314,9 @@ async function run() {
     const gw = gateway({ ok: true, status: 200, body: { id: PAYMENT_ID } });
     const res = await cancel(db, gw);
     const op = db.tables.refund_operations[0];
-    check(res.status === 'pending_refund' && op.status === 'UNKNOWN', '3. ambiguo: UNKNOWN, sem conclusao');
+    check(res.status === 'cancelled' && res.refundConfirmed === false && op.status === 'UNKNOWN', '3. ambiguo: UNKNOWN, sem conclusao');
     check(op.provider_refund_id === null, '3. id do pagamento do corpo NAO e\' gravado como id do estorno');
-    check(db.tables.appointments[0].status === 'pending_approval', '3. aula intocada');
+    check(db.tables.appointments[0].status === 'cancelled' && db.tables.appointments[0].payment_status === 'refund_requested', '3. aula encerrada, estorno em analise');
   }
 
   // --------------------------------------------------------------------------
@@ -325,17 +325,18 @@ async function run() {
   {
     const db = baseDb();
     const gw = gateway({ ok: false, status: 400, body: { errors: [{ code: 'invalid_action', description: 'Saldo insuficiente. Contato: fin@x.com' }] } });
-    const err = await expectThrow(() => cancel(db, gw));
+    const res4 = await cancel(db, gw);
     const op = db.tables.refund_operations[0];
-    check(!!err && op.status === 'DENIED', '4. HTTP 4xx: DENIED e erro explicito');
+    check(res4.refundState === 'denied' && res4.refundConfirmed === false && op.status === 'DENIED', '4. HTTP 4xx: DENIED, sem afirmar estorno');
     check(op.denial_reason.includes('Saldo insuficiente') && !op.denial_reason.includes('fin@x.com'), '4. motivo real preservado, sem dado pessoal');
-    check(db.tables.appointments[0].status === 'pending_approval' && db.tables.appointments[0].payment_status === 'paid',
-      '4. recusa nao altera a aula nem marca pagamento falho');
+    check(db.tables.appointments[0].status === 'cancelled' && db.tables.appointments[0].payment_status === 'refund_denied',
+      '4. recusa encerra a aula com refund_denied — nunca pagamento falho nem refunded');
 
     const db2 = baseDb();
     const gw2 = gateway({ ok: true, status: 200, body: paymentWithRefunds([CANCELLED_ITEM]) });
-    const err2 = await expectThrow(() => cancel(db2, gw2));
-    check(!!err2 && db2.tables.refund_operations[0].status === 'DENIED', '4b. 2xx com item CANCELLED: DENIED');
+    const res4b = await cancel(db2, gw2);
+    check(res4b.refundState === 'denied' && db2.tables.refund_operations[0].status === 'DENIED'
+      && db2.tables.appointments[0].payment_status === 'refund_denied', '4b. 2xx com item CANCELLED: DENIED');
   }
 
   // --------------------------------------------------------------------------
@@ -348,13 +349,13 @@ async function run() {
     check(!!err && db.tables.refund_operations[0].status === 'UNKNOWN', '5. timeout: UNKNOWN (pode ter sido aplicado)');
     const gw2 = gateway({ ok: true, status: 200, body: paymentWithRefunds([DONE_ITEM]) });
     const res2 = await cancel(db, gw2);
-    check(gw2.posts().length === 0 && res2.status === 'pending_refund', '11. UNKNOWN nao gera novo POST');
+    check(gw2.posts().length === 0 && res2.status === 'cancelled' && res2.refundConfirmed === false, '11. UNKNOWN nao gera novo POST');
 
     const db3 = baseDb();
     await cancel(db3, gateway({ ok: true, status: 200, body: paymentWithRefunds([PENDING_ITEM]) }));
     const gw3 = gateway({ ok: true, status: 200, body: paymentWithRefunds([DONE_ITEM]) });
     const res3 = await cancel(db3, gw3);
-    check(gw3.posts().length === 0 && res3.status === 'pending_refund', '11. PENDING reconhecido nao gera novo POST');
+    check(gw3.posts().length === 0 && res3.status === 'cancelled' && res3.refundConfirmed === false, '11. PENDING reconhecido nao gera novo POST');
   }
 
   // --------------------------------------------------------------------------
@@ -435,7 +436,8 @@ async function run() {
     check(db.tables.payment_installments[0].status === 'RECEIVED', '10. parcela volta a RECEIVED');
     check(lessonTx(db)?.status === 'pending', '10. pagamento da aula restaurado (nao fica "failed")');
     check(refundTx(db)?.status === 'failed', '10. ledger de estorno marca a recusa');
-    check(db.tables.appointments[0].payment_status === 'paid', '10. aula deixa de afirmar "refunded"');
+    check(db.tables.appointments[0].payment_status === 'refund_denied' && db.tables.appointments[0].status === 'cancelled',
+      '10. aula encerrada deixa de afirmar "refunded" (refund_denied) e nao e\' reaberta');
     check(events(db).some((e: Row) => e.from_status === 'COMPLETED' && e.to_status === 'DENIED' && e.source === 'webhook'), '10. correcao rastreada em refund_operation_events');
   }
 

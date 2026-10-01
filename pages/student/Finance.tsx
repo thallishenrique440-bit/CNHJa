@@ -18,6 +18,7 @@ interface HistoryItem {
   platformFee?: number;
   netAmount?: number;
   status: 'pending' | 'completed' | 'failed' | string;
+  refundStatus?: 'pending' | 'denied' | 'completed';
   instructorName: string;
   appointmentDate?: string;
   appointmentTime?: string;
@@ -147,6 +148,7 @@ export const StudentFinance: React.FC = () => {
             platformFee: h.feeAmountCents,
             netAmount: h.lessonPriceCents,
             status: h.status,
+            refundStatus: h.refundStatus,
             instructorName: h.instructorName,
             appointmentDate: h.appointmentDate,
             appointmentTime: h.appointmentTime,

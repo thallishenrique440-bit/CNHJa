@@ -1017,7 +1017,13 @@ export const InstructorAgenda: React.FC = () => {
         });
         
         closeLessonModal();
-        addToast("Solicitação recusada e valor estornado.", 'info');
+        // Só afirma o estorno quando o gateway o confirmou.
+        addToast(
+            data?.refund_state === 'in_review' || data?.refund_state === 'denied'
+                ? "Solicitação recusada. O reembolso ao aluno está em análise."
+                : (data?.refund_state === 'none' ? "Solicitação recusada." : "Solicitação recusada e valor estornado."),
+            'info'
+        );
 
         setTimeout(() => {
             fetchAppointments();

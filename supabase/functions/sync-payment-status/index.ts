@@ -88,6 +88,12 @@ Deno.serve(async (req) => {
     const refundReconciliation = await reconcileRefundOperations()
 
     // Find appointments that are stuck in checkout/approval or have pending refund reconciliations
+    //
+    // Aulas ENCERRADAS so' entram com `paid` (legado) ou `refund_requested`
+    // (estorno em analise). `refund_denied` e `refunded` ficam de fora de
+    // proposito: sao estados finais para este job — uma aula com estorno
+    // recusado nao e' reprocessada a cada execucao nem tem o estado
+    // sobrescrito. Este job nunca altera `status` de aula encerrada.
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
       .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id, date, start_time, created_at, payment_status')
@@ -261,15 +267,22 @@ Deno.serve(async (req) => {
                   .eq('id', tx.id);
               }
 
+              // Recusa de estorno NUNCA vira pagamento falho (`failed`): o
+              // pagamento original continua valido. Aula encerrada passa a
+              // `refund_denied`; aula ainda aberta volta a `paid` (mesma regra
+              // de BookingCancellationCore.releaseAfterDenial). O CAS em
+              // `payment_status` evita sobrescrever um estado mais novo.
               for (const apt of (allGroupApts || groupApts)) {
                 if (apt.payment_status === 'refund_requested') {
+                  const isClosed = ['cancelled', 'expired'].includes(apt.status);
                   await supabaseAdmin
                     .from('appointments')
                     .update({
-                      payment_status: 'failed',
+                      payment_status: isClosed ? 'refund_denied' : 'paid',
                       updated_at: new Date().toISOString()
                     })
-                    .eq('id', apt.id);
+                    .eq('id', apt.id)
+                    .eq('payment_status', 'refund_requested');
                 }
               }
 

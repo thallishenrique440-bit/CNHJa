@@ -224,6 +224,19 @@ export class PaymentStateService {
             aptUpdateQuery = aptUpdateQuery.eq('id', appointmentId);
           }
 
+          // A projecao das PARCELAS e' recalculada para o grupo inteiro a cada
+          // transicao de parcela. O estado de REEMBOLSO de cada aula
+          // (`refund_requested`, `refund_denied`, `refunded`) pertence ao
+          // BookingCancellationCore e nao e' derivavel das parcelas: sem este
+          // filtro, a chegada da parcela seguinte trocava `refund_denied` por
+          // `paid`. O filtro vai na propria instrucao UPDATE (atomico). So' a
+          // projecao `refunded` (todas as parcelas REFUNDED pelo gateway) ainda
+          // alcanca essas aulas.
+          const refundStateFilter = PaymentStateMachine.projectionOverwriteFilter(newProjection);
+          if (refundStateFilter) {
+            aptUpdateQuery = aptUpdateQuery.or(refundStateFilter);
+          }
+
           const { error: aptErr } = await aptUpdateQuery;
           if (aptErr) {
             warnings.push({
