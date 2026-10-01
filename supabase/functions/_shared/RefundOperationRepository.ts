@@ -90,6 +90,49 @@ export class RefundOperationRepository {
     return data as RefundOperationRecord | null;
   }
 
+  /**
+   * Operacao ja' existente para a MESMA obrigacao de estorno, qualquer que seja
+   * a versao da chave (linhas antigas tem chave v1, que variava com os splits).
+   *
+   * Obrigacao = pagamento + escopo + mesmas aulas + mesmo valor pedido.
+   * Havendo mais de uma (duplicatas historicas), vale a mais "viva":
+   * ativa/concluida > CONFLICT > DENIED; empate -> a mais recente. Assim uma
+   * recusa (DENIED) ou um conflito (CONFLICT) NUNCA e' contornado pela criacao
+   * de uma operacao nova.
+   */
+  static async findByObligation(
+    supabase: SupabaseClient,
+    provider: string,
+    providerPaymentId: string,
+    scope: string,
+    appointmentIds: string[],
+    requestedAmountCents: number
+  ): Promise<RefundOperationRecord | null> {
+    const { data, error } = await supabase
+      .from('refund_operations')
+      .select('*')
+      .eq('provider', provider)
+      .eq('provider_payment_id', providerPaymentId)
+      .eq('scope', scope);
+    if (error) throw new RefundOperationPersistenceError('Failed to look up refund obligation', error);
+
+    const wanted = [...appointmentIds].sort().join('|');
+    const rank: Record<string, number> = {
+      // Fase 1 (ajuste final): COMPLETED > ativos/parciais > CONFLICT > DENIED.
+      // Empate no mesmo nivel: mais recente (created_at desc).
+      COMPLETED: 6, PARTIALLY_COMPLETED: 5, PENDING: 5, UNKNOWN: 5, REQUESTED: 5, CONFLICT: 2, DENIED: 1
+    };
+    const matches = ((data || []) as RefundOperationRecord[]).filter((op) => {
+      const ids = Array.isArray((op.metadata as any)?.appointmentIds) ? [...(op.metadata as any).appointmentIds].sort().join('|') : '';
+      return ids === wanted && Number(op.requested_amount_cents) === requestedAmountCents;
+    });
+    if (matches.length === 0) return null;
+    matches.sort((a, b) =>
+      (rank[b.status] || 0) - (rank[a.status] || 0)
+      || String(b.created_at).localeCompare(String(a.created_at)));
+    return matches[0];
+  }
+
   /** Creates once; a duplicate key returns the existing operation without resetting its state. */
   static async createOrGet(
     supabase: SupabaseClient,

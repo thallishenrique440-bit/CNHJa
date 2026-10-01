@@ -12,7 +12,7 @@ declare const Deno: any;
 
 import { NotificationService } from './NotificationService.ts';
 import { RefundOperationRepository, RefundAudit } from './RefundOperationRepository.ts';
-import { buildRefundOperationKey, RefundOperationKeyInput } from './RefundOperationKey.ts';
+import { buildRefundObligationKey, RefundOperationKeyInput } from './RefundOperationKey.ts';
 import { RefundOperationRecord } from './RefundOperationTypes.ts';
 import { resolveAsaasEnvironment } from './AsaasEnvironment.ts';
 import { interpretRefundState, RefundInterpretation, sanitizeProviderMessage } from './RefundConfirmation.ts';
@@ -355,7 +355,9 @@ export class BookingCancellationCore {
               // P1-01: Process splits strictly in integer cents
               const splits = Array.isArray(paymentData.split) ? paymentData.split : [];
               const splitRefundsPayload: Array<{ id: string; value: number }> = [];
-              const splitsForOpKey: Array<{ id: string; amountCents: number }> = [];
+              // Retrato dos splits no momento da decisao. E' INFORMACAO da operacao
+              // (metadata.split_snapshot), nunca parte da sua identidade.
+              const splitSnapshot: Array<{ id: string; amountCents: number }> = [];
 
               if (splits.length > 0) {
                 for (const s of splits) {
@@ -381,7 +383,7 @@ export class BookingCancellationCore {
                   splitRefundCents = Math.min(splitRefundCents, requestedAmountCents);
 
                   if (splitRefundCents > 0) {
-                    splitsForOpKey.push({ id: String(splitId), amountCents: splitRefundCents });
+                    splitSnapshot.push({ id: String(splitId), amountCents: splitRefundCents });
                     splitRefundsPayload.push({
                       id: String(splitId),
                       value: Number((splitRefundCents / 100).toFixed(2))
@@ -390,18 +392,29 @@ export class BookingCancellationCore {
                 }
               }
 
-              // Build canonical operation key
+              // Chave ESTAVEL da obrigacao (v2): pagamento + escopo + aulas + valor.
+              // Os splits NAO entram: o estado deles muda no gateway quando o Asaas
+              // os reverte, e isso fazia a chave mudar e uma nova operacao nascer
+              // a cada ciclo do cron.
+              const cancelAppointmentIds: string[] = appointmentsToCancel.map((a: any) => a.id);
               const operationKeyInput: RefundOperationKeyInput = {
                 provider: 'asaas',
                 providerPaymentId: paymentId,
                 providerInstallmentId: installmentId || null,
                 refundScope: effectiveScope,
                 items: appointmentsToCancel.map((a: any) => ({ id: a.id, amountCents: Math.round(Number(a.price || 0)) })),
-                splits: splitsForOpKey,
                 requestedAmountCents,
-                allocationVersion: 'v1'
+                allocationVersion: 'v2'
               };
-              const operationKey = buildRefundOperationKey(operationKeyInput);
+              const stableOperationKey = buildRefundObligationKey(operationKeyInput);
+
+              // Operacao ja' existente para ESTA obrigacao, em qualquer versao de
+              // chave. Se existir — inclusive DENIED ou CONFLICT — e' ela que vale:
+              // nenhuma operacao nova e' criada e nenhum POST automatico acontece.
+              const existingOp = await RefundOperationRepository.findByObligation(
+                adminClient, 'asaas', paymentId, effectiveScope, cancelAppointmentIds, requestedAmountCents
+              );
+              const operationKey = existingOp ? existingOp.operation_key : stableOperationKey;
 
               // Check Cumulative Ceiling (AvailableBalanceCents)
               const eligiblePaymentCents = Math.round(Number(paymentData.value || 0) * 100);
@@ -412,13 +425,20 @@ export class BookingCancellationCore {
                 throw new Error(`Requested refund amount (${requestedAmountCents} cents) exceeds available balance (${availableBalanceCents} cents) for payment ${paymentId}`);
               }
 
-              // Create or Get durable RefundOperation
-              let op = await RefundOperationRepository.createOrGet(adminClient, {
+              // Create or Get durable RefundOperation. A chave estavel + UNIQUE
+              // (provider, operation_key) garante uma unica linha mesmo com dois
+              // workers simultaneos; `createOrGet` nunca reinicia uma existente.
+              let op = existingOp || await RefundOperationRepository.createOrGet(adminClient, {
                 operationKey,
                 providerPaymentId: paymentId,
                 scope: effectiveScope,
                 requestedAmountCents,
-                metadata: { appointmentIds: appointmentsToCancel.map((a: any) => a.id), reason }
+                metadata: {
+                  appointmentIds: cancelAppointmentIds,
+                  reason,
+                  key_version: 'v2',
+                  split_snapshot: splitSnapshot
+                }
               });
 
               // P0-01: Handle PENDING lease expiration & UNKNOWN state

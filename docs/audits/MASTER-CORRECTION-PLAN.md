@@ -5,7 +5,7 @@
 |---|---|
 | **Documento** | `docs/audits/MASTER-CORRECTION-PLAN.md` |
 | **Versão** | **1.1** |
-| **Data** | 2026-09-24 (v1.0) · 2026-09-24 (v1.1) · **2026-09-25 (atualização §0.7)** |
+| **Data** | 2026-09-24 (v1.0) · 2026-09-24 (v1.1) · 2026-09-25 (§0.7, §0.8) · 2026-09-30 (§0.9) · **2026-10-01 (§0.10)** |
 | **Origem** | `P-RELEASE-AUDIT-001` (auditoria forense de pré-lançamento) |
 | **Projeto Supabase** | `ohftsqsxymtrclnpadam` (sa-east-1, PostgreSQL 17.6, Compute NANO) |
 | **Repositório** | `D:\projetos\CNHJa\CNHJa` — branch `main`, commit `abb3a17` |
@@ -336,6 +336,62 @@ N-01 e N-02 permanecem registrados e **fora do escopo**, sem alteração.
 ### 0.8.4 Novo achado registrado (não corrigido)
 
 - **N-05 — bateria `p1205_reschedule.pgsql.sql` incompatível com AP-01.** Ela semeia aulas com `test.role='authenticated'`, o que o trigger de INSERT do AP-01 (já em produção) recusa. Independe de AP-05: falha igual com AP-01 sem férias; com AP-05/A e sem AP-01 passa **57/57**. Correção sugerida: semear como `service_role`, sem mudar asserções. **Fora do escopo; não alterado.**
+
+
+## 0.9 ATUALIZAÇÃO 2026-09-30 — STATUS CONSOLIDADO + AUDITORIA DO BLOCO 3 (FASE 1-B)
+
+> Acrescentado em 2026-09-30. Nada das seções anteriores foi removido. Onde esta seção diverge de §0.7.10/§0.8.1, **esta prevalece** e a divergência está anotada.
+
+### 0.9.1 Status consolidado das aprovações implementadas
+
+| Item | Status | Evidência |
+|---|---|---|
+| **AP-01** (F1-01 / BL-01) | ✅ **CONCLUÍDO E VALIDADO** | Migration em produção `20260925091715`; 13/13 (§0.7.1); commit `3ddef77`. *Divergência: §0.7.8 dizia "não commitado" — superado.* |
+| **AP-02** (F1-02 / F1-03) | ✅ **CONCLUÍDO E VALIDADO** | Commit `5707849`; auditoria Work APTO (38/38 SQL, 50/50 estático); `instructors_public` e RLS própria-linha presentes em produção (SELECT de catálogo, 2026-09-25). *Divergência: §0.7.10 dizia "não implementado" — superado.* |
+| **AP-03 / AP-11** (F1-04 / F1-05) | ✅ **CONCLUÍDO E VALIDADO** | §0.7.3 (md5 conferido, 29/29) |
+| **AP-04** (F1-09) | ⚠️ **PARCIAL — Vercel validado; Edge Functions NÃO publicadas** | Commit `d67b5b5`; deploy Vercel concluído; compra real de teste em Sandbox validada pelo proprietário. **Porém** (`list_edge_functions`, 2026-09-30): `create-tip` v33 (publicada 2026-06), `create-asaas-account` v28 (2026-08), `sync-payment-status` v54, `approve/reject/cancel-booking` e `check-expired-bookings` (2026-09-23) **são anteriores a `d67b5b5`**; o código publicado de `create-tip` ainda contém `ASAAS_API_URL \|\| 'https://sandbox.asaas.com/api/v3'`. Falta: secrets `ASAAS_ENV`/`ASAAS_API_URL` no Supabase + redeploy dessas funções + teste. Virada para produção Asaas segue adiada (§0.7.5). |
+| **AP-05 / Trilha A — FÉRIAS** | ✅ **CONCLUÍDO E VALIDADO** | Migration aplicada em produção; commit `49322c1`; deploy Vercel *Ready*; teste funcional do botão Férias aprovado pelo proprietário. Supera §0.8.1. |
+| AP-05 / Trilha B (F1-12) | ⛔ BLOQUEADO POR DECISÃO | Retenção (AP-05/AP-12). Inclui destino de `instructor_vacation_events` (sem FK por desenho, §0.8.5). |
+| AP-09 | ✅ CONCLUÍDO E VALIDADO | §0.6 |
+| C-08 | ✅ ENCERRADO | §0.7.2 |
+| AP-15 | ❓ STATUS A CONFIRMAR | §0.7.10 registrava `docs/` não rastreado; não reverificado |
+
+**Bloqueadores fechados:** F1-01, F1-02, F1-03, F1-04, F1-05, C-08. **F1-09:** código pronto, publicação Edge pendente.
+
+### 0.9.2 Auditoria do Bloco 3 (Fase 1-B) — somente leitura, 2026-09-30
+
+Fontes: `supabase/config.toml`, handlers em `supabase/functions/*`, `list_edge_functions` e `get_edge_function` (código publicado), `cron.job` e `pg_proc` (SELECT).
+
+**Estado publicado relevante:** `verify_jwt=false` em `send-push-notification`, `notification-worker`, `auto-complete-lessons`, `check-expired-bookings`, `create-tip`, `create-asaas-account`. Chamadores: pg_cron → `invoke_edge_function_cron()` com `Authorization: Bearer <CRON_SECRET do Vault>` para `check-expired-bookings` (1 min), `notification-worker` (1 min), `auto-complete-lessons` (5 min). Único chamador de `send-push-notification`: `notification-worker` via `functions.invoke` (envia o JWT `service_role`). Nenhum trigger de banco chama `send-push-notification` hoje (as URLs antigas `ais-dev-…run.app` das migrations de 03–06/2026 não estão em nenhuma função viva).
+
+| ID | Status | Achado (evidência) |
+|---|---|---|
+| **F1-06** | ❌ PENDENTE (confirmado no código publicado v69) | `send-push-notification/index.ts:99-140`: vai direto a `req.json()`, sem qualquer checagem de chamador; CORS `*`; usa `SERVICE_ROLE_KEY`. `verify_jwt=false`. Qualquer pessoa força push de qualquer `notification_id`. `verify_jwt=true` sozinho **não basta** (a chave `anon` pública é um JWT válido). |
+| **F1-07** | ❌ PENDENTE (confirmado no código publicado v20) | `notification-worker/index.ts:8-72` `logSecretTelemetry`: loga SHA-256 esperado, comprimentos e `expectedMismatchCharacter` (caractere do segredo na 1ª divergência). Oráculo remoto contra endpoint sem JWT. |
+| **F1-08** | ❌ PENDENTE — **escopo ampliado a 3 funções** | `if (cronSecret && authHeader !== …)` em `notification-worker:79`, `auto-complete-lessons:13`, `check-expired-bookings:15`. Comparação não constant-time. Presença de `CRON_SECRET` nos secrets das Edge Functions: **não verificável** por leitura (status a confirmar). |
+| **F1-11** | ✅ AUDITADO (critério de conclusão atendido) | `create-booking`: **SEGURA** (410, `verify_jwt=true`, C-08). `create-tip`: **SEGURA quanto à autenticação** — `auth.getUser(token)` + `apt.student_id === user.id` (publicado = repo, salvo AP-04). `create-asaas-account`: autentica (`auth.getUser()`), mas **não exige que o usuário seja instrutor** → novo item **N-06**. `auto-complete-lessons`: **VULNERÁVEL** — mesmo fail-open de F1-08 (tratado lá). |
+| **N-06** (novo) | ❌ PENDENTE | `create-asaas-account/index.ts:37-44`: consulta `instructors` com `maybeSingle()` e segue sem linha; um **aluno** autenticado consegue criar subconta Asaas (o `update` final em `instructors` não afeta linha nenhuma). Correção mínima: recusar 403 se `instructor` for nulo. |
+| **N-03** | ➡️ absorvido em F1-11 | `create-tip` fora do `config.toml`: resolver adicionando `[functions.create-tip] verify_jwt = false` explícito (o handler autentica) ou `true` + teste. |
+
+Correção mínima proposta (um único pacote, sem migration): (1) helper `_shared/cronAuth.ts` — fail-closed (500 se `CRON_SECRET` ausente), comparação constant-time, log só booleano; (2) aplicar em `notification-worker`, `auto-complete-lessons`, `check-expired-bookings`; (3) remover `logSecretTelemetry`; (4) `send-push-notification` aceita apenas `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>` (constant-time) — o worker já envia isso via `functions.invoke`, sem mudança no chamador; CORS removido ou restrito; (5) N-06; (6) `config.toml` explícito para `create-tip`.
+
+---
+
+## 0.10 ATUALIZAÇÃO 2026-10-01 — INCIDENTE DE ESTORNO + FASE 1 (IDEMPOTÊNCIA)
+
+> Detalhamento completo: **`docs/audits/REFUND-HARDENING-PLAN.md`** (fonte única para o ciclo de estorno). Esta seção apenas registra o status; não substitui F4-01..09, AP-13, AP-14 nem C-10.
+
+**Incidente registrado:** evento real `PAYMENT_REFUND_DENIED` (PIX, Sandbox, mensagem "Falha ao processar a transferência.") + operações de estorno duplicadas para a mesma aula/valor, causadas pela chave de idempotência `refund:v1:` que incluía o split (alterado pelo Asaas). Risco associado: o cron re-selecionar o agendamento e emitir novos POSTs.
+
+| Item | Status | Evidência |
+|---|---|---|
+| Fase 1 — chave `refund:v2:` sem splits, `findByObligation` (busca de operações antigas antes de criar), snapshot do split em metadata, bloqueio de retentativa automática após `DENIED`/`CONFLICT`, compatibilidade legada | **Implementado e testado localmente — NÃO publicado** | `RefundIdempotencyFase1.unit.test.ts` 48/48 PASS; `RefundLifecycleConfirmation` 95/95; `SyncPaymentStatusAuthR2` 13/13; `sync-shared --check` OK |
+| Ajuste final do ranking (`COMPLETED` > ativos > `CONFLICT` > `DENIED`; empate → mais recente) | **Implementado e testado localmente** | testes 8a–8h |
+| Operações históricas sem `metadata.appointmentIds` | **Validado no banco pelo usuário: 0** | `SELECT COUNT(*) … WHERE NOT (metadata ? 'appointmentIds')` = 0 |
+| Validações externas (Sandbox pós-deploy) e deploy (Edge Functions / Vercel) | **PENDENTE** | aguardando autorização |
+| Fases 2–6 (estado operacional, splits/alertas, fila de revisão, reconciliação automatizada, webhooks/auditoria) | **PLANEJADO — nada implementado** | ver REFUND-HARDENING-PLAN.md §4 |
+
+Falhas pré-existentes da suíte (reproduzidas em `HEAD`, fora do escopo da Fase 1): `RefundBlockersFase31177`, `RefundCorrectionsFase31175` (exigem `supabaseKey` no ambiente), `RefundOperationRpcSecurity` (asserção sobre privilégios em migrations), `RefundReconciliationFase31` (C-10).
 
 ---
 
