@@ -2,7 +2,21 @@
 -- FASE 0 — agendamento da conciliacao financeira (sync-payment-status)
 -- =============================================================================
 --
--- PROPOSTA. NAO APLICADA. Aplicacao somente com autorizacao do proprietario.
+-- APLICADA EM PRODUCAO em 2026-10-02 16:20 UTC (projeto ohftsqsxymtrclnpadam),
+-- pela API de migrations, com autorizacao do proprietario.
+--   Registro no historico remoto: versao 20261002162000, nome
+--   `schedule_sync_payment_status`. Job criado: `sync-payment-status-job`
+--   (jobid 13), `*/5 * * * *`, ativo. Primeira execucao 16:25 UTC: HTTP 200,
+--   nenhuma consulta ao gateway e nenhuma escrita.
+--
+-- VERSAO LOCAL x VERSAO REMOTA
+--   Este arquivo usa o prefixo local `20261001`; o historico remoto registrou
+--   `20261002162000` (a API de migrations atribui a versao pelo horario da
+--   aplicacao). O mesmo ocorre com as demais migrations do projeto: a pasta
+--   local e o historico remoto nao sao reconciliaveis pelo Supabase CLI
+--   (`db push` aborta). NAO renomear este arquivo e NAO executar
+--   `migration repair` sem decisao especifica. O SQL abaixo e' o que foi
+--   aplicado e e' idempotente: reaplica-lo apenas recria o mesmo job.
 --
 -- PROBLEMA
 --   A Edge Function `sync-payment-status` existe e esta' publicada, mas nenhum
@@ -20,7 +34,7 @@
 -- O QUE NAO FAZ
 --   Nao altera tabelas, dados, funcoes nem os jobs existentes.
 --
--- PRE-REQUISITOS (conferir ANTES de aplicar)
+-- PRE-REQUISITOS (conferidos antes da aplicacao)
 --   1. `sync-payment-status` publicada com a versao da Fase 0.
 --   2. O segredo `CRON_SECRET` da funcao igual ao `cron_secret` do Vault (e' o
 --      mesmo usado pelos outros jobs; se eles respondem 200, esta' correto).

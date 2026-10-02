@@ -371,6 +371,23 @@ async function main() {
       'F16. aula de 01/10 19h ainda esta\' dentro das 24 h; com a data minima em 02/10 fica fora');
   }
 
+  // --------------------------------------------------------------------------
+  // G. Execucao interrompida: a transacao pendente so' e' fechada por ultimo
+  // --------------------------------------------------------------------------
+  {
+    const sync = src('supabase/functions/sync-payment-status/index.ts');
+    const denied = sync.slice(sync.indexOf("refundAction === 'mark_denied'"), sync.indexOf("refundAction === 'mark_refunded'"));
+    const refunded = sync.slice(sync.indexOf("refundAction === 'mark_refunded'"), sync.indexOf('preserving_pending'));
+    check(denied.indexOf('paymentStatusAfterRefundDenial(apt.status)') > 0
+      && denied.indexOf('paymentStatusAfterRefundDenial(apt.status)') < denied.indexOf("status: 'failed'"),
+      'G1. estorno negado: a aula e\' atualizada ANTES de a transacao pendente ser fechada');
+    check(denied.includes('if (aptDeniedError) throw aptDeniedError') && denied.includes('if (txDeniedError) throw txDeniedError'),
+      'G2. estorno negado: falha de escrita interrompe o grupo (nao e\' reportada como sucesso)');
+    check(refunded.indexOf("payment_status: 'refunded'") > 0 && refunded.indexOf("payment_status: 'refunded'") < refunded.indexOf("status: 'completed'")
+      && refunded.includes('if (aptRefundedError) throw aptRefundedError'),
+      'G3. estorno confirmado: aula antes da transacao, e falha na aula interrompe antes de fechar a transacao');
+  }
+
   console.log(`\n=== ${passed} asserts PASS, ${failures.length} FAIL ===`);
   if (failures.length > 0) {
     for (const f of failures) console.error(` - ${f}`);

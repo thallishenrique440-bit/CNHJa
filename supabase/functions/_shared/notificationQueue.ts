@@ -309,10 +309,11 @@ export async function runNotificationCycle(p: {
   if (claimedIds.length === 0) return report;
 
   // A RPC nao devolve tentativas nem metadados: le o estado atual dos jobs.
-  const { data: rows } = await p.db
+  const { data: rows, error: rowsError } = await p.db
     .from('notification_jobs')
     .select('notification_id, status, attempts, max_attempts, locked_at, locked_by, next_run_at, last_error, metadata, created_at')
     .in('notification_id', claimedIds);
+  if (rowsError) console.error(`[NotificationQueue] job state lookup failed: ${rowsError.message || rowsError}`);
   const jobById = new Map<string, NotificationJobRow>(((rows || []) as NotificationJobRow[]).map((j) => [j.notification_id, j]));
 
   const { data: notifs } = await p.db.from('notifications').select('id, created_at, type').in('id', claimedIds);
@@ -325,9 +326,18 @@ export async function runNotificationCycle(p: {
 
   for (const id of claimedIds) {
     const job = jobById.get(id);
-    const attemptsSoFar = job?.attempts || 0;
-    const maxAttempts = job?.max_attempts || 5;
-    const meta = { ...(job?.metadata || {}) };
+    // Sem o estado atual do job (leitura falhou) nao ha' como contar a
+    // tentativa: gravar `attempts` a partir de zero apagaria as tentativas ja'
+    // feitas e o limite nunca seria atingido. O job fica em `processing`, sem
+    // marcador de envio, e a recuperacao o devolve a fila contando a tentativa.
+    if (!job) {
+      console.error(`[NotificationQueue] job state unavailable for ${id}; left for recovery`);
+      report.unresolved++;
+      continue;
+    }
+    const attemptsSoFar = job.attempts || 0;
+    const maxAttempts = job.max_attempts || 5;
+    const meta = { ...(job.metadata || {}) };
     const nowIso = new Date(now()).toISOString();
 
     try {

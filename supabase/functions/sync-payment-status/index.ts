@@ -70,10 +70,13 @@ async function reconcileRefundOperations() {
   const allIds = Array.from(new Set(candidates.flatMap(opAppointmentIds)))
   const lessonById = new Map<string, any>()
   if (allIds.length > 0) {
-    const { data: lessonRows } = await supabaseAdmin
+    const { data: lessonRows, error: lessonError } = await supabaseAdmin
       .from('appointments')
       .select('id, date, start_time, end_time')
       .in('id', allIds)
+    // Sem as aulas nao ha' como comprovar a elegibilidade: nenhuma operacao e'
+    // processada neste ciclo (fail-closed) e a falha fica registrada.
+    if (lessonError) console.error(`[Sync job] Refund reconciliation: lesson lookup failed: ${lessonError.message}`)
     for (const row of lessonRows || []) lessonById.set(row.id, row)
   }
   const eligibleOps = candidates.filter((op: any) =>
@@ -292,9 +295,33 @@ Deno.serve(async (req) => {
             if (refundAction === 'mark_denied') {
               // Explicit evidence of DENIED returned by gateway
               console.log(`⚠️ [Sync job] Payment ${paymentId} has explicit refund DENIED on gateway. Reconciling refund tx to 'failed'.`);
+              // ORDEM: aulas primeiro, transacao por ultimo. A transacao
+              // `pending` e' o que faz este grupo voltar a ser tratado na
+              // proxima execucao; se ela fosse fechada antes e a execucao
+              // parasse aqui, a aula ficaria em `refund_requested` para sempre.
+              //
+              // Recusa de estorno NUNCA vira pagamento falho (`failed`): o
+              // pagamento original continua valido. Aula encerrada passa a
+              // `refund_denied`; aula ainda aberta volta a `paid` (mesma regra
+              // de BookingCancellationCore.releaseAfterDenial). O CAS em
+              // `payment_status` evita sobrescrever um estado mais novo.
+              for (const apt of (allGroupApts || groupApts)) {
+                if (apt.payment_status === 'refund_requested') {
+                  const { error: aptDeniedError } = await supabaseAdmin
+                    .from('appointments')
+                    .update({
+                      payment_status: paymentStatusAfterRefundDenial(apt.status),
+                      updated_at: new Date().toISOString()
+                    })
+                    .eq('id', apt.id)
+                    .eq('payment_status', 'refund_requested');
+                  if (aptDeniedError) throw aptDeniedError;
+                }
+              }
+
               for (const tx of pendingRefundTxs) {
                 const existingMeta = (tx.metadata && typeof tx.metadata === 'object') ? tx.metadata : {};
-                await supabaseAdmin
+                const { error: txDeniedError } = await supabaseAdmin
                   .from('transactions')
                   .update({
                     status: 'failed',
@@ -305,24 +332,7 @@ Deno.serve(async (req) => {
                     }
                   })
                   .eq('id', tx.id);
-              }
-
-              // Recusa de estorno NUNCA vira pagamento falho (`failed`): o
-              // pagamento original continua valido. Aula encerrada passa a
-              // `refund_denied`; aula ainda aberta volta a `paid` (mesma regra
-              // de BookingCancellationCore.releaseAfterDenial). O CAS em
-              // `payment_status` evita sobrescrever um estado mais novo.
-              for (const apt of (allGroupApts || groupApts)) {
-                if (apt.payment_status === 'refund_requested') {
-                  await supabaseAdmin
-                    .from('appointments')
-                    .update({
-                      payment_status: paymentStatusAfterRefundDenial(apt.status),
-                      updated_at: new Date().toISOString()
-                    })
-                    .eq('id', apt.id)
-                    .eq('payment_status', 'refund_requested');
-                }
+                if (txDeniedError) throw txDeniedError;
               }
 
               return { groupId, status: 'success', action: 'reconciled_refund_explicitly_denied' };
@@ -333,20 +343,24 @@ Deno.serve(async (req) => {
                 if (apt.status === 'completed') {
                   continue;
                 }
-                await supabaseAdmin
+                const { error: aptRefundedError } = await supabaseAdmin
                   .from('appointments')
                   .update({
                     payment_status: 'refunded',
                     updated_at: new Date().toISOString()
                   })
                   .eq('id', apt.id);
+                // Falha aqui interrompe ANTES de fechar a transacao pendente,
+                // para o grupo voltar a ser tratado na proxima execucao.
+                if (aptRefundedError) throw aptRefundedError;
               }
 
-              await supabaseAdmin
+              const { error: txRefundedError } = await supabaseAdmin
                 .from('transactions')
                 .update({ status: 'completed' })
                 .eq('provider_payment_id', paymentId)
                 .eq('type', 'refund');
+              if (txRefundedError) throw txRefundedError;
 
               return { groupId, status: 'success', action: 'reconciled_refund_completed' };
             } else {

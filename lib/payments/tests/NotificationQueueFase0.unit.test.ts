@@ -416,6 +416,35 @@ async function main() {
     check(r4.recovered.expired === 1 && r4.criticalUndelivered.length === 1 && r4.criticalUndelivered[0].outcome === 'expire', '13g. critica abandonada e vencida: expired na recuperacao e reportada');
   }
 
+  // --------------------------------------------------------------------------
+  // 14. Leitura do estado do job falha depois do claim: tentativas preservadas
+  // --------------------------------------------------------------------------
+  {
+    const db = createDb({ jobs: [JOB('n1', { attempts: 3 })], notifications: [NOTIF('n1')] });
+    const d = dispatcher(() => TRANSIENT);
+    const origFrom = db.from;
+    let failJobRead = true;
+    (db as any).from = (table: string) => {
+      const api = origFrom(table);
+      if (table !== 'notification_jobs' || !failJobRead) return api;
+      const origIn = api.in;
+      api.in = (c: string, vs: any[]) => {
+        origIn(c, vs);
+        if (c === 'notification_id') { failJobRead = false; api.then = (res: any) => Promise.resolve({ data: null, error: { message: 'simulated read failure' } }).then(res); }
+        return api;
+      };
+      return api;
+    };
+    const r = await quiet(() => cycle(db, d));
+    check(r.unresolved === 1 && d.count('n1') === 0 && job(db, 'n1').status === 'processing' && job(db, 'n1').attempts === 3 && !job(db, 'n1').metadata.dispatch_started_at,
+      '14a. sem o estado do job: nao envia, nao zera as tentativas e nao marca inicio de envio');
+
+    (db as any).from = origFrom;
+    db.clock.now = T0 + 11 * MIN;
+    const r2 = await cycle(db, d);
+    check(r2.recovered.requeued === 1 && job(db, 'n1').attempts >= 4, '14b. a recuperacao devolve o job a fila contando a tentativa (3 -> 4)');
+  }
+
   console.log(`\n=== ${passed} asserts PASS, ${failures.length} FAIL ===`);
   if (failures.length > 0) {
     for (const f of failures) console.error(` - ${f}`);
