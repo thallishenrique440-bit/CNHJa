@@ -153,7 +153,9 @@ async function run() {
     const src = stripComments(read(`supabase/functions/${fn}/index.ts`));
     const serve = src.indexOf('Deno.serve(');
     const guard = src.indexOf(`requireCronAuth(req, '${fn}')`);
-    const firstWork = src.search(/supabaseAdmin\s*\.(rpc|from)\(/);
+    // Fase 0: no notification-worker o trabalho passou para runNotificationCycle
+    // (_shared/notificationQueue.ts); o handler nao chama mais rpc/from direto.
+    const firstWork = src.search(/supabaseAdmin\s*\.(rpc|from)\(|runNotificationCycle\(/);
     assert(/import \{ requireCronAuth \} from '\.\.\/_shared\/cronAuth\.ts'/.test(src), `B2. ${fn}: importa requireCronAuth`);
     assert(guard > serve && guard < firstWork && /if \(denied\) return denied/.test(src),
       `B3. ${fn}: guarda e a primeira acao do handler`);
@@ -177,8 +179,12 @@ async function run() {
     'B6. push: guarda service_role antes de ler o corpo');
   assert(!/Access-Control-Allow-Origin/.test(push), 'B7. push: CORS * removido');
   const worker = stripComments(read('supabase/functions/notification-worker/index.ts'));
-  assert(/SUPABASE_SERVICE_ROLE_KEY/.test(worker) && /functions\.invoke\('send-push-notification'/.test(worker),
-    'B8. worker continua chamando o push com o client service_role (sem mudanca no chamador)');
+  // Fase 0: `functions.invoke` nao entregava o cabecalho Authorization e o push
+  // respondia 401 (reason=missing_header) desde o F1-06 — os jobs ficavam presos
+  // em `processing`. O worker passou a enviar o Bearer service_role explicitamente.
+  assert(/SUPABASE_SERVICE_ROLE_KEY/.test(worker) && /\/functions\/v1\/send-push-notification/.test(worker)
+    && /'Authorization': `Bearer \$\{serviceRoleKey\}`/.test(worker) && !/functions\.invoke\(/.test(worker),
+    'B8. worker chama o push enviando Authorization: Bearer <service_role> de forma explicita');
 
   // N-06: create-asaas-account
   const acc = stripComments(read('supabase/functions/create-asaas-account/index.ts'));

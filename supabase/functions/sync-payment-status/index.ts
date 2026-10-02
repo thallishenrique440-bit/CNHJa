@@ -6,6 +6,10 @@ import { InstallmentService } from '../_shared/InstallmentService.ts'
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 import { RefundOperationRepository } from '../_shared/RefundOperationRepository.ts'
 import { requireCronAuth } from '../_shared/cronAuth.ts'
+import {
+  classifySyncGroup, classifyClosedGroupRefund, paymentStatusAfterRefundDenial,
+  resolveSyncEligibilityConfig, isOperationallyCurrent
+} from '../_shared/syncPaymentDecision.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -56,7 +60,26 @@ async function reconcileRefundOperations() {
   }
 
   const olderThan = new Date(Date.now() - REFUND_RECONCILE_IDLE_MS).toISOString()
-  const ops = await RefundOperationRepository.findStaleForReconciliation(supabaseAdmin, olderThan, REFUND_RECONCILE_BATCH)
+  // Busca uma janela maior que o lote e filtra: operacoes de aulas passadas
+  // (historico) sao ignoradas e NAO podem ocupar o lote das operacoes validas.
+  const candidates = await RefundOperationRepository.findStaleForReconciliation(supabaseAdmin, olderThan, REFUND_RECONCILE_BATCH * 4)
+  const eligibility = resolveSyncEligibilityConfig((name) => Deno.env.get(name))
+  const nowMs = Date.now()
+  const opAppointmentIds = (op: any): string[] =>
+    Array.isArray(op?.metadata?.appointmentIds) ? op.metadata.appointmentIds.filter((x: any) => typeof x === 'string') : []
+  const allIds = Array.from(new Set(candidates.flatMap(opAppointmentIds)))
+  const lessonById = new Map<string, any>()
+  if (allIds.length > 0) {
+    const { data: lessonRows } = await supabaseAdmin
+      .from('appointments')
+      .select('id, date, start_time, end_time')
+      .in('id', allIds)
+    for (const row of lessonRows || []) lessonById.set(row.id, row)
+  }
+  const eligibleOps = candidates.filter((op: any) =>
+    isOperationallyCurrent(opAppointmentIds(op).map((id) => lessonById.get(id)).filter(Boolean), nowMs, eligibility))
+  const skippedHistorical = candidates.length - eligibleOps.length
+  const ops = eligibleOps.slice(0, REFUND_RECONCILE_BATCH)
   const results: any[] = []
   for (const op of ops) {
     try {
@@ -70,8 +93,8 @@ async function reconcileRefundOperations() {
       results.push({ operationId: op.id, before: op.status, after: op.status, outcome: 'error', error: err?.message })
     }
   }
-  console.log(`[Sync job] Refund reconciliation: checked=${ops.length}`)
-  return { checked: ops.length, results }
+  console.log(`[Sync job] Refund reconciliation: checked=${ops.length} skipped_historical=${skippedHistorical}`)
+  return { checked: ops.length, skipped_historical: skippedHistorical, results }
 }
 
 Deno.serve(async (req) => {
@@ -94,9 +117,16 @@ Deno.serve(async (req) => {
     // proposito: sao estados finais para este job — uma aula com estorno
     // recusado nao e' reprocessada a cada execucao nem tem o estado
     // sobrescrito. Este job nunca altera `status` de aula encerrada.
+    //
+    // Aulas PASSADAS (historico) ficam fora: so' entra o que ainda tem
+    // obrigacao operacional vigente (ver _shared/syncPaymentDecision.ts). A
+    // regra e' aplicada por GRUPO, abaixo, antes de qualquer consulta ao
+    // gateway — nao por linha, porque em um combo vale a ultima aula.
+    const eligibility = resolveSyncEligibilityConfig((name) => Deno.env.get(name))
+    const nowMs = Date.now()
     const { data: stuckAppointments, error: fetchError } = await supabaseAdmin
       .from('appointments')
-      .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id, date, start_time, created_at, payment_status')
+      .select('id, payment_intent_id, provider_payment_id, group_id, status, provider_name, student_id, instructor_id, date, start_time, end_time, created_at, payment_status')
       .or('status.in.(reserved,pending_approval,awaiting_payment),and(status.in.(cancelled,expired),payment_status.in.(paid,refund_requested))')
 
     if (fetchError) {
@@ -133,12 +163,18 @@ Deno.serve(async (req) => {
       // Verify all appointments in this group
       const { data: allGroupApts, error: verifyError } = await supabaseAdmin
         .from('appointments')
-        .select('id, status, payment_status')
+        .select('id, status, payment_status, date, start_time, end_time')
         .eq('group_id', groupId);
 
       if (verifyError) {
         console.error(`❌ Error verifying status for group ${groupId}:`, verifyError.message);
         return { groupId, status: 'error_verifying_group', details: verifyError.message };
+      }
+
+      // Historico: todas as aulas do grupo terminaram alem da tolerancia. Nada
+      // e' consultado no gateway e nada e' escrito.
+      if (!isOperationallyCurrent((allGroupApts && allGroupApts.length > 0) ? allGroupApts : groupApts, nowMs, eligibility)) {
+        return { groupId, status: 'skipped', reason: 'historical_lessons' };
       }
 
       // Check Asaas payment status
@@ -170,8 +206,11 @@ Deno.serve(async (req) => {
       const asaasStatus = paymentData?.status?.toUpperCase();
 
       // Check if refund is completed in Asaas (top-level status OR inside paymentData.refunds collection)
-      const isFullRefund = asaasStatus === 'REFUNDED';
-      const isPartialRefund = asaasStatus === 'PARTIALLY_REFUNDED';
+      // FASE 0: a decisao vem de _shared/syncPaymentDecision.ts (mesmas regras
+      // de antes, agora testaveis fora do Deno).
+      const decision = classifySyncGroup(asaasStatus, (allGroupApts || []).map(apt => apt.status));
+      const isFullRefund = decision === 'repair_refunded';
+      const isPartialRefund = decision === 'skip_partial_refund';
 
       if (isFullRefund) {
         console.log(`✅ Reconciling Group ${groupId}: Asaas is refunded (status: ${asaasStatus}).`);
@@ -235,8 +274,8 @@ Deno.serve(async (req) => {
       } else if (isPartialRefund) {
         console.log(`ℹ️ [Sync job] Group ${groupId} has partial refund in Asaas (status: PARTIALLY_REFUNDED). Preserving active installments/appointments.`);
         return { groupId, status: 'skipped', reason: 'partial_refund_retained' };
-      } else if (['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(asaasStatus)) {
-        const hasInvalidStatus = allGroupApts?.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
+      } else if (decision === 'closed_group' || decision === 'skip_not_received' || decision === 'reconcile_payment') {
+        const hasInvalidStatus = decision === 'closed_group';
         if (hasInvalidStatus) {
           const refundState = getAsaasRefundState(paymentData);
 
@@ -248,8 +287,9 @@ Deno.serve(async (req) => {
             .eq('type', 'refund')
             .eq('status', 'pending');
 
-          if (pendingRefundTxs && pendingRefundTxs.length > 0) {
-            if (refundState === 'DENIED') {
+          const refundAction = classifyClosedGroupRefund(refundState, pendingRefundTxs?.length || 0);
+          if (pendingRefundTxs && refundAction !== 'skip_closed') {
+            if (refundAction === 'mark_denied') {
               // Explicit evidence of DENIED returned by gateway
               console.log(`⚠️ [Sync job] Payment ${paymentId} has explicit refund DENIED on gateway. Reconciling refund tx to 'failed'.`);
               for (const tx of pendingRefundTxs) {
@@ -274,11 +314,10 @@ Deno.serve(async (req) => {
               // `payment_status` evita sobrescrever um estado mais novo.
               for (const apt of (allGroupApts || groupApts)) {
                 if (apt.payment_status === 'refund_requested') {
-                  const isClosed = ['cancelled', 'expired'].includes(apt.status);
                   await supabaseAdmin
                     .from('appointments')
                     .update({
-                      payment_status: isClosed ? 'refund_denied' : 'paid',
+                      payment_status: paymentStatusAfterRefundDenial(apt.status),
                       updated_at: new Date().toISOString()
                     })
                     .eq('id', apt.id)
@@ -287,7 +326,7 @@ Deno.serve(async (req) => {
               }
 
               return { groupId, status: 'success', action: 'reconciled_refund_explicitly_denied' };
-            } else if (refundState === 'COMPLETED') {
+            } else if (refundAction === 'mark_refunded') {
               console.log(`✅ [Sync job] Payment ${paymentId} refund confirmed as COMPLETED on gateway. Reconciling refund to completed.`);
               // Reconcile as refunded
               for (const apt of (allGroupApts || groupApts)) {
@@ -326,7 +365,7 @@ Deno.serve(async (req) => {
         // P-1.18P2.6: CONFIRMED significa cartao autorizado com credito AINDA
         // FUTURO. Nao liquida, nao marca parcela e nao repara appointment.
         // Mesma regra de api/asaas-webhook.ts:691.
-        const isEffectivelyReceived = ['RECEIVED', 'RECEIVED_IN_CASH'].includes(asaasStatus);
+        const isEffectivelyReceived = decision === 'reconcile_payment';
 
         if (!isEffectivelyReceived) {
           console.log(`ℹ️ [Sync job] Group ${groupId}: Asaas esta ${asaasStatus} (autorizado, ainda nao recebido). Nenhuma acao financeira nem reparo de appointment.`);

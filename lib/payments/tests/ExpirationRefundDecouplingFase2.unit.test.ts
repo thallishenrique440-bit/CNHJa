@@ -344,7 +344,8 @@ async function main() {
     const syncSrc = src('supabase/functions/sync-payment-status/index.ts');
     check(syncSrc.includes("and(status.in.(cancelled,expired),payment_status.in.(paid,refund_requested))"), '7e. seletor do sync nao inclui aulas refund_denied nem refunded');
     check(!/payment_status:\s*'failed'/.test(syncSrc), '7f. sync nao grava mais payment_status failed em recusa de estorno');
-    check(syncSrc.includes("payment_status: isClosed ? 'refund_denied' : 'paid'") && syncSrc.includes(".eq('payment_status', 'refund_requested')"), '7g. recusa no sync: aula encerrada -> refund_denied, com CAS');
+    // Fase 0: a regra saiu do handler para _shared/syncPaymentDecision.ts (testada em SyncReconciliationFase0).
+    check(syncSrc.includes('paymentStatusAfterRefundDenial(apt.status)') && syncSrc.includes(".eq('payment_status', 'refund_requested')"), '7g. recusa no sync: aula encerrada -> refund_denied, com CAS');
     const reopenWrites = syncSrc.split("status: 'pending_approval',").length - 1;
     const guardedWrites = syncSrc.split(".in('status', ['reserved', 'pending_approval', 'awaiting_payment'])").length - 1;
     check(reopenWrites === 1 && guardedWrites >= 2, '7h. unica escrita de pending_approval no sync tem CAS em status aberto (nao reabre aula encerrada)');

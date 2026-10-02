@@ -71,6 +71,8 @@ const ALLOW = [
   'ExpirationRefundDecouplingFase2.unit.test.ts',
   'RefundConcurrencyFase2B1.unit.test.ts',
   'InstallmentProjectionRefundStateFase2.unit.test.ts',
+  'NotificationQueueFase0.unit.test.ts',
+  'SyncReconciliationFase0.unit.test.ts',
   'SyncPaymentStatusAuthR2.unit.test.ts',
   'AsaasEnvironmentAP04.unit.test.ts',
   'SettlementService.unit.test.ts',
