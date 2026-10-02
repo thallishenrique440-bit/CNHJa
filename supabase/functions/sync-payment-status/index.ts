@@ -10,6 +10,7 @@ import {
   classifySyncGroup, classifyClosedGroupRefund, paymentStatusAfterRefundDenial,
   resolveSyncEligibilityConfig, isOperationallyCurrent
 } from '../_shared/syncPaymentDecision.ts'
+import { PaymentExceptionService } from '../_shared/PaymentExceptionService.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -100,6 +101,29 @@ async function reconcileRefundOperations() {
   return { checked: ops.length, skipped_historical: skippedHistorical, results }
 }
 
+/** Janela da varredura de pagamentos sem reserva valida (horas). */
+const PAYMENT_EXCEPTION_LOOKBACK_HOURS = 72
+
+/**
+ * FASE 1 — pagamentos sem reserva valida.
+ * Varre SOMENTE o banco (ledger de eventos, parcelas e aulas) e registra em
+ * `payment_exceptions` o que o webhook nao registrou. Nao consulta o Asaas, nao
+ * altera aulas e nao pede estorno. Uma falha aqui nao interrompe o restante da
+ * conciliacao: fica no relatorio e a proxima execucao tenta de novo.
+ */
+async function reconcilePaymentExceptions() {
+  try {
+    const hours = Number(Deno.env.get('PAYMENT_EXCEPTION_LOOKBACK_HOURS')) || PAYMENT_EXCEPTION_LOOKBACK_HOURS
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
+    const result = await PaymentExceptionService.scanFromDatabase(supabaseAdmin as any, { sinceIso })
+    console.log(`[Sync job] Payment exceptions: candidates=${result.candidates} created=${result.created} advanced=${result.advanced}`)
+    return result
+  } catch (err: any) {
+    console.error(`[Sync job] Payment exceptions scan failed: ${err?.message ?? err}`)
+    return { error: String(err?.message ?? err) }
+  }
+}
+
 Deno.serve(async (req) => {
   // R2: reconcilia DINHEIRO (le o Asaas e muda estado de estorno/aula). `verify_jwt`
   // nao basta (a chave anon publica e' um JWT valido). Exige `Authorization:
@@ -112,6 +136,7 @@ Deno.serve(async (req) => {
     console.log("🔄 Starting sync-payment-status job...")
 
     const refundReconciliation = await reconcileRefundOperations()
+    const paymentExceptions = await reconcilePaymentExceptions()
 
     // Find appointments that are stuck in checkout/approval or have pending refund reconciliations
     //
@@ -139,7 +164,7 @@ Deno.serve(async (req) => {
     console.log(`Found ${stuckAppointments?.length || 0} potentially stuck or pending refund appointments.`)
 
     if (!stuckAppointments || stuckAppointments.length === 0) {
-      return new Response(JSON.stringify({ message: 'No stuck or pending refund appointments found.', refund_reconciliation: refundReconciliation }), {
+      return new Response(JSON.stringify({ message: 'No stuck or pending refund appointments found.', refund_reconciliation: refundReconciliation, payment_exceptions: paymentExceptions }), {
         headers: { 'Content-Type': 'application/json' },
       })
     }
@@ -526,6 +551,7 @@ Deno.serve(async (req) => {
       JSON.stringify({ 
         message: 'Sync job completed', 
         refund_reconciliation: refundReconciliation,
+        payment_exceptions: paymentExceptions,
         processed: stuckAppointments.length,
         success: successCount,
         results 

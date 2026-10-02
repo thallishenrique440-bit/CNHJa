@@ -13,6 +13,7 @@ import { SettlementType } from '../lib/payments/SettlementTypes.js';
 import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDispatcher.js';
 import { PaymentStateMapper } from '../lib/payments/PaymentStateMapper.js';
 import { ProjectionSourceEventType } from '../lib/payments/projections/ProjectionTypes.js';
+import { PaymentExceptionService } from '../lib/payments/PaymentExceptionService.js';
 
 // P-1-B: raised when the event ledger cannot record a final state at all.
 // Caught by the handler's outer catch, which answers 5xx so the provider retries.
@@ -846,6 +847,13 @@ export default async function handler(req: Request, res: Response) {
 
       if (!groupId) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No group_id found for payment identifier: ${currentPaymentId}`);
+        // FASE 1: pagamento sem reserva valida vira UMA ocorrencia em
+        // payment_exceptions ANTES de o evento ser dado como processado. Se a
+        // gravacao falhar, a excecao sobe ao catch externo (ledger FAILED + 5xx).
+        const orphanNoGroup = await PaymentExceptionService.recordFromWebhook(supabaseAdmin, {
+          payload, groupId: null, lessons: [], providerEventId
+        });
+        console.warn(`⚠️ [ASAAS WEBHOOK] payment_exception=${orphanNoGroup.outcome} booking_state=no_group payment=${currentPaymentId}`);
         await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
@@ -860,7 +868,7 @@ export default async function handler(req: Request, res: Response) {
       // Verify if any appointment in this group is already expired, cancelled, or rejected
       const { data: existingApts, error: fetchAptsError } = await supabaseAdmin
         .from('appointments')
-        .select('status')
+        .select('id, status, payment_status, student_id, instructor_id')
         .eq('group_id', groupId);
 
       if (fetchAptsError) {
@@ -871,6 +879,11 @@ export default async function handler(req: Request, res: Response) {
 
       if (!existingApts || existingApts.length === 0) {
         console.warn(`⚠️ [ASAAS WEBHOOK] No appointments found for group: ${groupId}`);
+        // FASE 1: idem — grupo informado, nenhuma aula encontrada.
+        const orphanNoLessons = await PaymentExceptionService.recordFromWebhook(supabaseAdmin, {
+          payload, groupId, lessons: [], providerEventId
+        });
+        console.warn(`⚠️ [ASAAS WEBHOOK] payment_exception=${orphanNoLessons.outcome} booking_state=not_found payment=${currentPaymentId}`);
         await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
@@ -883,6 +896,14 @@ export default async function handler(req: Request, res: Response) {
       const hasInvalidStatus = existingApts.some(apt => ['expired', 'cancelled', 'rejected'].includes(apt.status));
       if (hasInvalidStatus) {
         console.warn(`⚠️ Pagamento recebido para reserva expirada. Necessária análise manual. (Grupo: ${groupId})`);
+        // FASE 1: registra a ocorrencia (uma por pagamento). Nao registra quando
+        // a reserva ja' tinha este pagamento reconhecido (paga e depois
+        // encerrada): esse caso pertence ao fluxo de estorno. Nenhuma aula e'
+        // confirmada ou alterada aqui.
+        const orphanInvalid = await PaymentExceptionService.recordFromWebhook(supabaseAdmin, {
+          payload, groupId, lessons: existingApts, providerEventId
+        });
+        console.warn(`⚠️ [ASAAS WEBHOOK] payment_exception=${orphanInvalid.outcome} booking_state=${orphanInvalid.bookingState ?? 'n/a'} payment=${currentPaymentId}`);
         await finalizeLedger('PROCESSED');
         return res.status(200).json({
           success: true,
