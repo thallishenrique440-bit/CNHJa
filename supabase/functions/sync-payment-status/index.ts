@@ -11,6 +11,7 @@ import {
   resolveSyncEligibilityConfig, isOperationallyCurrent
 } from '../_shared/syncPaymentDecision.ts'
 import { PaymentExceptionService } from '../_shared/PaymentExceptionService.ts'
+import { BookingRequestService, BOOKING_FLOW_REQUEST, isBookingConfirmingStatus } from '../_shared/BookingRequestService.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -191,7 +192,7 @@ Deno.serve(async (req) => {
       // Verify all appointments in this group
       const { data: allGroupApts, error: verifyError } = await supabaseAdmin
         .from('appointments')
-        .select('id, status, payment_status, date, start_time, end_time')
+        .select('id, status, payment_status, date, start_time, end_time, booking_flow')
         .eq('group_id', groupId);
 
       if (verifyError) {
@@ -237,6 +238,18 @@ Deno.serve(async (req) => {
       // FASE 0: a decisao vem de _shared/syncPaymentDecision.ts (mesmas regras
       // de antes, agora testaveis fora do Deno).
       const decision = classifySyncGroup(asaasStatus, (allGroupApts || []).map(apt => apt.status));
+      // FASE 3 — novo fluxo: o pedido ja' foi aceito; o pagamento confirmado
+      // confirma a aula pela funcao atomica do banco (nunca `pending_approval`).
+      const isRequestGroup = (allGroupApts || []).some((apt: any) => apt.booking_flow === BOOKING_FLOW_REQUEST);
+      const confirmRequestGroup = async () => {
+        const r = await BookingRequestService.confirmPayment(supabaseAdmin as any, groupId, paymentId);
+        console.log(`[Sync job] Request flow group ${groupId}: confirm_payment=${r.outcome}`);
+        return { groupId, status: r.ok ? 'success' : 'skipped', action: 'request_confirm_payment', outcome: r.outcome };
+      };
+      if (isRequestGroup && decision === 'skip_not_received' && isBookingConfirmingStatus(asaasStatus)) {
+        // Cartao aprovado (CONFIRMED): confirma a aula, sem liquidacao (como o webhook).
+        return await confirmRequestGroup();
+      }
       const isFullRefund = decision === 'repair_refunded';
       const isPartialRefund = decision === 'skip_partial_refund';
 
@@ -458,6 +471,10 @@ Deno.serve(async (req) => {
         if (!reconciled) {
           console.log(`ℹ️ [Sync job] Group ${groupId}: liquidacao oficial nao confirmada. Appointment preservado como esta.`);
           return { groupId, status: 'reconcile_pending', asaas_status: asaasStatus };
+        }
+
+        if (isRequestGroup) {
+          return await confirmRequestGroup();
         }
 
         console.log(`✅ Repairing Group ${groupId}: liquidacao oficial confirmada (${asaasStatus}).`);

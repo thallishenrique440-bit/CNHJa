@@ -554,6 +554,14 @@ ${JSON.stringify(splitRule, null, 2)}`);
   /**
    * Queries precise charge state on Asaas.
    */
+  /**
+   * FASE 3: cancela (remove) uma cobranca ainda nao paga. Usado SOMENTE para
+   * a cobranca que o novo fluxo criou e nao conseguiu vincular ao pedido.
+   */
+  async deletePayment(providerPaymentId: string): Promise<void> {
+    await this.request(`/payments/${providerPaymentId}`, { method: 'DELETE' });
+  }
+
   async getPayment(providerPaymentId: string): Promise<PaymentResponseDTO> {
     const response = await this.request<AsaasPaymentResponse>(`/payments/${providerPaymentId}`);
 

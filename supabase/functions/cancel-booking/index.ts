@@ -1,6 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 import { asaasFetch } from '../_shared/asaasClient.ts'
+import { BookingRequestService, BOOKING_FLOW_REQUEST, httpStatusForOutcome } from '../_shared/BookingRequestService.ts'
+import { NotificationService } from '../_shared/NotificationService.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -45,7 +47,7 @@ Deno.serve(async (req) => {
     // 3. Fetch Appointment
     const { data: appointment, error: fetchError } = await adminClient
       .from('appointments')
-      .select('id, status, instructor_id, student_id, start_time, date')
+      .select('id, status, instructor_id, student_id, start_time, date, booking_flow, group_id')
       .eq('id', appointment_id)
       .single()
 
@@ -70,6 +72,31 @@ Deno.serve(async (req) => {
       }
     } else {
       throw new Error('Invalid actor')
+    }
+
+    // FASE 3 — novo fluxo: o aluno cancela o PEDIDO inteiro enquanto aguarda o
+    // instrutor (decisao de 03/10; sem a regra de 24h, que e' do fluxo pago).
+    // A funcao do banco disputa o mesmo bloqueio do aceite: um dos dois vence.
+    // O instrutor usa a recusa (reject-booking), nao o cancelamento.
+    if (appointment.booking_flow === BOOKING_FLOW_REQUEST) {
+      if (actor !== 'student') {
+        return new Response(
+          JSON.stringify({ mode: 'request', ok: false, outcome: 'USE_REJECT', error: 'Use a recusa para pedidos do novo fluxo.' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+      const r = await BookingRequestService.cancelByStudent(adminClient, appointment.group_id, user.id)
+      if (r.ok && r.outcome === 'CANCELLED' && appointment.instructor_id) {
+        try {
+          await NotificationService.sendBookingCancelled({ userId: appointment.instructor_id, isInstructor: true, comboCount: r.lessons || 1, groupId: appointment.group_id })
+        } catch (notifErr) {
+          console.error('⚠️ [cancel-booking] Falha ao notificar o instrutor sobre o cancelamento:', notifErr)
+        }
+      }
+      return new Response(
+        JSON.stringify({ mode: 'request', ...r }),
+        { status: httpStatusForOutcome(r), headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     // Validation: 24h rule (student only). After P-1.20.1B this can only be

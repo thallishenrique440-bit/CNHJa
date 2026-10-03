@@ -39,6 +39,7 @@ export const GENERATED_FILES = [
   'AsaasEnvironment.ts', // AP-04: fonte unica do ambiente Asaas
   'RefundConfirmation.ts', // interpretacao unica do estado de estorno (POST, webhook, reconciliacao)
   'PaymentExceptionService.ts', // Fase 1: pagamento sem reserva valida (webhook + conciliacao)
+  'BookingRequestService.ts', // Fase 3: novo fluxo de agendamento (contrato da Fase 2)
 ];
 
 /**

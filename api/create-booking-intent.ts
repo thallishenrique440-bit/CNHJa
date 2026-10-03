@@ -4,10 +4,17 @@ import { calculateDiscount, getInstructorDiscounts } from '../lib/discount-utils
 import { AGENDA_SLOTS } from '../lib/slots.js';
 import { PaymentProviderResolver } from '../lib/payments/PaymentProviderResolver.js';
 import { PaymentProviderFactory } from '../lib/payments/PaymentProviderFactory.js';
-import { InstallmentService } from '../lib/payments/InstallmentService.js';
 import { fetchGatewayFeeRules } from '../lib/payments/GatewayFeeRepository.js';
-import { buildAppliedFeeSnapshot, quoteCheckout } from '../lib/payments/GatewayFeeModel.js';
 import { deriveLessonPrices } from '../lib/payments/LessonPricing.js';
+import {
+  computeBookingCharge, buildBookingPaymentDTO, ensureProviderCustomer,
+  createPaymentWithCustomerRecovery, recordBookingChargeSchedule,
+} from '../lib/payments/BookingCharge.js';
+import {
+  BookingRequestService, BOOKING_FLOW_REQUEST,
+  requestResponseDeadlineIso, httpStatusForOutcome,
+} from '../lib/payments/BookingRequestService.js';
+import { NotificationService } from '../lib/NotificationService.js';
 
 const MAX_INSTALLMENTS = 4;
 
@@ -16,111 +23,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/**
- * Checks if an error is a recognized Asaas invalid_customer error
- */
-function isInvalidCustomerError(err: any): boolean {
-  if (!err) return false;
-  if (err.code === 'invalid_customer') return true;
-  const msg = String(err.message || err.rawError || err || '').toLowerCase();
-  return msg.includes('invalid_customer') || msg.includes('cliente removido') || msg.includes('cliente foi removido');
-}
-
-interface RecoverCustomerParams {
-  paymentProvider: any;
-  supabase: any;
-  providerName: string;
-  secureStudentId: string;
-  oldCustomerProviderId: string;
-  userEmail: string;
-  fullName: string;
-  phone: string;
-  cpf: string;
-  originalError: any;
-}
-
-/**
- * Encapsulated private function to recover an invalid Asaas Customer:
- * 1. Re-creates Customer on provider using user details
- * 2. Validates new providerCustomerId
- * 3. Updates profiles.provider_customer_id in Supabase
- * Returns new providerCustomerId on success or throws originalError on failure.
- */
-async function recoverInvalidCustomer(params: RecoverCustomerParams): Promise<string> {
-  const {
-    paymentProvider,
-    supabase,
-    providerName,
-    secureStudentId,
-    oldCustomerProviderId,
-    userEmail,
-    fullName,
-    phone,
-    cpf,
-    originalError,
-  } = params;
-
-  console.warn(`[ASAAS CUSTOMER RECOVERY] Detected invalid_customer error on payment creation. Initiating controlled recovery.
-- providerName: ${providerName}
-- userId: ${secureStudentId}
-- oldProviderCustomerId: ${oldCustomerProviderId}
-- moment: ${new Date().toISOString()}
-- originalError: ${originalError?.message || originalError}`);
-
-  // PASSO 1: Re-create Customer on provider using identical student data
-  let newCustomerResponse;
-  try {
-    newCustomerResponse = await paymentProvider.createCustomer({
-      email: userEmail || '',
-      name: fullName || userEmail || 'Aluno',
-      phone: phone.replace(/\D/g, ''),
-      cpfCnpj: cpf.replace(/\D/g, ''),
-    });
-    console.log(`[ASAAS CUSTOMER RECOVERY] Customer re-created successfully on ${providerName}:
-- userId: ${secureStudentId}
-- oldProviderCustomerId: ${oldCustomerProviderId}
-- newProviderCustomerId: ${newCustomerResponse?.providerCustomerId}
-- recreationResult: SUCCESS`);
-  } catch (recreateError: any) {
-    console.error(`[ASAAS CUSTOMER RECOVERY] Re-creation of Customer failed on ${providerName}:
-- userId: ${secureStudentId}
-- oldProviderCustomerId: ${oldCustomerProviderId}
-- recreationResult: FAILED
-- error: ${recreateError?.message || recreateError}`);
-    throw originalError; // Abort recovery, preserve original error
-  }
-
-  const newCustomerProviderId = newCustomerResponse?.providerCustomerId;
-  if (!newCustomerProviderId || typeof newCustomerProviderId !== 'string' || newCustomerProviderId.trim() === '') {
-    console.error(`[ASAAS CUSTOMER RECOVERY] Re-created Customer ID is invalid or empty:
-- userId: ${secureStudentId}
-- receivedId: ${newCustomerProviderId}`);
-    throw originalError;
-  }
-
-  // PASSO 2: Update profiles.provider_customer_id ONLY after success
-  const { error: updateProfileError } = await supabase
-    .from('profiles')
-    .update({ provider_customer_id: newCustomerProviderId })
-    .eq('id', secureStudentId);
-
-  if (updateProfileError) {
-    console.error(`[ASAAS CUSTOMER RECOVERY] Failed to update profiles.provider_customer_id in database:
-- userId: ${secureStudentId}
-- newProviderCustomerId: ${newCustomerProviderId}
-- dbUpdateResult: FAILED
-- error: ${updateProfileError.message}`);
-    throw originalError;
-  }
-
-  console.log(`[ASAAS CUSTOMER RECOVERY] Updated profiles.provider_customer_id in DB:
-- userId: ${secureStudentId}
-- oldProviderCustomerId: ${oldCustomerProviderId}
-- newProviderCustomerId: ${newCustomerProviderId}
-- dbUpdateResult: SUCCESS`);
-
-  return newCustomerProviderId;
-}
+// isInvalidCustomerError / recoverInvalidCustomer: movidos sem alteracao para
+// lib/payments/BookingCharge.ts (FASE 3), compartilhados com o novo fluxo.
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -158,6 +62,12 @@ export default async function handler(req: any, res: any) {
 
   const { lessons, instructorId, category, ignoreTooClose, paymentMethod, installmentCount } = req.body;
   const secureStudentId = user.id;
+
+  // FASE 3 — novo fluxo: pagamento de um pedido JA' ACEITO pelo instrutor.
+  // Mesmo endpoint (o projeto esta' no limite de funcoes da Vercel).
+  if (req.body?.action === 'pay_request') {
+    return handleRequestPayment(req, res, user);
+  }
 
   if (!lessons || !lessons.length) {
     return res.status(400).json({ error: 'No lessons provided' });
@@ -204,6 +114,12 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // FASE 3 — decisao de 03/10/2026: o novo fluxo e' o PADRAO (sem chave de
+    // ativacao). Toda solicitacao vira um PEDIDO sem cobranca. Os ramos
+    // `!requestFlow` abaixo sao o caminho de compra direta do fluxo anterior,
+    // mantido sem uso apenas ate' a remocao do legado (Fase 9).
+    const requestFlow = true;
+
     // Resolve the payment provider via the orchestration layer
     const providerName = PaymentProviderResolver.resolveProviderForStudent(secureStudentId);
     console.log(`[PAYMENT_DIAGNOSTIC]
@@ -248,60 +164,25 @@ providerInstance=${paymentProvider.getProviderName()}`);
       return res.status(400).json({ error: 'O Telefone é obrigatório para prosseguir com o pagamento.' });
     }
 
-    // Resolve student's customer ID for the active provider
-    let customerProviderId = (profile.provider_name === providerName)
-      ? profile.provider_customer_id
-      : null;
-
-    if (!customerProviderId) {
+    // Resolve student's customer ID for the active provider.
+    // Novo fluxo: o cliente no provedor so' e' necessario no pagamento.
+    let customerProviderId: string | null = null;
+    if (!requestFlow) {
       try {
-        console.log(`[INFO] Creating new Customer via resolved provider: ${providerName} for user ${secureStudentId}`);
-        const customerResponse = await paymentProvider.createCustomer({
-          email: user.email || '',
-          name: profile.full_name || user.email || 'Aluno',
-          phone: profile.phone.replace(/\D/g, ''),
-          cpfCnpj: profile.cpf.replace(/\D/g, ''),
+        customerProviderId = await ensureProviderCustomer({
+          supabase,
+          paymentProvider,
+          providerName,
+          studentId: secureStudentId,
+          userEmail: user.email || '',
+          profile,
         });
-        
-        customerProviderId = customerResponse.providerCustomerId;
-        console.log(`[INFO] Customer created successfully on ${providerName} with ID: ${customerProviderId}`);
-
-        // Persist back to profile
-        const updateData: any = {
-          provider_customer_id: customerProviderId,
-          provider_name: providerName
-        };
-
-        const { error: updateProfileError } = await supabase
-          .from('profiles')
-          .update(updateData)
-          .eq('id', secureStudentId);
-
-        if (updateProfileError) {
-          console.error(`[ERROR] Failed to save customer_id ${customerProviderId} to user profile ${secureStudentId}:`, updateProfileError);
-        } else {
-          console.log(`[INFO] Saved customer identifiers to database profile ${secureStudentId}`);
-        }
       } catch (custError: any) {
         console.error(`[ERROR] Fail to create Customer for user ${secureStudentId} on provider ${providerName}:`, custError);
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Erro ao registrar cliente de pagamento. Tente novamente.',
-          details: custError.message 
+          details: custError.message
         });
-      }
-    } else {
-      console.log(`[INFO] Reusing existing Customer ${customerProviderId} for user ${secureStudentId} on provider ${providerName}`);
-      
-      // Dual write check: keep provider fields synced if empty
-      if (!profile.provider_customer_id || profile.provider_name !== providerName) {
-        const updateData: any = {
-          provider_customer_id: customerProviderId,
-          provider_name: providerName
-        };
-        await supabase
-          .from('profiles')
-          .update(updateData)
-          .eq('id', secureStudentId);
       }
     }
 
@@ -467,17 +348,18 @@ providerInstance=${paymentProvider.getProviderName()}`);
     // (lib/payments/GatewayFeeModel). O frontend usa exatamente as mesmas
     // funcoes e o mesmo schedule, portanto exibe o mesmo total que sera
     // cobrado aqui. `finalPrice` (service_price) nao e' alterado pela tarifa.
-    const feeQuote = quoteCheckout({
-      servicePriceCents: finalPrice,
-      method: paymentMethod === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'PIX',
-      installmentCount: installmentCount || 1,
-      provider: providerName,
+    const charge = computeBookingCharge({
+      finalPriceCents: finalPrice,
+      paymentMethod,
+      installmentCount,
+      providerName,
       rules: gatewayFeeRules
     });
+    const feeQuote = charge.feeQuote;
 
     // Fail-closed: sem faixa de tarifa nao ha como formar student_charge sem
     // que a plataforma absorva a tarifa inteira em silencio.
-    if (providerName === 'asaas' && !feeQuote.rule) {
+    if (charge.ruleMissing && !requestFlow) {
       console.error(`[GATEWAY FEE] Nenhuma faixa de tarifa para ${feeQuote.method} em ${feeQuote.installmentCount}x.`);
       return res.status(400).json({
         error: 'Tarifa de pagamento indisponivel para o metodo/parcelamento selecionado.',
@@ -485,15 +367,15 @@ providerInstance=${paymentProvider.getProviderName()}`);
       });
     }
 
-    const processingFee = providerName === 'asaas' ? feeQuote.gatewayFeeExpectedCents : 0;
-    const appliedFee = buildAppliedFeeSnapshot(feeQuote);
+    const processingFee = charge.processingFee;
+    const appliedFee = charge.appliedFee;
 
     if (feeQuote.usedFallback) {
       console.warn(`[GATEWAY FEE] Schedule do banco indisponivel para ${feeQuote.method}/${feeQuote.installmentCount}x. Usando DEFAULT_GATEWAY_FEE_SCHEDULE embutido.`);
     }
     console.log(`[GATEWAY FEE] method=${feeQuote.method} installments=${feeQuote.installmentCount} percent=${appliedFee.feePercentApplied} fixed=${appliedFee.feeFixedCents} servicePrice=${finalPrice} fee=${processingFee} source=${appliedFee.feeSource}`);
 
-    const totalPriceWithFee = finalPrice + processingFee;
+    const totalPriceWithFee = charge.totalPriceWithFee;
 
     // Create group_id
     const groupId = uuidv4();
@@ -502,7 +384,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
     for (const lesson of lessons) {
       const { data: conflict } = await supabase
         .from('appointments')
-        .select('id, student_id, status')
+        .select('id, student_id, status, booking_flow')
         .eq('instructor_id', instructorId)
         .eq('date', lesson.date)
         .eq('start_time', lesson.startTime)
@@ -511,7 +393,10 @@ providerInstance=${paymentProvider.getProviderName()}`);
 
       if (conflict) {
         // Allow retry if it's the same student and it's a temporary status
-        if (conflict.student_id === secureStudentId && (conflict.status === 'awaiting_payment' || conflict.status === 'reserved')) {
+        // So' checkout ABANDONADO do fluxo atual e' "nova tentativa". Pedido do
+        // novo fluxo e' um pedido real: nunca e' substituido em silencio.
+        if (conflict.student_id === secureStudentId && conflict.booking_flow !== BOOKING_FLOW_REQUEST
+            && (conflict.status === 'awaiting_payment' || conflict.status === 'reserved')) {
           // This will be cleaned up in the next step
           continue; 
         }
@@ -535,6 +420,7 @@ providerInstance=${paymentProvider.getProviderName()}`);
           .eq('student_id', secureStudentId)
           .eq('date', lesson.date)
           .eq('start_time', lesson.startTime)
+          .eq('booking_flow', 'legacy')
           .in('status', ['reserved', 'pending', 'awaiting_payment']);
     }
 
@@ -546,7 +432,10 @@ providerInstance=${paymentProvider.getProviderName()}`);
       const isInsideWarningWindow = now.getTime() >= (startTimeMs - 30 * 60 * 1000);
 
       // A janela de expiração do checkout é independente do horário da aula: criacao + 5 minutos
-      const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      // Novo fluxo: prazo de RESPOSTA do instrutor = inicio da primeira aula do pedido.
+      const reservationExpiresAt = requestFlow
+        ? requestResponseDeadlineIso(lessons.map((l: any) => ({ date: l.date, startTime: l.startTime })))
+        : new Date(Date.now() + 5 * 60 * 1000).toISOString();
       const isLastMinute = isInsideWarningWindow || Boolean(ignoreTooClose);
 
       // P-1.17: base do rateio e' o preco autoritativo desta aula, nunca lesson.price.
@@ -572,7 +461,8 @@ providerInstance=${paymentProvider.getProviderName()}`);
         start_time_utc: startTimeUtc,
         end_time: lesson.endTime,
         category: category,
-        status: 'awaiting_payment',
+        status: requestFlow ? 'pending' : 'awaiting_payment',
+        ...(requestFlow ? { booking_flow: BOOKING_FLOW_REQUEST } : {}),
         price: discountedLessonPrice, // Proportional net price in cents
         group_id: groupId,
         expires_at: reservationExpiresAt,
@@ -612,85 +502,60 @@ providerInstance=${paymentProvider.getProviderName()}`);
       });
     }
 
+    // FASE 3 — novo fluxo: o pedido foi registrado. NENHUMA cobranca, nenhum
+    // split, nenhum checkout. A resposta nao tem invoiceUrl nem clientSecret:
+    // o frontend nao tem como abrir pagamento a partir dela.
+    if (requestFlow) {
+      try {
+        await NotificationService.sendBookingRequest({
+          instructorId,
+          studentName: profile.full_name || 'Um aluno',
+          comboCount: appointments?.length || lessons.length,
+          groupId
+        });
+      } catch (notifErr) {
+        console.error('⚠️ [CREATE_BOOKING_INTENT] Falha ao notificar o instrutor sobre o pedido:', notifErr);
+      }
+      return res.status(200).json({
+        mode: 'request',
+        groupId,
+        status: 'pending',
+        lessons: appointments?.length || lessons.length,
+        responseDeadline: appointmentsToInsert[0]?.expires_at ?? null,
+        totalPrice: finalPrice,
+        discountAmount
+      });
+    }
+
     // 5. Create Payment via resolved provider with Rollback capabilities
-    const applicationFeeAmount = Math.round(finalPrice * 0.10); // 10% commission
+    const applicationFeeAmount = charge.applicationFeeAmount; // 10% commission
     let paymentResponse;
 
     const requestOrigin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : 'https://autoescolabrasil.com');
     const returnUrl = `${requestOrigin}/#/student/lessons`;
 
-    const paymentDTO = {
-      amount: totalPriceWithFee,
-      description: `Agendamento - Código da reserva ${groupId}`,
-      customerProviderId: customerProviderId,
-      externalReferenceId: groupId,
-      returnUrl: returnUrl,
-      billingAddress: {
-        postalCode: '01001-000',
-        address: 'Praca da Se',
-        addressNumber: '1',
-        city: 'Sao Paulo',
-        state: 'SP',
-      },
-      billingType: paymentMethod, // e.g., 'PIX' or 'CREDIT_CARD'
-      installmentCount: installmentCount, // e.g., 1 to 12
-      splitRules: [
-        {
-          walletId: instructor.provider_wallet_id || undefined,
-          fixedValue: finalPrice - applicationFeeAmount,
-        }
-      ],
-      metadata: {
-        lesson_price: finalPrice,
-        processing_fee: processingFee,
-        gateway: 'asaas',
-        installments: installmentCount || 1,
-        payment_method: paymentMethod === 'CREDIT_CARD' ? 'credit_card' : 'pix'
-      }
-    };
+    const paymentDTO = buildBookingPaymentDTO({
+      charge,
+      finalPriceCents: finalPrice,
+      groupId,
+      customerProviderId: customerProviderId as string,
+      returnUrl,
+      paymentMethod,
+      installmentCount,
+      instructorWalletId: instructor.provider_wallet_id
+    });
 
     try {
-      try {
-        paymentResponse = await paymentProvider.createPayment(paymentDTO);
-      } catch (firstPaymentError: any) {
-        if (!isInvalidCustomerError(firstPaymentError)) {
-          throw firstPaymentError;
-        }
-
-        const newCustomerProviderId = await recoverInvalidCustomer({
-          paymentProvider,
-          supabase,
-          providerName,
-          secureStudentId,
-          oldCustomerProviderId: customerProviderId,
-          userEmail: user.email || '',
-          fullName: profile.full_name || user.email || 'Aluno',
-          phone: profile.phone,
-          cpf: profile.cpf,
-          originalError: firstPaymentError,
-        });
-
-        const retryPaymentDTO = {
-          ...paymentDTO,
-          customerProviderId: newCustomerProviderId,
-        };
-
-        try {
-          paymentResponse = await paymentProvider.createPayment(retryPaymentDTO);
-          console.log(`[ASAAS CUSTOMER RECOVERY] Payment retry successful with new Customer ID:
-- userId: ${secureStudentId}
-- newProviderCustomerId: ${newCustomerProviderId}
-- providerPaymentId: ${paymentResponse.providerPaymentId}
-- retryResult: SUCCESS`);
-        } catch (retryError: any) {
-          console.error(`[ASAAS CUSTOMER RECOVERY] Payment retry failed:
-- userId: ${secureStudentId}
-- newProviderCustomerId: ${newCustomerProviderId}
-- retryResult: FAILED
-- error: ${retryError.message}`);
-          throw retryError;
-        }
-      }
+      paymentResponse = await createPaymentWithCustomerRecovery({
+        paymentProvider,
+        supabase,
+        providerName,
+        studentId: secureStudentId,
+        customerProviderId: customerProviderId as string,
+        userEmail: user.email || '',
+        profile,
+        paymentDTO
+      });
 
       console.log(`[PAYMENT_DIAGNOSTIC]
 paymentResponse.providerName=${paymentResponse.providerName}
@@ -710,44 +575,17 @@ paymentResponse.providerPaymentId=${paymentResponse.providerPaymentId}`);
 
       // 6b. Record Financial Schedule in payment_installments using individual payment IDs for installments
       try {
-        let providerPaymentIdMap: Map<number, string> | undefined = undefined;
-        const installmentId = paymentResponse.providerInstallmentId;
-
-        if (installmentCount && installmentCount > 1 && installmentId && typeof paymentProvider.getInstallmentPayments === 'function') {
-          const installmentItems = await paymentProvider.getInstallmentPayments(installmentId, installmentCount);
-          providerPaymentIdMap = new Map<number, string>();
-          for (const item of installmentItems) {
-            providerPaymentIdMap.set(item.installmentNumber, item.id);
-          }
-          console.log(`✅ [CREATE_BOOKING_INTENT] Obtained ${providerPaymentIdMap.size} individual payment IDs for installment collection '${installmentId}'`);
-        }
-
         const firstAptId = appointments && appointments.length > 0 ? appointments[0].id : null;
-        await InstallmentService.recordInitialSchedule(supabase, {
-          providerPaymentId: paymentResponse.providerPaymentId,
-          providerPaymentIdMap: providerPaymentIdMap,
-          totalInstallments: installmentCount || 1,
-          grossAmountCents: totalPriceWithFee,
-          netAmountCents: finalPrice - applicationFeeAmount,
-          // P-1.18E (decisao J1 da P-1.18A): platform_fee e' a COMISSAO PURA.
-          // A tarifa do gateway pertence ao student_charge e ja' e' registrada
-          // em feeAmountCents; soma-la aqui contabilizava a tarifa duas vezes e
-          // inflava a receita da plataforma.
-          //   gross  = net + platform_fee + fee_amount   (identidade exata)
-          platformFeeCents: applicationFeeAmount,
-          feeAmountCents: processingFee,
-          // P-1.16A: congelamento da tarifa aplicada a esta compra.
-          // Uma alteracao futura do schedule nao recalcula esta linha.
-          feeRuleId: appliedFee.feeRuleId,
-          feePercentApplied: appliedFee.feePercentApplied,
-          feeFixedCents: appliedFee.feeFixedCents,
-          feeSource: appliedFee.feeSource,
-          feeEffectiveFrom: appliedFee.feeEffectiveFrom,
-          paymentMethod: appliedFee.paymentMethod,
-          groupId: groupId,
+        await recordBookingChargeSchedule({
+          supabase,
+          paymentProvider,
+          paymentResponse,
+          installmentCount,
+          charge,
+          groupId,
           appointmentId: firstAptId,
           studentId: secureStudentId,
-          instructorId: instructorId,
+          instructorId,
         });
       } catch (instError: any) {
         console.error('⚠️ [InstallmentService] Error recording initial schedule:', instError);
@@ -774,6 +612,7 @@ groupId=${groupId}`);
 
     // 7. Return payload (retains clientSecret legacy compatibility, appends invoiceUrl dynamically)
     return res.status(200).json({
+      mode: 'checkout',
       clientSecret: paymentResponse.clientSecret,
       groupId,
       totalPrice: finalPrice,
@@ -786,5 +625,192 @@ groupId=${groupId}`);
   } catch (error: any) {
     console.error('Error in create-booking-intent:', error);
     return res.status(500).json({ error: error.message });
+  }
+}
+
+/**
+ * FASE 3 — pagamento de um pedido do novo fluxo, depois do aceite.
+ *
+ * Ordem (cada passo e' idempotente):
+ *   1. booking_request_start_payment: reserved -> awaiting_payment, so' dentro
+ *      do prazo (o banco e' a autoridade do prazo).
+ *   2. Cobranca ja' vinculada? Devolve a mesma (nunca cria a segunda).
+ *   3. Cria a cobranca com as MESMAS regras do fluxo atual (BookingCharge).
+ *   4. booking_request_attach_payment: uma cobranca por reserva. Se outra
+ *      chamada venceu a disputa, ou o prazo venceu, a cobranca criada aqui e'
+ *      cancelada no provedor.
+ *   5. Cronograma de parcelas (payment_installments), como no fluxo atual.
+ * A confirmacao da aula NAO acontece aqui: so' quando o provedor confirmar o
+ * pagamento (webhook / conciliacao -> booking_request_confirm_payment).
+ */
+async function handleRequestPayment(req: any, res: any, user: any) {
+  const { groupId, paymentMethod, installmentCount } = req.body || {};
+  const studentId = user.id;
+
+  if (!groupId || typeof groupId !== 'string') {
+    return res.status(400).json({ mode: 'request', error: 'groupId obrigatorio.', code: 'INVALID_ARGUMENT' });
+  }
+  if (installmentCount !== undefined && installmentCount !== null) {
+    const parsedCount = Number(installmentCount);
+    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > MAX_INSTALLMENTS) {
+      return res.status(400).json({ error: `O número máximo de parcelas permitido é ${MAX_INSTALLMENTS}.` });
+    }
+  }
+
+  try {
+    const { data: rows, error: rowsError } = await supabase
+      .from('appointments')
+      .select('id, student_id, instructor_id, price, status, booking_flow, provider_payment_id, expires_at')
+      .eq('group_id', groupId)
+      .eq('booking_flow', BOOKING_FLOW_REQUEST);
+    if (rowsError) throw rowsError;
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ mode: 'request', outcome: 'NOT_FOUND', error: 'Pedido nao encontrado.' });
+    }
+    if (rows.some((r: any) => r.student_id !== studentId)) {
+      return res.status(403).json({ mode: 'request', outcome: 'FORBIDDEN', error: 'Pedido de outro aluno.' });
+    }
+
+    // 1. Inicio do pagamento (dentro do prazo).
+    const started = await BookingRequestService.startPayment(supabase, groupId, studentId);
+    if (!started.ok) {
+      return res.status(httpStatusForOutcome(started)).json({ mode: 'request', outcome: started.outcome, error: 'Pagamento indisponivel para este pedido.' });
+    }
+
+    const instructorId = rows[0].instructor_id;
+    const providerName = PaymentProviderResolver.resolveProviderForStudent(studentId);
+    const paymentProvider: any = PaymentProviderFactory.getProvider(providerName);
+
+    // 2. Cobranca ja' vinculada: devolve a mesma.
+    const attachedId = rows.find((r: any) => r.provider_payment_id)?.provider_payment_id;
+    if (attachedId) {
+      const existing = await paymentProvider.getPayment(attachedId);
+      return res.status(200).json({
+        mode: 'checkout', groupId, reused: true,
+        invoiceUrl: existing?.invoiceUrl || null,
+        paymentDeadline: started.payment_deadline ?? null
+      });
+    }
+
+    // 3. Cobranca nova, com as regras do fluxo atual.
+    const { data: instructor, error: instructorError } = await supabase
+      .from('instructors')
+      .select('provider_account_id, provider_wallet_id')
+      .eq('id', instructorId)
+      .single();
+    if (instructorError || !instructor) {
+      return res.status(400).json({ error: 'Instructor details not found.' });
+    }
+    if (providerName === 'asaas' && !instructor.provider_account_id && !instructor.provider_wallet_id) {
+      return res.status(400).json({ error: 'Instructor not ready for Asaas payments', code: 'INSTRUCTOR_ASAAS_NOT_READY' });
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name, provider_customer_id, provider_name, phone, cpf')
+      .eq('id', studentId)
+      .single();
+    if (profileError || !profile) {
+      return res.status(400).json({ error: 'Student profile not found.' });
+    }
+    if (!profile.cpf || profile.cpf.trim() === '') {
+      return res.status(400).json({ error: 'O CPF é obrigatório para prosseguir com o pagamento.' });
+    }
+    if (!profile.phone || profile.phone.trim() === '') {
+      return res.status(400).json({ error: 'O Telefone é obrigatório para prosseguir com o pagamento.' });
+    }
+
+    // Preco: o valor gravado em cada aula no pedido (com desconto ja' rateado).
+    const finalPrice = rows.reduce((sum: number, r: any) => sum + (r.price || 0), 0);
+    const gatewayFeeRules = await fetchGatewayFeeRules(supabase, providerName);
+    const charge = computeBookingCharge({ finalPriceCents: finalPrice, paymentMethod, installmentCount, providerName, rules: gatewayFeeRules });
+    if (charge.ruleMissing) {
+      return res.status(400).json({
+        error: 'Tarifa de pagamento indisponivel para o metodo/parcelamento selecionado.',
+        code: 'GATEWAY_FEE_RULE_NOT_FOUND'
+      });
+    }
+
+    let customerProviderId: string;
+    try {
+      customerProviderId = await ensureProviderCustomer({ supabase, paymentProvider, providerName, studentId, userEmail: user.email || '', profile });
+    } catch (custError: any) {
+      console.error(`[ERROR] Fail to create Customer for user ${studentId} on provider ${providerName}:`, custError);
+      return res.status(500).json({ error: 'Erro ao registrar cliente de pagamento. Tente novamente.', details: custError.message });
+    }
+
+    const requestOrigin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : 'https://autoescolabrasil.com');
+    const paymentDTO = buildBookingPaymentDTO({
+      charge, finalPriceCents: finalPrice, groupId, customerProviderId,
+      returnUrl: `${requestOrigin}/#/student/lessons`,
+      paymentMethod, installmentCount, instructorWalletId: instructor.provider_wallet_id
+    });
+
+    let paymentResponse: any;
+    try {
+      paymentResponse = await createPaymentWithCustomerRecovery({
+        paymentProvider, supabase, providerName, studentId, customerProviderId,
+        userEmail: user.email || '', profile, paymentDTO
+      });
+    } catch (paymentError: any) {
+      // Nenhuma cobranca criada. O pedido continua aguardando pagamento ate' o
+      // prazo; o aluno pode tentar de novo (o passo 1 e' idempotente).
+      console.error(`[ERROR] Payment Provider creation error on ${providerName} (pedido ${groupId}):`, paymentError);
+      return res.status(502).json({ mode: 'request', outcome: 'PROVIDER_ERROR', error: 'Erro ao processar pagamento. Tente novamente.', details: paymentError.message });
+    }
+
+    // 4. Vinculo (uma cobranca por reserva).
+    const attached = await BookingRequestService.attachPayment(supabase, groupId, providerName, paymentResponse.providerPaymentId);
+    if (!attached.ok) {
+      // A cobranca criada aqui nao vale: cancela no provedor.
+      await cancelOrphanCharge(paymentProvider, paymentResponse.providerPaymentId, groupId);
+      if (attached.outcome === 'PAYMENT_CONFLICT') {
+        const { data: winner } = await supabase
+          .from('appointments').select('provider_payment_id').eq('group_id', groupId).not('provider_payment_id', 'is', null).limit(1).maybeSingle();
+        const existing = winner?.provider_payment_id ? await paymentProvider.getPayment(winner.provider_payment_id) : null;
+        return res.status(200).json({ mode: 'checkout', groupId, reused: true, invoiceUrl: existing?.invoiceUrl || null, paymentDeadline: started.payment_deadline ?? null });
+      }
+      return res.status(httpStatusForOutcome(attached)).json({ mode: 'request', outcome: attached.outcome, error: 'Pagamento indisponivel para este pedido.' });
+    }
+
+    // 5. Cronograma de parcelas.
+    try {
+      await recordBookingChargeSchedule({
+        supabase, paymentProvider, paymentResponse, installmentCount, charge, groupId,
+        appointmentId: rows[0].id, studentId, instructorId
+      });
+    } catch (instError: any) {
+      // A cobranca existe e esta' vinculada; sem o cronograma o webhook retem o
+      // evento para conciliacao (RECONCILIATION_PENDING). Registrado para acao.
+      console.error(`❌ [CREATE_BOOKING_INTENT] Cronograma de parcelas NAO gravado para ${paymentResponse.providerPaymentId} (pedido ${groupId}):`, instError);
+    }
+
+    return res.status(200).json({
+      mode: 'checkout',
+      groupId,
+      invoiceUrl: providerName === 'asaas' ? (paymentResponse.invoiceUrl || null) : undefined,
+      clientSecret: paymentResponse.clientSecret,
+      totalPrice: finalPrice,
+      totalPriceWithFee: charge.totalPriceWithFee,
+      processingFee: charge.processingFee,
+      paymentDeadline: started.payment_deadline ?? null
+    });
+  } catch (error: any) {
+    console.error('Error in create-booking-intent (pay_request):', error);
+    return res.status(500).json({ mode: 'request', error: error.message });
+  }
+}
+
+/** Cancela no provedor uma cobranca que nao ficou vinculada ao pedido. */
+async function cancelOrphanCharge(paymentProvider: any, providerPaymentId: string, groupId: string) {
+  try {
+    if (typeof paymentProvider.deletePayment === 'function') {
+      await paymentProvider.deletePayment(providerPaymentId);
+      console.warn(`[CREATE_BOOKING_INTENT] Cobranca ${providerPaymentId} cancelada: nao vinculada ao pedido ${groupId}.`);
+    } else {
+      console.error(`❌ [CREATE_BOOKING_INTENT] Provedor sem cancelamento: cobranca ${providerPaymentId} do pedido ${groupId} ficou sem vinculo.`);
+    }
+  } catch (err: any) {
+    console.error(`❌ [CREATE_BOOKING_INTENT] Falha ao cancelar a cobranca ${providerPaymentId} do pedido ${groupId}: ${err?.message ?? err}`);
   }
 }

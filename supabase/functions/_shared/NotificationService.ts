@@ -211,6 +211,63 @@ export class NotificationService {
     });
   }
 
+  /**
+   * FASE 3 — novo fluxo: pedido ACEITO, aguardando pagamento. Nao afirma que a
+   * aula esta' confirmada (isso so' acontece com o pagamento confirmado).
+   * Texto provisorio: revisao de textos na Fase 7.
+   */
+  static async sendBookingRequestAccepted(params: {
+    studentId: string;
+    comboCount: number;
+    groupId: string;
+  }) {
+    const title = params.comboCount > 1 ? 'Pacote aceito' : 'Solicitação aceita';
+    const message = params.comboCount > 1
+      ? `O instrutor aceitou seu pacote de ${params.comboCount} aulas. Conclua o pagamento dentro do prazo para confirmar.`
+      : 'O instrutor aceitou sua solicitação. Conclua o pagamento dentro do prazo para confirmar a aula.';
+
+    return this.createNotification({
+      userId: params.studentId,
+      title,
+      message,
+      type: NotificationType.BOOKING_ACCEPTED,
+      entityType: params.comboCount > 1 ? EntityType.PACKAGE : EntityType.LESSON,
+      targetScreen: NotificationTargetScreen.STUDENT_LESSONS,
+      comboCount: params.comboCount,
+      groupId: params.groupId
+    });
+  }
+
+  /**
+   * FASE 3 — novo fluxo: pedido expirado sem resposta (`pending`) ou sem
+   * pagamento dentro do prazo (`reserved`/`awaiting_payment`). Nenhum valor foi
+   * cobrado. Texto provisorio: revisao de textos na Fase 7.
+   */
+  static async sendBookingRequestExpired(params: {
+    userId: string;
+    isInstructor: boolean;
+    comboCount: number;
+    groupId: string;
+    stage: string;
+  }) {
+    const unpaid = params.stage !== 'pending';
+    const title = params.comboCount > 1 ? 'Pacote expirado' : 'Solicitação expirada';
+    const message = unpaid
+      ? 'O prazo de pagamento terminou e o horário foi liberado.'
+      : 'A solicitação não foi respondida a tempo e o horário foi liberado.';
+
+    return this.createNotification({
+      userId: params.userId,
+      title,
+      message,
+      type: NotificationType.BOOKING_EXPIRED,
+      entityType: params.comboCount > 1 ? EntityType.PACKAGE : EntityType.LESSON,
+      targetScreen: params.isInstructor ? NotificationTargetScreen.INSTRUCTOR_AGENDA : NotificationTargetScreen.STUDENT_LESSONS,
+      comboCount: params.comboCount,
+      groupId: params.groupId
+    });
+  }
+
   static async sendBookingExpired(params: {
     userId: string;
     isInstructor: boolean;

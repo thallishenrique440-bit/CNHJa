@@ -335,10 +335,10 @@ async function main() {
     const src = (rel: string) => readFileSync(resolve(process.cwd(), rel), 'utf-8');
     const wh = src('api/asaas-webhook.ts');
     const calls = wh.split('PaymentExceptionService.recordFromWebhook(').length - 1;
-    check(calls === 3, '12e. [fonte] o webhook chama o servico nas tres saidas de pagamento sem reserva');
+    check(calls === 4, '12e. [fonte] o webhook chama o servico nas tres saidas de pagamento sem reserva e no pagamento tardio do novo fluxo (Fase 3)');
     const branch = wh.slice(wh.indexOf("['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED', 'PAYMENT_UPDATED'].includes"), wh.indexOf("status: 'pending_approval'"));
     const parts = branch.split('PaymentExceptionService.recordFromWebhook(').slice(1);
-    check(parts.length === 3 && parts.every((p) => p.indexOf("finalizeLedger('PROCESSED')") > 0 && p.slice(0, p.indexOf("finalizeLedger('PROCESSED')")).indexOf('catch') < 0),
+    check(parts.length === 4 && parts.every((p) => p.indexOf("finalizeLedger('PROCESSED')") > 0 && p.slice(0, p.indexOf("finalizeLedger('PROCESSED')")).indexOf('catch') < 0),
       '12f. [fonte] em cada saida o registro vem ANTES de finalizeLedger(PROCESSED) e nao esta\' envolto em catch');
     check(/catch \(error: any\) \{[\s\S]*processing_status: 'FAILED'[\s\S]*res\.status\(500\)/.test(wh.slice(wh.lastIndexOf('} catch (error: any) {'))),
       '12g. [fonte] erro nao tratado no handler grava o evento como FAILED e responde HTTP 500');

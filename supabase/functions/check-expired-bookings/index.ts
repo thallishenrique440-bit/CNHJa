@@ -2,6 +2,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { BookingCancellationCore, classifyCancellationResult } from '../_shared/BookingCancellationCore.ts'
 import { asaasFetch } from '../_shared/asaasClient.ts'
 import { requireCronAuth } from '../_shared/cronAuth.ts'
+import { runRequestExpiryCycle } from '../_shared/BookingRequestService.ts'
+import { NotificationService } from '../_shared/NotificationService.ts'
+import { getAsaasEnvironment } from '../_shared/AsaasEnvironment.ts'
 
 const supabaseAdmin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -29,6 +32,7 @@ Deno.serve(async (req) => {
       .from('appointments')
       .select('id, group_id')
       .in('status', ['awaiting_payment', 'reserved', 'pending'])
+      .eq('booking_flow', 'legacy') // FASE 3: pedidos do novo fluxo sao do Modulo C
       .lt('expires_at', nowIso)
 
     if (fetchUnpaidError) {
@@ -65,6 +69,53 @@ Deno.serve(async (req) => {
     const moduleASuccess = moduleAResults.filter(r => r.status === 'fulfilled' && (r.value as any).status === 'expired_success').length
     const moduleASkipped = moduleAResults.filter(r => r.status === 'fulfilled' && (r.value as any).status !== 'expired_success').length
     const moduleAFailed = moduleAResults.filter(r => r.status === 'rejected').length
+
+    // =========================================================================
+    // MODULE C — NOVO FLUXO (booking_flow = request), FASE 3
+    // Pedido sem resposta ate' o inicio da aula, ou aceito e nao pago dentro
+    // do prazo. Com cobranca vinculada: consulta o Asaas; paga -> aguarda a
+    // confirmacao (nao expira); nao paga -> cancela a cobranca e so' entao
+    // expira. Toda transicao pela funcao atomica do banco (idempotente).
+    // =========================================================================
+    let moduleC: any = { skipped: 'not_run' }
+    try {
+      const asaasApiKey = Deno.env.get('ASAAS_API_KEY') || ''
+      let asaasApiUrl = ''
+      try { asaasApiUrl = getAsaasEnvironment().apiUrl } catch (_e) { asaasApiUrl = '' }
+      const gatewayReady = !!asaasApiKey && !!asaasApiUrl
+      moduleC = await runRequestExpiryCycle({
+        db: supabaseAdmin as any,
+        nowIso,
+        getGatewayStatus: async (paymentId: string) => {
+          if (!gatewayReady) return null
+          const r = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, { method: 'GET' })
+          if (r.status === 404) return 'DELETED'
+          if (!r.ok) return null
+          const body = await r.json().catch(() => null)
+          if (body?.deleted === true) return 'DELETED'
+          return body?.status ? String(body.status).toUpperCase() : null
+        },
+        cancelCharge: async (paymentId: string) => {
+          if (!gatewayReady) return false
+          const r = await asaasFetch(`${asaasApiUrl}/payments/${paymentId}`, { method: 'DELETE' })
+          return r.ok || r.status === 404
+        }
+      })
+      for (const g of moduleC.expiredGroups || []) {
+        for (const [userId, isInstructor] of [[g.studentId, false], [g.instructorId, true]] as Array<[string | null, boolean]>) {
+          if (!userId) continue
+          try {
+            await NotificationService.sendBookingRequestExpired({ userId, isInstructor, comboCount: g.lessons, groupId: g.groupId, stage: g.stage })
+          } catch (notifErr) {
+            console.error(`⚠️ [Module C] Falha ao notificar expiracao do grupo ${g.groupId}:`, notifErr)
+          }
+        }
+      }
+      console.log(`[Module C] groups=${moduleC.groups} expired=${moduleC.expired} awaiting_confirmation=${moduleC.awaitingConfirmation} retry_later=${moduleC.retryLater} failed=${moduleC.failed}`)
+    } catch (moduleCError: any) {
+      console.error('❌ [Module C] Falha no ciclo do novo fluxo:', moduleCError)
+      moduleC = { error: String(moduleCError?.message ?? moduleCError) }
+    }
 
     // =========================================================================
     // MODULE B — AULA PAGA NÃO ACEITA (Paid pending_approval past start_time)
@@ -159,6 +210,7 @@ Deno.serve(async (req) => {
           failed: moduleAFailed,
           results: moduleAResults
         },
+        booking_requests: moduleC,
         paid_pending_approval: {
           processed: expiredPaidCandidates.length,
           success: moduleBSuccess,

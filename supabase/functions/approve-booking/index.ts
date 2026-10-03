@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { NotificationService } from '../_shared/NotificationService.ts'
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 import { asaasFetch } from '../_shared/asaasClient.ts'
+import { BookingRequestService, BOOKING_FLOW_REQUEST, httpStatusForOutcome } from '../_shared/BookingRequestService.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -60,6 +61,29 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({ error: 'Forbidden: You are not the instructor for this appointment' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // FASE 3 — novo fluxo: o aceite e' a funcao atomica do banco (grupo inteiro,
+    // abre a janela de pagamento). Nenhuma cobranca, nenhum estorno. O fluxo
+    // atual (abaixo) nao e' alterado.
+    const { data: flowRow } = await adminClient
+      .from('appointments')
+      .select('booking_flow, group_id, student_id')
+      .eq('id', appointment_id)
+      .single()
+    if (flowRow?.booking_flow === BOOKING_FLOW_REQUEST) {
+      const r = await BookingRequestService.accept(adminClient, flowRow.group_id, user.id)
+      if (r.ok && r.outcome === 'ACCEPTED' && flowRow.student_id) {
+        try {
+          await NotificationService.sendBookingRequestAccepted({ studentId: flowRow.student_id, comboCount: r.lessons || 1, groupId: flowRow.group_id })
+        } catch (notifErr) {
+          console.error('⚠️ [approve-booking] Falha ao notificar o aluno sobre o aceite:', notifErr)
+        }
+      }
+      return new Response(
+        JSON.stringify({ mode: 'request', ...r }),
+        { status: httpStatusForOutcome(r), headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 

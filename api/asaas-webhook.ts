@@ -14,6 +14,7 @@ import { ProjectionDispatcher } from '../lib/payments/projections/ProjectionDisp
 import { PaymentStateMapper } from '../lib/payments/PaymentStateMapper.js';
 import { ProjectionSourceEventType } from '../lib/payments/projections/ProjectionTypes.js';
 import { PaymentExceptionService } from '../lib/payments/PaymentExceptionService.js';
+import { BookingRequestService, BOOKING_FLOW_REQUEST, isBookingConfirmingStatus } from '../lib/payments/BookingRequestService.js';
 
 // P-1-B: raised when the event ledger cannot record a final state at all.
 // Caught by the handler's outer catch, which answers 5xx so the provider retries.
@@ -868,7 +869,7 @@ export default async function handler(req: Request, res: Response) {
       // Verify if any appointment in this group is already expired, cancelled, or rejected
       const { data: existingApts, error: fetchAptsError } = await supabaseAdmin
         .from('appointments')
-        .select('id, status, payment_status, student_id, instructor_id')
+        .select('id, status, payment_status, student_id, instructor_id, booking_flow')
         .eq('group_id', groupId);
 
       if (fetchAptsError) {
@@ -913,6 +914,53 @@ export default async function handler(req: Request, res: Response) {
         });
       }
 
+      // FASE 3 — novo fluxo (booking_flow = request): o instrutor JA' aceitou;
+      // o pagamento confirmado pelo provedor confirma a aula pela funcao
+      // atomica do banco. Reserva encerrada nao e' reativada: vira ocorrencia
+      // em payment_exceptions (Fase 1). O fluxo atual segue no `else`.
+      const isRequestFlow = existingApts.some((apt: any) => apt.booking_flow === BOOKING_FLOW_REQUEST);
+      let updatedApts: Array<{ id: string; student_id: string; instructor_id: string; price: number }> | null = null;
+
+      if (isRequestFlow) {
+        const providerStatus = String(paymentStatus || (event.toUpperCase() === 'PAYMENT_RECEIVED' ? 'RECEIVED' : event.toUpperCase() === 'PAYMENT_CONFIRMED' ? 'CONFIRMED' : '')).toUpperCase();
+        if (!isBookingConfirmingStatus(providerStatus)) {
+          await finalizeLedger('IGNORED');
+          return res.status(200).json({ success: true, message: 'Request flow: payment status does not confirm the booking', event, timestamp });
+        }
+
+        const confirmed = await BookingRequestService.confirmPayment(supabaseAdmin as any, groupId, currentPaymentId);
+        if (!confirmed.ok) {
+          if (confirmed.outcome === 'NOT_ACTIVE') {
+            const { data: freshApts, error: freshErr } = await supabaseAdmin
+              .from('appointments')
+              .select('id, status, payment_status, student_id, instructor_id')
+              .eq('group_id', groupId);
+            if (freshErr) throw freshErr;
+            const orphanLate = await PaymentExceptionService.recordFromWebhook(supabaseAdmin, {
+              payload, groupId, lessons: freshApts || [], providerEventId
+            });
+            console.warn(`⚠️ [ASAAS WEBHOOK] Request flow: reserva nao ativa para ${currentPaymentId}; payment_exception=${orphanLate.outcome} booking_state=${orphanLate.bookingState ?? 'n/a'}`);
+            if (orphanLate.outcome === 'not_applicable') {
+              await finalizeLedger('PENDING', `booking_request_confirm_payment: NOT_ACTIVE (${orphanLate.bookingState ?? 'n/a'})`, 'RECONCILIATION_PENDING');
+            } else {
+              await finalizeLedger('PROCESSED');
+            }
+            return res.status(200).json({ success: true, message: 'Request flow: payment without active reservation recorded', event, timestamp });
+          }
+          await finalizeLedger('PENDING', `booking_request_confirm_payment: ${confirmed.outcome}`, 'RECONCILIATION_PENDING');
+          return res.status(200).json({ success: true, message: `Request flow: confirmation retained (${confirmed.outcome})`, event, timestamp });
+        }
+
+        const { data: confirmedRows, error: confirmedErr } = await supabaseAdmin
+          .from('appointments')
+          .select('id, student_id, instructor_id, price')
+          .eq('group_id', groupId)
+          .eq('booking_flow', BOOKING_FLOW_REQUEST)
+          .eq('status', 'confirmed');
+        if (confirmedErr) throw confirmedErr;
+        updatedApts = confirmedRows || [];
+        console.log(`✅ [ASAAS WEBHOOK] Request flow: ${confirmed.outcome} for group ${groupId} (${updatedApts.length} lessons).`);
+      } else {
       // Update appointments payload (pending approval instead of directly confirmed)
       const updatePayload = {
         status: 'pending_approval',
@@ -920,7 +968,7 @@ export default async function handler(req: Request, res: Response) {
         updated_at: new Date().toISOString()
       };
 
-      const { data: updatedApts, error: updateErr } = await supabaseAdmin
+      const { data: legacyUpdatedApts, error: updateErr } = await supabaseAdmin
         .from('appointments')
         .update(updatePayload)
         .eq('group_id', groupId)
@@ -931,6 +979,8 @@ export default async function handler(req: Request, res: Response) {
         console.error(`❌ [ASAAS WEBHOOK] Error updating appointments for group ${groupId}:`, updateErr.message);
         await finalizeLedger('FAILED', updateErr.message);
         return res.status(500).json({ error: 'Database update failed' });
+      }
+      updatedApts = legacyUpdatedApts;
       }
 
       const rowsCount = updatedApts?.length || 0;
@@ -1036,8 +1086,9 @@ export default async function handler(req: Request, res: Response) {
         }
 
         // Notify instructor about new booking request pending approval (Idempotent)
+        // FASE 3: no novo fluxo o instrutor ja' foi avisado no pedido e ja' aceitou.
         const instructorId = firstApt.instructor_id;
-        if (instructorId) {
+        if (instructorId && !isRequestFlow) {
           try {
             // Find student name
             let studentName = 'Um aluno';

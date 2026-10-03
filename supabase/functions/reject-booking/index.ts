@@ -1,6 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { BookingCancellationCore } from '../_shared/BookingCancellationCore.ts'
 import { asaasFetch } from '../_shared/asaasClient.ts'
+import { BookingRequestService, BOOKING_FLOW_REQUEST, httpStatusForOutcome } from '../_shared/BookingRequestService.ts'
+import { NotificationService } from '../_shared/NotificationService.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -44,7 +46,7 @@ Deno.serve(async (req) => {
     // 3. Ownership Validation
     const { data: appointment, error: fetchError } = await adminClient
       .from('appointments')
-      .select('id, instructor_id')
+      .select('id, instructor_id, booking_flow, group_id, student_id')
       .eq('id', appointment_id)
       .single()
 
@@ -56,6 +58,24 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({ error: 'Forbidden: You are not the instructor for this appointment' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // FASE 3 — novo fluxo: recusa sem dinheiro pela funcao atomica do banco
+    // (grupo inteiro, horario liberado). Nao passa pelo Core de cancelamento:
+    // nao ha' cobranca nem estorno.
+    if (appointment.booking_flow === BOOKING_FLOW_REQUEST) {
+      const r = await BookingRequestService.reject(adminClient, appointment.group_id, user.id)
+      if (r.ok && r.outcome === 'REJECTED' && appointment.student_id) {
+        try {
+          await NotificationService.sendBookingRejected({ studentId: appointment.student_id, comboCount: r.lessons || 1, groupId: appointment.group_id })
+        } catch (notifErr) {
+          console.error('⚠️ [reject-booking] Falha ao notificar o aluno sobre a recusa:', notifErr)
+        }
+      }
+      return new Response(
+        JSON.stringify({ mode: 'request', ...r }),
+        { status: httpStatusForOutcome(r), headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
