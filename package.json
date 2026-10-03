@@ -27,6 +27,7 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/express": "^5.0.6",
     "@types/google.maps": "^3.58.1",
     "@types/node": "^25.3.3",

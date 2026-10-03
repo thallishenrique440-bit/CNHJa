@@ -74,6 +74,7 @@ const ALLOW = [
   'NotificationQueueFase0.unit.test.ts',
   'SyncReconciliationFase0.unit.test.ts',
   'PaymentExceptionFase1.unit.test.ts',
+  'BookingRequestAtomicOpsFase2.pg.test.ts',
   'SyncPaymentStatusAuthR2.unit.test.ts',
   'AsaasEnvironmentAP04.unit.test.ts',
   'SettlementService.unit.test.ts',
