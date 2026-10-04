@@ -77,6 +77,7 @@ const ALLOW = [
   'BookingRequestAtomicOpsFase2.pg.test.ts',
   'BookingRequestFase3.unit.test.ts',
   'BookingRequestFase3.pg.test.ts',
+  'BookingRequestUIFase4.unit.test.ts',
   'SyncPaymentStatusAuthR2.unit.test.ts',
   'AsaasEnvironmentAP04.unit.test.ts',
   'SettlementService.unit.test.ts',

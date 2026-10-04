@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { PaymentMethodModal } from '../../components/PaymentMethodModal';
+import { CheckoutLauncher } from '../../lib/payments/CheckoutLauncher';
 import { useNavigate } from 'react-router-dom';
 import { StudentBottomNav } from '../../components/StudentBottomNav';
 import { Button } from '../../components/Button';
@@ -42,6 +44,11 @@ interface Lesson {
   proposedStartTime?: string | null;
   proposalStatus?: string | null;
   proposedBy?: string | null;
+  // FASE 4 — novo fluxo (pedido -> aceite -> pagamento)
+  groupId?: string | null;
+  bookingFlow?: string | null;
+  /** Prazo decidido pelo servidor (resposta do instrutor ou pagamento). */
+  expiresAt?: string | null;
 }
 
 interface DBAppointment {
@@ -60,6 +67,9 @@ interface DBAppointment {
   proposed_start_time: string | null;
   proposal_status: string | null;
   proposed_by: string | null;
+  group_id?: string | null;
+  booking_flow?: string | null;
+  expires_at?: string | null;
   instructors: {
     whatsapp: string;
     meeting_point: string;
@@ -100,6 +110,66 @@ const isNightLesson = (time: string) => {
   return h >= 18;
 };
 
+
+/**
+ * FASE 4 — prazo de pagamento de um pedido aceito.
+ * O prazo e' o `expires_at` gravado pelo servidor (min(aceite + 15 min, inicio
+ * da aula)); aqui ele so' e' exibido. O relogio usa o desvio do servidor ja'
+ * calculado pelo app. Ao zerar, a tela pede a atualizacao ao servidor; a
+ * validade do pagamento e' sempre decidida no backend.
+ */
+const RequestPaymentAction: React.FC<{
+  expiresAt: string | null;
+  serverTimeOffset: number;
+  disabled: boolean;
+  onPay: () => void;
+  onExpired: () => void;
+}> = ({ expiresAt, serverTimeOffset, disabled, onPay, onExpired }) => {
+  const deadlineMs = expiresAt ? new Date(expiresAt).getTime() : NaN;
+  const [nowMs, setNowMs] = React.useState(() => Date.now() + serverTimeOffset);
+  const firedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now() + serverTimeOffset), 1000);
+    return () => clearInterval(id);
+  }, [serverTimeOffset]);
+
+  const remaining = Number.isFinite(deadlineMs) ? Math.max(0, deadlineMs - nowMs) : 0;
+  const expired = !Number.isFinite(deadlineMs) || remaining <= 0;
+
+  React.useEffect(() => {
+    if (expired && !firedRef.current) {
+      firedRef.current = true;
+      onExpired();
+    }
+  }, [expired, onExpired]);
+
+  if (expired) {
+    return <span className="text-[10px] text-gray-500 font-medium italic">Prazo encerrado</span>;
+  }
+
+  const mm = String(Math.floor(remaining / 60000)).padStart(2, '0');
+  const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
+  const limit = new Date(deadlineMs).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex flex-col items-end leading-tight">
+        <span className="text-[10px] text-gray-500">Pague até {limit}</span>
+        <span className="text-[10px] font-semibold text-blue-700 tabular-nums">{mm}:{ss}</span>
+      </div>
+      <Button
+        variant="primary"
+        onClick={onPay}
+        disabled={disabled}
+        className="text-xs px-3 py-1.5 h-8 min-h-0"
+      >
+        Pagar
+      </Button>
+    </div>
+  );
+};
+
 export const StudentLessons: React.FC = () => {
   const navigate = useNavigate();
   const { session, signOut, serverTimeOffset } = useAuth();
@@ -124,6 +194,10 @@ export const StudentLessons: React.FC = () => {
   // Cancellation Flow State
   const [lessonToCancel, setLessonToCancel] = useState<LessonGroup | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
+
+  // FASE 4 — pagamento de pedido aceito (novo fluxo)
+  const [payingRequest, setPayingRequest] = useState<{ groupId: string; lessonCount: number; servicePriceCents: number } | null>(null);
+  const [isPayingRequest, setIsPayingRequest] = useState(false);
 
   // Rescheduling Flow State
   const [lessonForAction, setLessonForAction] = useState<LessonGroup | null>(null);
@@ -237,7 +311,10 @@ export const StudentLessons: React.FC = () => {
           proposedDate: apt.proposed_date,
           proposedStartTime: apt.proposed_start_time,
           proposalStatus: apt.proposal_status,
-          proposedBy: apt.proposed_by
+          proposedBy: apt.proposed_by,
+          groupId: apt.group_id ?? null,
+          bookingFlow: apt.booking_flow ?? null,
+          expiresAt: apt.expires_at ?? null
         };
       } catch (mapErr) {
         console.error('Error mapping individual lesson:', apt.id, mapErr);
@@ -333,6 +410,9 @@ export const StudentLessons: React.FC = () => {
             proposed_start_time,
             proposal_status,
             proposed_by,
+            group_id,
+            booking_flow,
+            expires_at,
             instructors:instructors_public!instructor_id (
               id,
               meeting_point,
@@ -1042,6 +1122,68 @@ export const StudentLessons: React.FC = () => {
     }
   };
 
+  // FASE 4 — "Pagar": abre o modal de pagamento existente para o PEDIDO inteiro
+  // (todas as aulas do grupo, inclusive de outros dias). O valor exibido e' o
+  // gravado nas aulas; o valor cobrado e' recalculado pelo servidor.
+  const openRequestPayment = (group: LessonGroup) => {
+    if (!group.groupId) return;
+    const rows = rawLessons.filter(r => r.group_id === group.groupId && r.booking_flow === 'request');
+    setPayingRequest({
+      groupId: group.groupId,
+      lessonCount: rows.length || group.count,
+      servicePriceCents: rows.length ? rows.reduce((sum, r) => sum + (r.price || 0), 0) : group.totalPrice
+    });
+  };
+
+  const handleRequestPayment = async (method: 'PIX' | 'CREDIT_CARD', installments: number) => {
+    if (!payingRequest || isPayingRequest) return;
+    setIsPayingRequest(true);
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !sessionData?.session) {
+        addToast("Sua sessão expirou. Faça login novamente.", 'error');
+        signOut();
+        return;
+      }
+      const response = await fetch('/api/create-booking-intent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionData.session.access_token}`
+        },
+        body: JSON.stringify({
+          action: 'pay_request',
+          groupId: payingRequest.groupId,
+          paymentMethod: method,
+          installmentCount: installments
+        })
+      });
+      const data = await response.json().catch(() => ({} as any));
+
+      if (response.ok && data?.mode === 'checkout' && data?.invoiceUrl) {
+        // Cobranca criada (ou a existente, se ja' havia): abre o checkout de sempre.
+        setPayingRequest(null);
+        CheckoutLauncher.launch(data.invoiceUrl);
+        return;
+      }
+
+      if (data?.outcome === 'RESERVATION_EXPIRED') {
+        addToast('O prazo para pagamento terminou e o horário foi liberado.', 'warning');
+      } else if (data?.outcome === 'INVALID_STATE' || data?.outcome === 'NOT_FOUND') {
+        addToast('Esta solicitação não está mais disponível para pagamento.', 'warning');
+      } else {
+        addToast(data?.error || 'Não foi possível iniciar o pagamento. Tente novamente.', 'error');
+      }
+      setPayingRequest(null);
+      window.dispatchEvent(new CustomEvent('refresh-lessons'));
+    } catch (err: any) {
+      console.error('Error starting request payment:', err);
+      addToast('Erro de conexão ao iniciar o pagamento. Tente novamente.', 'error');
+    } finally {
+      setIsPayingRequest(false);
+    }
+  };
+
   const confirmCancellation = async () => {
     if (!lessonToCancel) return;
     setIsCancelling(true);
@@ -1065,7 +1207,9 @@ export const StudentLessons: React.FC = () => {
       }
 
       // Optimistic Update: Filter out the cancelled lessons
-      setRawLessons(prev => prev.filter(l => !lessonToCancel.ids.includes(l.id)));
+      // FASE 4: no novo fluxo o servidor cancela o PEDIDO inteiro (todas as aulas do grupo).
+      const cancelledGroupId = lessonToCancel.bookingFlow === 'request' ? lessonToCancel.groupId : null;
+      setRawLessons(prev => prev.filter(l => !lessonToCancel.ids.includes(l.id) && !(cancelledGroupId && l.group_id === cancelledGroupId)));
 
       addToast(
         refundInReview
@@ -1163,7 +1307,10 @@ export const StudentLessons: React.FC = () => {
         proposedDate: daily[0].proposedDate,
         proposedStartTime: daily[0].proposedStartTime,
         proposalStatus: daily[0].proposalStatus,
-        proposedBy: daily[0].proposedBy
+        proposedBy: daily[0].proposedBy,
+        groupId: daily[0].groupId,
+        bookingFlow: daily[0].bookingFlow,
+        expiresAt: daily[0].expiresAt
     };
 
     for (let i = 1; i < daily.length; i++) {
@@ -1177,7 +1324,10 @@ export const StudentLessons: React.FC = () => {
             // P-1.20.5: aulas com estados de proposta diferentes nunca compoem
             // um mesmo bloco, senao uma acao de proposta vazaria para a aula ao lado.
             (currentGroup.proposalStatus ?? null) === (next.proposalStatus ?? null) &&
-            (currentGroup.proposedBy ?? null) === (next.proposedBy ?? null)
+            (currentGroup.proposedBy ?? null) === (next.proposedBy ?? null) &&
+            // FASE 4: pedidos do novo fluxo so' se juntam dentro do MESMO pedido.
+            (currentGroup.bookingFlow ?? null) === (next.bookingFlow ?? null) &&
+            (currentGroup.bookingFlow !== 'request' || currentGroup.groupId === next.groupId)
         ) {
             currentGroup.ids.push(next.id);
             currentGroup.count += 1;
@@ -1214,7 +1364,10 @@ export const StudentLessons: React.FC = () => {
                 proposedDate: next.proposedDate,
                 proposedStartTime: next.proposedStartTime,
                 proposalStatus: next.proposalStatus,
-                proposedBy: next.proposedBy
+                proposedBy: next.proposedBy,
+                groupId: next.groupId,
+                bookingFlow: next.bookingFlow,
+                expiresAt: next.expiresAt
             };
         }
     }
@@ -1233,7 +1386,16 @@ export const StudentLessons: React.FC = () => {
     });
   }, [lessons, selectedDate]);
 
-  const renderStatusBadge = (status: LessonStatus, groupId?: string) => {
+  const renderStatusBadge = (status: LessonStatus, groupId?: string, bookingFlow?: string | null) => {
+    // FASE 4 — novo fluxo: o estado vem do servidor; aqui so' o rotulo.
+    if (bookingFlow === 'request') {
+      if (status === 'pending') {
+        return <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">Aguardando instrutor</span>;
+      }
+      if (status === 'reserved' || status === 'awaiting_payment') {
+        return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Aguardando pagamento</span>;
+      }
+    }
     switch (status) {
       case 'confirmed': 
          return <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100">Agendada</span>;
@@ -1351,7 +1513,7 @@ export const StudentLessons: React.FC = () => {
                   </div>
                   
                   <div className="flex items-center">
-                      {renderStatusBadge(group.status, group.ids[0])}
+                      {renderStatusBadge(group.status, group.ids[0], group.bookingFlow)}
                   </div>
                 </div>
 
@@ -1403,6 +1565,34 @@ export const StudentLessons: React.FC = () => {
                     <div className="flex items-center gap-2 flex-shrink-0">
                         {/* Action Button - Decision Modal */}
                         {(() => {
+                            // FASE 4 — novo fluxo. Pedido aguardando o instrutor: o
+                            // aluno pode cancelar (grupo inteiro, no servidor).
+                            // Pedido aceito: prazo + contador + "Pagar" (modal existente).
+                            if (group.bookingFlow === 'request') {
+                                if (group.dbStatus === 'pending') {
+                                    return (
+                                        <Button
+                                          variant="outline"
+                                          onClick={() => setLessonToCancel(group)}
+                                          className="text-xs px-3 py-1.5 h-8 min-h-0 bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                                        >
+                                          Cancelar solicitação
+                                        </Button>
+                                    );
+                                }
+                                if (group.dbStatus === 'reserved' || group.dbStatus === 'awaiting_payment') {
+                                    return (
+                                        <RequestPaymentAction
+                                          expiresAt={group.expiresAt ?? null}
+                                          serverTimeOffset={serverTimeOffset}
+                                          disabled={isPayingRequest}
+                                          onPay={() => openRequestPayment(group)}
+                                          onExpired={() => window.dispatchEvent(new CustomEvent('refresh-lessons'))}
+                                        />
+                                    );
+                                }
+                            }
+
                             // P-1.20.5: proposta pendente. Quem NAO propos responde;
                             // quem propos apenas aguarda (e pode retirar a proposta).
                             if (group.proposalStatus === 'pending') {
@@ -1833,6 +2023,16 @@ export const StudentLessons: React.FC = () => {
       </Modal>
 
       {/* Cancellation Modal */}
+      {/* FASE 4 — pagamento do pedido aceito: o MESMO modal de antes */}
+      <PaymentMethodModal
+        isOpen={!!payingRequest}
+        onClose={() => { if (!isPayingRequest) setPayingRequest(null); }}
+        lessonCount={payingRequest?.lessonCount ?? 0}
+        servicePriceCents={payingRequest?.servicePriceCents ?? 0}
+        isProcessing={isPayingRequest}
+        onConfirm={handleRequestPayment}
+      />
+
       <Modal
         isOpen={!!lessonToCancel}
         onClose={() => setLessonToCancel(null)}

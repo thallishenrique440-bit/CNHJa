@@ -43,6 +43,7 @@ interface Lesson {
   timeStr?: string;
   isReserved?: boolean; // NEW FIELD
   groupId?: string; // NEW FIELD FOR GROUPING
+  bookingFlow?: string | null; // FASE 4: 'request' = novo fluxo (pedido -> aceite -> pagamento)
 }
 
 interface LunchConfig {
@@ -409,6 +410,7 @@ export const InstructorAgenda: React.FC = () => {
                 category,
                 price,
                 group_id,
+                booking_flow,
                 reschedule_requested_at,
                 rescheduled_at,
                 cancelled_reason,
@@ -473,7 +475,10 @@ export const InstructorAgenda: React.FC = () => {
                 } else if (apt.status === 'completed') {
                     uiStatus = 'completed';
                 } else if (apt.status === 'cancelled') {
+                    // FASE 4: pedido do novo fluxo recusado ou cancelado pelo aluno
+                    // nao teve pagamento; o horario volta a ficar livre.
                     const isTechnical = 
+                      apt.booking_flow === 'request' ||
                       apt.cancelled_reason === 'user_retry_new_attempt' ||
                       apt.cancelled_reason === 'system_cleanup_expired' ||
                       apt.cancelled_reason === 'payment_creation_failed';
@@ -518,7 +523,8 @@ export const InstructorAgenda: React.FC = () => {
                         dateStr: apt.date,
                         timeStr: timeKey,
                         isReserved: isReserved,
-                        groupId: apt.group_id
+                        groupId: apt.group_id,
+                        bookingFlow: apt.booking_flow ?? null
                     };
                 }
             });
@@ -918,6 +924,15 @@ export const InstructorAgenda: React.FC = () => {
             throw new Error(data.error);
         }
 
+        // FASE 4 — novo fluxo: o aceite abre o prazo de pagamento do aluno; a
+        // aula so' fica confirmada quando o pagamento for confirmado.
+        if (data?.mode === 'request') {
+            closeLessonModal();
+            addToast("Solicitação aceita. Aguardando o pagamento do aluno.", 'success');
+            fetchAppointments();
+            return;
+        }
+
         if (data?.status === 'processing') {
             addToast("Processando pagamento... A aula será confirmada em instantes.", 'info');
             
@@ -980,7 +995,11 @@ export const InstructorAgenda: React.FC = () => {
     if (!selectedLesson) return;
     if (isSubmittingRef.current) return;
     
-    if (!confirm("Tem certeza que deseja recusar esta solicitação? O valor será estornado ao aluno.")) return;
+    // FASE 4: no novo fluxo a solicitacao ainda nao foi paga — nao ha' estorno.
+    const rejectMessage = selectedLesson.bookingFlow === 'request'
+      ? "Tem certeza que deseja recusar esta solicitação?"
+      : "Tem certeza que deseja recusar esta solicitação? O valor será estornado ao aluno.";
+    if (!confirm(rejectMessage)) return;
 
     isSubmittingRef.current = true;
     setIsActionLoading(true);
@@ -1592,7 +1611,9 @@ export const InstructorAgenda: React.FC = () => {
           // Special case for reserved, awaiting_payment or pending_approval slots
           if (displayStatus === 'reserved' || displayStatus === 'awaiting_payment' || displayStatus === 'pending_approval' || (displayStatus === 'blocked' && lesson.isReserved)) {
             config = {
-              label: displayStatus === 'pending_approval' ? "Aguardando Aprovação" : "Processando...",
+              label: displayStatus === 'pending_approval'
+                ? "Aguardando Aprovação"
+                : (lesson.bookingFlow === 'request' ? "Aguardando pagamento" : "Processando..."),
               borderColor: "border-l-amber-400",
               bgColor: "bg-amber-50/50",
               textColor: "text-amber-700",
